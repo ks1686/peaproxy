@@ -53,6 +53,7 @@ type Cooldown struct {
 	Until       time.Time `json:"until"`
 	Reason      string    `json:"reason"`
 	RemainingMs int64     `json:"remainingMs"`
+	QuotaHint   string    `json:"quotaHint,omitempty"`
 }
 
 // AdapterHealth is last ListModels/Validate status for the Health UI.
@@ -65,6 +66,7 @@ type AdapterHealth struct {
 	Models       int                  `json:"models"`
 	CheckedAt    time.Time            `json:"checkedAt"`
 	Capabilities adapter.Capabilities `json:"capabilities"`
+	QuotaHint    string               `json:"quotaHint,omitempty"`
 }
 
 type instance struct {
@@ -808,6 +810,7 @@ func (g *Gateway) Cooldowns() []Cooldown {
 		if c.RemainingMs < 0 {
 			c.RemainingMs = 0
 		}
+		c.QuotaHint = g.quotaHintFor(id)
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
@@ -828,6 +831,7 @@ func (g *Gateway) AdapterHealth() []AdapterHealth {
 		if c, ok := g.cool[out[i].AccountID]; ok && now.Before(c.Until) && out[i].Status == "ok" {
 			out[i].Status = "cooldown"
 		}
+		out[i].QuotaHint = g.quotaHintFor(out[i].AccountID)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
 	if out == nil {
@@ -887,6 +891,22 @@ func (g *Gateway) Quota() []quota.Snapshot {
 		return quota.NewStore().Views(accts)
 	}
 	return g.quota.Views(accts)
+}
+
+// QuotaSnapshot is the latest stored remaining for one account, if any.
+func (g *Gateway) QuotaSnapshot(accountID string) (quota.Snapshot, bool) {
+	if g.quota == nil || accountID == "" {
+		return quota.Snapshot{}, false
+	}
+	return g.quota.Get(accountID)
+}
+
+func (g *Gateway) quotaHintFor(accountID string) string {
+	snap, ok := g.QuotaSnapshot(accountID)
+	if !ok {
+		return ""
+	}
+	return snap.Compact()
 }
 
 func (g *Gateway) probeQuota(ctx context.Context, inst []instance) {

@@ -35,6 +35,7 @@ type Event struct {
 	Error            string    `json:"error,omitempty"`
 	Preview          string    `json:"preview,omitempty"`
 	DurationMS       int64     `json:"durationMs,omitempty"`
+	QuotaHint        string    `json:"quotaHint,omitempty"`
 }
 
 // AccountRollup is a per-account summary.
@@ -125,6 +126,7 @@ func (s *Store) Add(e Event) {
 	e.Model = clip(e.Model, 200)
 	e.Protocol = clip(e.Protocol, 40)
 	e.Path = clip(e.Path, 80)
+	e.QuotaHint = clip(e.QuotaHint, 160)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.events) >= capEvents {

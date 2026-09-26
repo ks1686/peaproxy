@@ -90,7 +90,7 @@ Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider er
 
 ## Request log
 
-`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` and `peaproxy requests tail` read that inspector. Usage counters still go to `usage.json` even when the inspector is off. `peaproxy health` prints the same bind / adapterHealth / quota / cooldowns fields as `GET /admin/health`.
+`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. If that response included rate-limit remaining headers, the row carries a compact `quotaHint` (honest 0 is shown; unknown remaining is omitted). `GET /admin/requests` and `peaproxy requests tail` read that inspector. Usage counters still go to `usage.json` even when the inspector is off. `peaproxy health` prints the same bind / adapterHealth / quota / cooldowns fields as `GET /admin/health`; cooldown lines include last-known remaining when the provider reported it.
 
 ## Validate
 

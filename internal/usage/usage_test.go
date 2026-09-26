@@ -19,6 +19,34 @@ func TestPersistAndReload(t *testing.T) {
 	}
 }
 
+func TestRequestLogKeepsQuotaHintAndOmitsUnknown(t *testing.T) {
+	dir := t.TempDir()
+	s := Open(filepath.Join(dir, "usage.json"))
+	s.SetRequestLog(filepath.Join(dir, "requests.log"))
+	s.Add(Event{AccountID: "a", Model: "m", Status: 200, Preview: "ok", QuotaHint: "req=0"})
+	s.Add(Event{AccountID: "b", Model: "m", Status: 200, Preview: "ok"})
+	got := s.Recent()
+	if len(got) != 2 {
+		t.Fatalf("%#v", got)
+	}
+	if got[0].QuotaHint != "" {
+		t.Fatalf("unknown remaining must not invent a hint: %#v", got[0])
+	}
+	if got[1].QuotaHint != "req=0" {
+		t.Fatalf("honest 0 must persist: %#v", got[1])
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "requests.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"quotaHint":"req=0"`) {
+		t.Fatalf("request log missing hint: %s", b)
+	}
+	if strings.Count(string(b), `"quotaHint"`) != 1 {
+		t.Fatalf("unreported remaining leaked onto a row: %s", b)
+	}
+}
+
 func TestRedactAndRequestLog(t *testing.T) {
 	dir := t.TempDir()
 	s := Open(filepath.Join(dir, "usage.json"))

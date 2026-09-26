@@ -7,19 +7,37 @@ func TestFormatOmitsUnknownAndKeepsZero(t *testing.T) {
 	if unknown.Format() != "not reported by provider" {
 		t.Fatalf("%s", unknown.Format())
 	}
+	if unknown.Compact() != "" {
+		t.Fatalf("compact must stay empty when unreported, got %q", unknown.Compact())
+	}
 	z := int64(0)
 	zero := Snapshot{RemainingRequests: &z}
 	if zero.Format() != "remainingRequests=0" {
 		t.Fatalf("%s", zero.Format())
+	}
+	if zero.Compact() != "req=0" {
+		t.Fatalf("zero remaining must be shown, not omitted: %q", zero.Compact())
 	}
 	credits := 74.5
 	c := Snapshot{RemainingCredits: &credits, CreditsUnlimited: false}
 	if c.Format() != "remainingCredits=74.5" {
 		t.Fatalf("%s", c.Format())
 	}
+	if c.Compact() != "credits=74.5" {
+		t.Fatalf("%s", c.Compact())
+	}
 	u := Snapshot{CreditsUnlimited: true}
 	if u.Format() != "credits=unlimited" {
 		t.Fatalf("%s", u.Format())
+	}
+	if u.Compact() != "credits=unlimited" {
+		t.Fatalf("%s", u.Compact())
+	}
+	req := int64(59)
+	tok := int64(149984)
+	both := Snapshot{RemainingRequests: &req, RemainingTokens: &tok}
+	if both.Compact() != "req=59 tok=149984" {
+		t.Fatalf("%s", both.Compact())
 	}
 }
 

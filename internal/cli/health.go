@@ -74,8 +74,12 @@ Examples:
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  (none)")
 			}
 			for _, c := range cds {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\treason=%s\tremainingMs=%d\tuntil=%s\n",
-					c.AccountID, c.Reason, c.RemainingMs, c.Until.UTC().Format(time.RFC3339))
+				quotaBit := ""
+				if c.QuotaHint != "" {
+					quotaBit = "\tquota=" + c.QuotaHint
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\treason=%s\tremainingMs=%d\tuntil=%s%s\n",
+					c.AccountID, c.Reason, c.RemainingMs, c.Until.UTC().Format(time.RFC3339), quotaBit)
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cooldownTtlMs: %d\nallowNonLoopback: %v\nlan: %v\nadminTokenRequired: %v\n",
 				gateway.CooldownTTL.Milliseconds(), cfg.AllowNonLoopback, lan, adminRequired)

@@ -54,8 +54,12 @@ Examples:
 				if e.Error != "" {
 					errBit = "\t" + e.Error
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s%s\t%s\t%s\t%d%s\t%s\n",
-					ts, e.AccountID, e.Model, e.Protocol, e.Status, errBit, e.Preview)
+				quotaBit := ""
+				if e.QuotaHint != "" {
+					quotaBit = "\t" + e.QuotaHint
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s%s\t%s\t%s\t%d%s%s\t%s\n",
+					ts, e.AccountID, e.Model, e.Protocol, e.Status, errBit, quotaBit, e.Preview)
 			}
 			return nil
 		},
