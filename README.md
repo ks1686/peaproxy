@@ -2,11 +2,11 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse; ToS/ban risk; API keys remain the official path), first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
 
-Status: **v0.2.0** — subscription OAuth is in, tokens and inline API keys go to the **OS keychain** (encrypted file fallback). Qwen consumer OAuth remains stubbed. **ToS/ban risk is unchanged: authors are not liable; prefer official API keys.**
+Status: **v0.2.0** on main (subscription OAuth + OS keychain / encrypted-file secrets). This slice adds more free/local hosted presets and Codex `/v1/responses`. Qwen consumer OAuth remains stubbed. **ToS/ban risk is unchanged: authors are not liable; prefer official API keys. Do not tag a release from this feature PR.**
 
 ## One-liner
 
-Maximize whatever you already pay for (Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse subscription OAuth, **at your own risk**), fall back to keys, and treat Ollama / LM Studio / OpenRouter-free / OpenCode Zen as first-class — then expose one OpenAI-shaped and one Claude-shaped local endpoint that coding tools already speak.
+Maximize whatever you already pay for (Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse subscription OAuth, **at your own risk**), fall back to keys, and treat Ollama / LM Studio / llama.cpp / vLLM / OpenRouter-free / OpenCode Zen as first-class — then expose one OpenAI-shaped, one Claude-shaped, and one Responses local endpoint that coding tools already speak.
 
 ## Install
 
@@ -31,7 +31,7 @@ Open http://127.0.0.1:8317/
 
 ## Quick start
 
-1. **Accounts** — pick a preset (Ollama, LM Studio, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
+1. **Accounts** — pick a preset (Ollama local or **Cloud**, LM Studio, **llama.cpp**, **vLLM**, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, **NVIDIA NIM**, **Cloudflare Workers AI**, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Free/Paid/Local filter is remembered in the UI.
 3. **Showcase** — try a prompt; vision models accept an image URL or upload.
 4. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline at the local base URL (`peaproxy clients show …`).
@@ -48,7 +48,10 @@ peaproxy clients show cursor
 peaproxy clients show opencode   # includes /v1
 peaproxy clients show claude-code  # does NOT include /v1
 peaproxy clients show pi         # both wires
+peaproxy clients show codex      # Responses API (wire_api = responses)
 peaproxy clients verify cursor --chat
+peaproxy clients verify pi --chat
+peaproxy clients verify codex --chat
 ```
 
 First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is persisted as `usage.json` next to the config; set `requestLog: true` for a redacted `requests.log`. OAuth tokens and inline API keys are stored in the OS keychain, or an encrypted file next to the YAML when no keychain is available. YAML still lists accounts (email, adapter) without printing secrets.
@@ -72,6 +75,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `GET /v0/catalog` | Rich catalog (tier, modalities, privacy, hidden/routable) |
 | `POST /v1/chat/completions` | Stream + non-stream; failover on 429/401 |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
+| `POST /v1/responses` | Codex / OpenAI Responses: native pass-through for Codex OAuth, otherwise translated via chat completions |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
 | `GET /admin/health` | Bind, adapters, **account cooldowns** (token required off loopback) |
@@ -95,6 +99,8 @@ Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generati
 - [x] Tag **`v0.2.0`** on `main` (GoReleaser publishes binaries)
 
 Post-v0.2 polish in this tree: OS keychain / encrypted-file secrets; Claude token 403 errors point at docs and the official API-key path. Qwen OAuth stays **not yet** (no CPA consumer flow).
+
+This branch (not tagged): llama.cpp / vLLM local presets, NVIDIA NIM, Cloudflare Workers AI, Ollama Cloud, and first-class `POST /v1/responses`.
 
 ## Why this exists
 

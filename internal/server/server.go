@@ -60,6 +60,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("GET /v0/catalog", s.handleCatalogAPI)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/messages", s.handleClaudeMessages)
+	mux.HandleFunc("POST /v1/responses", s.handleResponses)
 	admin := func(h http.HandlerFunc) http.HandlerFunc { return s.requireAdmin(h) }
 	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
 	mux.HandleFunc("GET /admin/presets", admin(s.handlePresets))
@@ -177,6 +178,34 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, completionJSON(peek.Model, resp.Content))
+}
+
+func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
+	raw, err := readBody(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	peek := jsonx.PeekBody(raw)
+	if peek.Stream {
+		sw := &sseWriter{ResponseWriter: w}
+		account, err := s.gw.ResponsesStream(r.Context(), raw, sw)
+		s.record(account, peek.Model, "responses", true, http.StatusOK, err, "")
+		if err != nil && !sw.started {
+			writeJSON(w, statusOf(err), errJSON(err))
+		}
+		return
+	}
+	out, account, err := s.gw.Responses(r.Context(), raw)
+	if err != nil {
+		s.record(account, peek.Model, "responses", false, statusOf(err), err, "")
+		writeJSON(w, statusOf(err), errJSON(err))
+		return
+	}
+	s.record(account, peek.Model, "responses", false, http.StatusOK, nil, "")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
 }
 
 func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {

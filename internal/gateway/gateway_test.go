@@ -167,3 +167,46 @@ func TestInstancesRedactOAuthTokens(t *testing.T) {
 		t.Fatalf("email %s", got[0].OAuth.Email)
 	}
 }
+
+func TestResponsesTranslatesToChatCompletions(t *testing.T) {
+	var chatBody []byte
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/v1/models":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+			case r.URL.Path == "/v1/chat/completions":
+				chatBody, _ = io.ReadAll(r.Body)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":    "chatcmpl-x",
+					"model": "llama3.2",
+					"choices": []map[string]any{{
+						"message": map[string]string{"role": "assistant", "content": "pong"},
+					}},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "other"}}})
+				return
+			}
+			http.Error(w, "unused", http.StatusInternalServerError)
+		},
+	)
+	out, account, err := gw.Responses(context.Background(), []byte(`{"model":"llama3.2","input":"ping"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == "" {
+		t.Fatal("missing account")
+	}
+	if !strings.Contains(string(chatBody), `"messages"`) || strings.Contains(string(chatBody), `"input"`) {
+		t.Fatalf("upstream should receive chat completions: %s", chatBody)
+	}
+	if !strings.Contains(string(out), `"object":"response"`) || !strings.Contains(string(out), `"output_text":"pong"`) {
+		t.Fatalf("responses wrap: %s", out)
+	}
+}

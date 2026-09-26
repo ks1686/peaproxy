@@ -248,6 +248,132 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	return lastAccount, last
 }
 
+// Responses uses native Responses when available, otherwise OpenAI chat translation.
+func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, error) {
+	peek := jsonx.PeekBody(raw)
+	cands := g.candidates(peek.Model)
+	if len(cands) == 0 {
+		return nil, "", router.ErrNoAccount
+	}
+	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
+	if xerr == nil {
+		oaReq.Raw = jsonx.SetStream(oaBody, false)
+		oaReq.Stream = false
+	}
+	var last error
+	var lastAccount string
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
+			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
+			if err == nil {
+				return out, lastAccount, nil
+			}
+			last = err
+			if retryable(err) {
+				g.markCooldown(inst.Provider.ID, err)
+				continue
+			}
+			return nil, lastAccount, err
+		}
+		if xerr != nil {
+			last = xerr
+			continue
+		}
+		resp, err := inst.Adapter.Chat(ctx, oaReq)
+		if err != nil {
+			last = err
+			if retryable(err) {
+				g.markCooldown(inst.Provider.ID, err)
+				continue
+			}
+			return nil, lastAccount, err
+		}
+		if len(resp.Raw) > 0 {
+			out, ferr := translate.FromOpenAIChat(resp.Raw, oaReq.Model)
+			if ferr == nil {
+				return out, lastAccount, nil
+			}
+		}
+		out, err := translate.FromChatContent(resp.ID, oaReq.Model, resp.Content)
+		return out, lastAccount, err
+	}
+	if last == nil {
+		last = xerr
+	}
+	if last == nil {
+		last = router.ErrNoAccount
+	}
+	return nil, lastAccount, last
+}
+
+// ResponsesStream writes Responses SSE (native pass-through or converted OpenAI stream).
+func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
+	peek := jsonx.PeekBody(raw)
+	cands := g.candidates(peek.Model)
+	if len(cands) == 0 {
+		return "", router.ErrNoAccount
+	}
+	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
+	if xerr == nil {
+		oaReq.Raw = jsonx.SetStream(oaBody, true)
+		oaReq.Stream = true
+	}
+	cw := &countWriter{w: w}
+	var last error
+	var lastAccount string
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
+			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), cw)
+			if err == nil {
+				return lastAccount, nil
+			}
+			last = err
+			if cw.n > 0 {
+				return lastAccount, err
+			}
+			if retryable(err) {
+				g.markCooldown(inst.Provider.ID, err)
+				continue
+			}
+			return lastAccount, err
+		}
+		if xerr != nil {
+			last = xerr
+			continue
+		}
+		pr, pw := io.Pipe()
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- translate.OpenAISSEToResponses(pr, cw, peek.Model)
+			_ = pr.Close()
+		}()
+		err := inst.Adapter.ChatStream(ctx, oaReq, pw)
+		_ = pw.Close()
+		convErr := <-errCh
+		if err == nil {
+			return lastAccount, convErr
+		}
+		last = err
+		if cw.n > 0 {
+			return lastAccount, err
+		}
+		if retryable(err) {
+			g.markCooldown(inst.Provider.ID, err)
+			continue
+		}
+		return lastAccount, err
+	}
+	if last == nil {
+		last = xerr
+	}
+	if last == nil {
+		last = router.ErrNoAccount
+	}
+	return lastAccount, last
+}
+
 // ClaudeChat uses native Messages when available, otherwise OpenAI translation.
 func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, error) {
 	peek := jsonx.PeekBody(raw)

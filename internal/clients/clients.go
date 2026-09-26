@@ -78,11 +78,20 @@ export OPENAI_API_KEY=peaproxy
 		Name:       "codex",
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
-		Notes:      "Chat Completions work now. Responses API still TODO.",
-		Snippet: `OPENAI_BASE_URL=http://127.0.0.1:8317/v1
-OPENAI_API_KEY=peaproxy
+		Notes:      "Codex CLI speaks the Responses API (wire_api=chat is gone). PeaProxy exposes POST /v1/responses and translates to chat adapters, or passes through Codex OAuth natively.",
+		Snippet: `# ~/.codex/config.toml — do not reuse reserved provider ids openai/ollama/lmstudio.
+model_provider = "peaproxy"
+model = "REPLACE_WITH_CATALOG_ID"
+
+[model_providers.peaproxy]
+name = "PeaProxy"
+base_url = "http://127.0.0.1:8317/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+
+# export OPENAI_API_KEY=peaproxy
 `,
-		VerifyTODO: "peaproxy clients verify codex",
+		VerifyTODO: "peaproxy clients verify codex --chat",
 	},
 	"continue": {
 		Name:       "continue",

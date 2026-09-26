@@ -19,7 +19,7 @@ func TestVerifyModelsAndChat(t *testing.T) {
 				"object": "list",
 				"data":   []map[string]string{{"id": "llama3.2"}},
 			})
-		case r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages":
+		case r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/responses":
 			chatPath = r.URL.Path
 			raw, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(raw), `"ping"`) {
@@ -47,6 +47,22 @@ func TestVerifyModelsAndChat(t *testing.T) {
 	}
 	if chatPath != "/v1/messages" || !res2.ChatOK {
 		t.Fatalf("claude-code wire path=%s %#v", chatPath, res2)
+	}
+
+	res3, err := Verify(context.Background(), "codex", srv.URL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatPath != "/v1/responses" || !res3.ChatOK {
+		t.Fatalf("codex wire path=%s %#v", chatPath, res3)
+	}
+
+	res4, err := Verify(context.Background(), "pi", srv.URL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res4.Wires) != 2 || res4.Wires[0].Wire != WireChat || res4.Wires[1].Wire != WireMessages {
+		t.Fatalf("pi wires %#v", res4.Wires)
 	}
 }
 

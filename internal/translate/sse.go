@@ -166,6 +166,117 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	return sc.Err()
 }
 
+// OpenAISSEToResponses converts chat.completion.chunk SSE into Responses API SSE.
+func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
+	started := false
+	id := "resp_peaproxy"
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	writeEvent := func(event, data string) error {
+		_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+		return err
+	}
+	var text strings.Builder
+	for sc.Scan() {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			ID      string `json:"id"`
+			Model   string `json:"model"`
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		if chunk.ID != "" {
+			id = chunk.ID
+		}
+		if chunk.Model != "" {
+			model = chunk.Model
+		}
+		if !started {
+			started = true
+			created := struct {
+				Type     string `json:"type"`
+				Response struct {
+					ID     string `json:"id"`
+					Object string `json:"object"`
+					Status string `json:"status"`
+					Model  string `json:"model"`
+				} `json:"response"`
+			}{Type: "response.created"}
+			created.Response.ID = id
+			created.Response.Object = "response"
+			created.Response.Status = "in_progress"
+			created.Response.Model = model
+			raw, err := json.Marshal(created)
+			if err != nil {
+				return err
+			}
+			if err := writeEvent("response.created", string(raw)); err != nil {
+				return err
+			}
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
+			delta := chunk.Choices[0].Delta.Content
+			text.WriteString(delta)
+			ev := struct {
+				Type  string `json:"type"`
+				Delta string `json:"delta"`
+			}{Type: "response.output_text.delta", Delta: delta}
+			raw, err := json.Marshal(ev)
+			if err != nil {
+				return err
+			}
+			if err := writeEvent("response.output_text.delta", string(raw)); err != nil {
+				return err
+			}
+		}
+	}
+	if !started {
+		return sc.Err()
+	}
+	completed := struct {
+		Type     string          `json:"type"`
+		Response responsesOutput `json:"response"`
+	}{
+		Type: "response.completed",
+		Response: responsesOutput{
+			ID:     id,
+			Object: "response",
+			Status: "completed",
+			Model:  model,
+			Output: []responsesOutMsg{{
+				Type: "message",
+				Role: "assistant",
+				Content: []responsesOutPart{{
+					Type: "output_text",
+					Text: text.String(),
+				}},
+			}},
+			OutputText: text.String(),
+		},
+	}
+	raw, err := json.Marshal(completed)
+	if err != nil {
+		return err
+	}
+	if err := writeEvent("response.completed", string(raw)); err != nil {
+		return err
+	}
+	return sc.Err()
+}
+
 func jsonString(s string) string {
 	b, err := json.Marshal(s)
 	if err != nil {

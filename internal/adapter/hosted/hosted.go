@@ -57,11 +57,44 @@ var (
 		EnvKey:         "HF_TOKEN",
 		Notes:          "Hugging Face Inference Providers OpenAI-compat router.",
 	}
+	LlamaCpp = Spec{
+		Name:           "llamacpp",
+		DefaultBaseURL: "http://127.0.0.1:8080/v1",
+		DefaultTier:    catalog.TierLocal,
+		Notes:          "llama.cpp llama-server OpenAI-compat (default :8080). Override baseURL if you changed --port.",
+	}
+	VLLM = Spec{
+		Name:           "vllm",
+		DefaultBaseURL: "http://127.0.0.1:8000/v1",
+		DefaultTier:    catalog.TierLocal,
+		Notes:          "vLLM OpenAI-compat server (default :8000). Override baseURL if you changed --port.",
+	}
+	NIM = Spec{
+		Name:           "nim",
+		DefaultBaseURL: "https://integrate.api.nvidia.com/v1",
+		DefaultTier:    catalog.TierFreemium,
+		EnvKey:         "NVIDIA_API_KEY",
+		Notes:          "NVIDIA API catalog / hosted NIM. Free trial key from build.nvidia.com. Local NIM containers should use the vLLM or custom OpenAI-compat preset instead.",
+	}
+	WorkersAI = Spec{
+		Name:           "workers_ai",
+		DefaultBaseURL: "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1",
+		DefaultTier:    catalog.TierFreemium,
+		EnvKey:         "CLOUDFLARE_API_TOKEN",
+		Notes:          "Cloudflare Workers AI OpenAI-compat. Replace YOUR_ACCOUNT_ID in the base URL (wrangler whoami). Token: CLOUDFLARE_API_TOKEN.",
+	}
+	OllamaCloud = Spec{
+		Name:           "ollama_cloud",
+		DefaultBaseURL: "https://ollama.com/v1",
+		DefaultTier:    catalog.TierFreemium,
+		EnvKey:         "OLLAMA_API_KEY",
+		Notes:          "Ollama Cloud hosted OpenAI-compat (not local :11434). Key from ollama.com/settings/keys.",
+	}
 )
 
 // All returns the hosted specs in UI order.
 func All() []Spec {
-	return []Spec{LMStudio, Groq, Cerebras, Google, XAI, HuggingFace}
+	return []Spec{LMStudio, LlamaCpp, VLLM, Groq, Cerebras, Google, XAI, HuggingFace, NIM, WorkersAI, OllamaCloud}
 }
 
 // Wrap returns a factory that fills default base URL and tier then delegates to openai_compat.

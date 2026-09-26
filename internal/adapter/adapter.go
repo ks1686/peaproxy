@@ -123,6 +123,13 @@ type NativeMessages interface {
 	MessagesStream(ctx context.Context, raw []byte, w io.Writer) error
 }
 
+// NativeResponses is implemented by adapters that speak OpenAI /v1/responses natively
+// (Codex OAuth). Other adapters get Responses→chat translation at the gateway.
+type NativeResponses interface {
+	Responses(ctx context.Context, raw []byte) ([]byte, error)
+	ResponsesStream(ctx context.Context, raw []byte, w io.Writer) error
+}
+
 // Registry looks up adapter factories by name.
 type Registry struct {
 	factories map[string]Factory

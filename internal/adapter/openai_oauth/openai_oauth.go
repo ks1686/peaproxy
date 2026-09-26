@@ -473,23 +473,9 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 			return adapter.ChatResponse{}, err
 		}
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiBase+"/responses", bytes.NewReader(raw))
+	body, err := a.postResponses(ctx, raw, false)
 	if err != nil {
 		return adapter.ChatResponse{}, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	a.headers(httpReq, false)
-	resp, err := a.httpClient.Do(httpReq)
-	if err != nil {
-		return adapter.ChatResponse{}, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return adapter.ChatResponse{}, err
-	}
-	if resp.StatusCode >= 300 {
-		return adapter.ChatResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
 	}
 	content := extractResponsesText(body)
 	oa, err := toOpenAIChatJSON(req.Model, content)
@@ -513,14 +499,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 			return err
 		}
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiBase+"/responses", bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	a.headers(httpReq, true)
-	resp, err := a.httpClient.Do(httpReq)
+	resp, err := a.doResponses(ctx, raw, true)
 	if err != nil {
 		return err
 	}
@@ -530,6 +509,59 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
 	}
 	return responsesSSEToOpenAI(resp.Body, w, req.Model)
+}
+
+func (a *Adapter) Responses(ctx context.Context, raw []byte) ([]byte, error) {
+	if err := a.ensureToken(ctx); err != nil {
+		return nil, err
+	}
+	return a.postResponses(ctx, jsonx.SetStream(raw, false), false)
+}
+
+func (a *Adapter) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) error {
+	if err := a.ensureToken(ctx); err != nil {
+		return err
+	}
+	resp, err := a.doResponses(ctx, jsonx.SetStream(raw, true), true)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
+func (a *Adapter) postResponses(ctx context.Context, raw []byte, stream bool) ([]byte, error) {
+	resp, err := a.doResponses(ctx, raw, stream)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+	}
+	return body, nil
+}
+
+func (a *Adapter) doResponses(ctx context.Context, raw []byte, stream bool) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiBase+"/responses", bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
+	a.headers(httpReq, stream)
+	return a.httpClient.Do(httpReq)
 }
 
 func (a *Adapter) headers(req *http.Request, stream bool) {
@@ -760,3 +792,4 @@ func truncate(b []byte) string {
 
 var _ adapter.Adapter = (*Adapter)(nil)
 var _ adapter.Authenticator = (*Adapter)(nil)
+var _ adapter.NativeResponses = (*Adapter)(nil)

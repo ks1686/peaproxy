@@ -13,6 +13,15 @@ import (
 
 const defaultOrigin = "http://127.0.0.1:8317"
 
+// ClientWire is the HTTP path a harness uses for a tiny completion.
+type ClientWire string
+
+const (
+	WireChat      ClientWire = "chat"
+	WireMessages  ClientWire = "messages"
+	WireResponses ClientWire = "responses"
+)
+
 // VerifyResult is the outcome of hitting the local gateway like a harness would.
 type VerifyResult struct {
 	Name       string
@@ -23,10 +32,45 @@ type VerifyResult struct {
 	ChatHTTP   int
 	ChatModel  string
 	ChatOK     bool
+	Wires      []VerifyHit
 	Detail     string
 }
 
-// Verify GETs /v1/models and optionally POSTs a tiny chat on the preset's wire.
+// VerifyHit is one POST on a harness wire.
+type VerifyHit struct {
+	Wire ClientWire
+	URL  string
+	HTTP int
+	OK   bool
+}
+
+func (w ClientWire) path() string {
+	switch w {
+	case WireChat:
+		return "/v1/chat/completions"
+	case WireMessages:
+		return "/v1/messages"
+	case WireResponses:
+		return "/v1/responses"
+	default:
+		return "/v1/chat/completions"
+	}
+}
+
+func wiresFor(name string) []ClientWire {
+	switch name {
+	case "claude-code":
+		return []ClientWire{WireMessages}
+	case "codex":
+		return []ClientWire{WireResponses}
+	case "pi":
+		return []ClientWire{WireChat, WireMessages}
+	default:
+		return []ClientWire{WireChat}
+	}
+}
+
+// Verify GETs /v1/models and optionally POSTs a tiny chat on the preset's wire(s).
 func Verify(ctx context.Context, name, origin string, doChat bool) (VerifyResult, error) {
 	p, ok := Get(name)
 	if !ok {
@@ -72,13 +116,47 @@ func Verify(ctx context.Context, name, origin string, doChat bool) (VerifyResult
 		return out, fmt.Errorf("no models listed — add an account before --chat")
 	}
 	out.ChatModel = model
+	for i, wire := range wiresFor(p.Name) {
+		hit, err := postWire(ctx, client, origin, wire, model)
+		out.Wires = append(out.Wires, hit)
+		if i == 0 {
+			out.ChatURL = hit.URL
+			out.ChatHTTP = hit.HTTP
+			out.ChatOK = hit.OK
+			out.Detail = ""
+		}
+		if err != nil {
+			out.Detail = err.Error()
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func postWire(ctx context.Context, client *http.Client, origin string, wire ClientWire, model string) (VerifyHit, error) {
+	hit := VerifyHit{Wire: wire, URL: origin + wire.path()}
+	payload, err := pingPayload(wire, model)
+	if err != nil {
+		return hit, err
+	}
+	tmp := VerifyResult{ChatURL: hit.URL}
+	tmp, err = postChat(ctx, client, tmp, payload)
+	hit.HTTP = tmp.ChatHTTP
+	hit.OK = tmp.ChatOK
+	if err != nil {
+		return hit, err
+	}
+	return hit, nil
+}
+
+func pingPayload(wire ClientWire, model string) ([]byte, error) {
 	type pingMsg struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
 	}
-	if p.Name == "claude-code" {
-		out.ChatURL = origin + "/v1/messages"
-		payload, err := json.Marshal(struct {
+	switch wire {
+	case WireMessages:
+		return json.Marshal(struct {
 			Model     string    `json:"model"`
 			MaxTokens int       `json:"max_tokens"`
 			Messages  []pingMsg `json:"messages"`
@@ -87,25 +165,37 @@ func Verify(ctx context.Context, name, origin string, doChat bool) (VerifyResult
 			MaxTokens: 8,
 			Messages:  []pingMsg{{Role: "user", Content: "ping"}},
 		})
-		if err != nil {
-			return out, err
-		}
-		return postChat(ctx, client, out, payload)
+	case WireResponses:
+		return json.Marshal(struct {
+			Model           string `json:"model"`
+			Input           string `json:"input"`
+			MaxOutputTokens int    `json:"max_output_tokens"`
+		}{
+			Model:           model,
+			Input:           "ping",
+			MaxOutputTokens: 8,
+		})
+	case WireChat:
+		return json.Marshal(struct {
+			Model     string    `json:"model"`
+			MaxTokens int       `json:"max_tokens"`
+			Messages  []pingMsg `json:"messages"`
+		}{
+			Model:     model,
+			MaxTokens: 8,
+			Messages:  []pingMsg{{Role: "user", Content: "ping"}},
+		})
+	default:
+		return json.Marshal(struct {
+			Model     string    `json:"model"`
+			MaxTokens int       `json:"max_tokens"`
+			Messages  []pingMsg `json:"messages"`
+		}{
+			Model:     model,
+			MaxTokens: 8,
+			Messages:  []pingMsg{{Role: "user", Content: "ping"}},
+		})
 	}
-	out.ChatURL = origin + "/v1/chat/completions"
-	payload, err := json.Marshal(struct {
-		Model     string    `json:"model"`
-		MaxTokens int       `json:"max_tokens"`
-		Messages  []pingMsg `json:"messages"`
-	}{
-		Model:     model,
-		MaxTokens: 8,
-		Messages:  []pingMsg{{Role: "user", Content: "ping"}},
-	})
-	if err != nil {
-		return out, err
-	}
-	return postChat(ctx, client, out, payload)
 }
 
 func postChat(ctx context.Context, client *http.Client, out VerifyResult, payload []byte) (VerifyResult, error) {
@@ -140,6 +230,12 @@ func truncate(s string, n int) string {
 func FormatVerify(r VerifyResult) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "verify %s: GET %s HTTP %d models=%d\n", r.Name, r.ModelsURL, r.ModelsHTTP, r.ModelsN)
+	if len(r.Wires) > 0 {
+		for _, hit := range r.Wires {
+			fmt.Fprintf(&b, "%s %s model=%s HTTP %d ok=%v\n", hit.Wire, hit.URL, r.ChatModel, hit.HTTP, hit.OK)
+		}
+		return b.String()
+	}
 	if r.ChatURL != "" {
 		fmt.Fprintf(&b, "chat %s model=%s HTTP %d ok=%v\n", r.ChatURL, r.ChatModel, r.ChatHTTP, r.ChatOK)
 	}

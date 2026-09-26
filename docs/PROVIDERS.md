@@ -8,11 +8,16 @@ Adapters in this repo today:
 |---|---|---|---|
 | `ollama` | List + chat + stream (`/v1` with `/api/tags` fallback) | none | `http://127.0.0.1:11434/v1` |
 | `lmstudio` | Thin OpenAI-compat wrapper | none | `http://127.0.0.1:1234/v1` |
+| `llamacpp` | Thin OpenAI-compat wrapper | none | `http://127.0.0.1:8080/v1` |
+| `vllm` | Thin OpenAI-compat wrapper | none | `http://127.0.0.1:8000/v1` |
+| `ollama_cloud` | Thin OpenAI-compat wrapper (hosted, not local) | API key | `https://ollama.com/v1` |
 | `groq` | Thin OpenAI-compat wrapper | API key | `https://api.groq.com/openai/v1` |
 | `cerebras` | Thin OpenAI-compat wrapper | API key | `https://api.cerebras.ai/v1` |
 | `google` / `gemini` | Thin OpenAI-compat wrapper | API key | `https://generativelanguage.googleapis.com/v1beta/openai` |
 | `xai` | Thin OpenAI-compat wrapper | API key | `https://api.x.ai/v1` |
 | `huggingface` | Thin OpenAI-compat wrapper | token | `https://router.huggingface.co/v1` |
+| `nim` | Thin OpenAI-compat wrapper | API key | `https://integrate.api.nvidia.com/v1` |
+| `workers_ai` | Thin OpenAI-compat wrapper | API token | `https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1` |
 | `openai` | First-class OpenAI API (models + chat completions stream) | API key | `https://api.openai.com/v1` |
 | `anthropic` | Native Messages (`x-api-key`) + OpenAI chat/completions bridge; true SSE | API key | `https://api.anthropic.com` |
 | `openrouter` | Preset; ids ending `:free` tagged free; live list | API key | `https://openrouter.ai/api/v1` |
@@ -42,7 +47,7 @@ PeaProxy **key** adapters do **not** call `generateContent`. Set `GEMINI_API_KEY
 
 **P0 OAuth:** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys. Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Devin skipped (not a generic chat upstream).
 
-**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `openrouter`.
+**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `openrouter`.
 
 Do **not** advertise Claude Free OAuth (CPA #6016).
 
@@ -52,13 +57,16 @@ Do **not** advertise Claude Free OAuth (CPA #6016).
 |---|---|---|---|
 | Ollama | `localhost:11434/v1` | none | `local` |
 | LM Studio | `:1234/v1` (`adapter: lmstudio`) | none / optional | `local` |
-| llama.cpp / vLLM | user `baseURL` on `openai_compat` | none | `local` |
+| llama.cpp | `:8080/v1` (`adapter: llamacpp`) | none / optional | `local` |
+| vLLM | `:8000/v1` (`adapter: vllm`) | none / optional | `local` |
 | OpenRouter `:free` | adapter `openrouter` | key | `free` (ids ending `:free`) |
 | **OpenCode Zen free** | `https://opencode.ai/zen/v1` | official key from [opencode.ai](https://opencode.ai/docs/zen/); community empty Bearer + `x-session-id` is ToS-fragile | `free` for `-free` / named free ids |
 | Hugging Face Inference | `adapter: huggingface` router | token | `freemium` |
 | Google AI Studio | official OpenAI-compat Gemini | free key | `freemium` |
 | Groq / Cerebras | first-class wrappers | key | `freemium` |
-| Ollama Cloud | hosted OpenAI-compat | account / key | `freemium` |
+| NVIDIA NIM (API catalog) | `adapter: nim` → `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` from [build.nvidia.com](https://build.nvidia.com/settings) | `freemium` |
+| Cloudflare Workers AI | `adapter: workers_ai` | `CLOUDFLARE_API_TOKEN`; replace `YOUR_ACCOUNT_ID` in the base URL | `freemium` |
+| Ollama Cloud | `adapter: ollama_cloud` → `https://ollama.com/v1` | `OLLAMA_API_KEY` | `freemium` |
 
 **GitHub Models is retired (2026-07-30).** Do not ship it. Migrate narrative: Azure AI Foundry (paid) or Copilot OAuth (separate, later).
 
