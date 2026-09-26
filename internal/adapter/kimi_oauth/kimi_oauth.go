@@ -95,7 +95,7 @@ func newAdapter(opts adapter.Options, ai bool) (adapter.Adapter, error) {
 		oauthHost:    host,
 		apiBase:      base,
 		deviceID:     deviceID,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		httpClient:   adapter.HTTPClient(30*time.Second, opts.ObserveHeaders),
 		persist:      opts.PersistOAuth,
 		token:        tok,
 		pollInterval: 5 * time.Second,

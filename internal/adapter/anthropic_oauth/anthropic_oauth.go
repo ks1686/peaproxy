@@ -75,7 +75,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		id:           id,
 		baseURL:      base,
 		tokenURL:     TokenURL,
-		httpClient:   &http.Client{},
+		httpClient:   adapter.HTTPClient(0, opts.ObserveHeaders),
 		persist:      opts.PersistOAuth,
 		token:        opts.OAuth,
 		skipLoopback: opts.SkipLoopback,

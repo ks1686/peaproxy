@@ -96,7 +96,25 @@ Several **free** Zen models may use prompts for training (NVIDIA Nemotron free, 
 
 ## Failover
 
-Multiple accounts that list the same model id follow `failover.policy` (`round-robin` default, `fill-first`, or `sticky`). HTTP **429**, **401**, **503**, **529**, and provider bodies that look like rate-limit / quota, overloaded, or auth-expired cool that account down for 30s and try the next one. Health UI and `peaproxy health` show adapter health (last ListModels/Validate) and remaining cooldown time. See [CONFIG.md](CONFIG.md#failover).
+Multiple accounts that list the same model id follow `failover.policy` (`round-robin` default, `fill-first`, or `sticky`). HTTP **429**, **401**, **503**, **529**, and provider bodies that look like rate-limit / quota, overloaded, or auth-expired cool that account down for 30s and try the next one. Health UI and `peaproxy health` show adapter health (last ListModels/Validate), **quota remaining when the provider reports it**, and remaining cooldown time. See [CONFIG.md](CONFIG.md#failover).
+
+## Quota remaining
+
+PeaProxy never invents remaining counts. Unknown remaining is **omitted** (JSON `null` / missing; UI: muted “not reported by provider”). A provider-returned **0** is shown as 0. “Unlimited” is shown only when OpenRouter `GET /key` documents `limit_remaining: null`.
+
+| Adapter family | Remaining source | Probe |
+|---|---|---|
+| `openai` | `x-ratelimit-remaining-requests` / `x-ratelimit-remaining-tokens` on chat, embeddings, images | none (no official credit-balance GET for API keys) |
+| `anthropic` | `anthropic-ratelimit-*-remaining` on Messages | none (admin usage APIs are historical, not remaining) |
+| `groq`, `sambanova` | documented `x-ratelimit-*` headers | none |
+| `cerebras`, `xai`, `huggingface`, `nim`, `workers_ai`, generic `openai_compat` | capture `x-ratelimit-*` **if** the upstream sends them | none |
+| `google` / `gemini` | none documented on the OpenAI-compat endpoint | none |
+| `openrouter` | `X-RateLimit-*` on **429** only | **`GET /api/v1/key`** on Health refresh / probe (`limit_remaining`) |
+| `ollama_cloud`, `opencode_zen`, `opencode_go` | headers if sent | none |
+| Local (`ollama`, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | none | none |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta, Copilot) | headers if the upstream sends them | **none** — no stable documented remaining GET (Copilot `/copilot_internal/user` is skipped) |
+
+Surfaces: `GET /admin/health` (`quota`), `GET /admin/quota`, Health UI, `peaproxy health`. Header snapshots are taken from the HTTP transport (does not add a request). Probes are not run on every chat.
 
 ## Catalog UX
 

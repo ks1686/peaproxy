@@ -79,7 +79,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		id:           id,
 		apiBase:      base,
 		tokenURL:     TokenURL,
-		httpClient:   &http.Client{},
+		httpClient:   adapter.HTTPClient(0, opts.ObserveHeaders),
 		persist:      opts.PersistOAuth,
 		token:        opts.OAuth,
 		flow:         strings.ToLower(strings.TrimSpace(opts.OAuthFlow)),

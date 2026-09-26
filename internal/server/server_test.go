@@ -624,7 +624,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth", "not reported by provider", "/admin/quota"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
@@ -864,6 +864,9 @@ func TestHealthIncludesAdapterHealthAndProbe(t *testing.T) {
 	if !strings.Contains(got, `"adapterHealth"`) || !strings.Contains(got, `"cooldownTtlMs"`) {
 		t.Fatalf("%s", got)
 	}
+	if !strings.Contains(got, `"quota"`) {
+		t.Fatalf("missing quota: %s", got)
+	}
 	if !strings.Contains(got, `"failoverPolicy":"round-robin"`) {
 		t.Fatalf("missing failover policy: %s", got)
 	}
@@ -875,6 +878,56 @@ func TestHealthIncludesAdapterHealthAndProbe(t *testing.T) {
 	s.Handler().ServeHTTP(prr, probe)
 	if prr.Code != http.StatusOK || !strings.Contains(prr.Body.String(), `"adapterHealth"`) {
 		t.Fatalf("probe %d %s", prr.Code, prr.Body)
+	}
+	if !strings.Contains(prr.Body.String(), `"quota"`) {
+		t.Fatalf("probe missing quota: %s", prr.Body)
+	}
+}
+
+func TestAdminQuotaOmitsUnknownRemaining(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/quota", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	var body struct {
+		Honesty  string           `json:"honesty"`
+		Quota    []map[string]any `json:"quota"`
+		Families []map[string]any `json:"families"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.Honesty, "omitted") {
+		t.Fatalf("honesty %s", body.Honesty)
+	}
+	if len(body.Quota) != 1 || body.Quota[0]["accountId"] != "local" {
+		t.Fatalf("%#v", body.Quota)
+	}
+	if _, ok := body.Quota[0]["remainingRequests"]; ok {
+		t.Fatalf("unknown remaining leaked: %#v", body.Quota[0])
+	}
+	if _, ok := body.Quota[0]["creditsUnlimited"]; ok {
+		t.Fatalf("must not invent unlimited: %#v", body.Quota[0])
+	}
+	var sawOpenRouter bool
+	for _, f := range body.Families {
+		if f["adapter"] == "openrouter" {
+			sawOpenRouter = true
+			if f["probe"] != "GET /api/v1/key" {
+				t.Fatalf("%#v", f)
+			}
+		}
+		if f["adapter"] == "copilot_oauth" {
+			if _, ok := f["probe"]; ok && f["probe"] != "" && f["probe"] != nil {
+				t.Fatalf("copilot must not probe: %#v", f)
+			}
+		}
+	}
+	if !sawOpenRouter {
+		t.Fatal("families missing openrouter")
 	}
 }
 

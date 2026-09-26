@@ -930,3 +930,139 @@ func TestCreateEmbeddingsRequiresModel(t *testing.T) {
 		t.Fatalf("want ErrEmbeddingModelRequired, got %v", err)
 	}
 }
+
+func TestQuotaCapturesRateLimitHeadersWithoutInventingMissing(t *testing.T) {
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				w.Header().Set("x-ratelimit-remaining-requests", "11")
+				w.Header().Set("x-ratelimit-remaining-tokens", "4000")
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			w.Header().Set("x-ratelimit-remaining-requests", "10")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+			})
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			http.NotFound(w, r)
+		},
+	)
+	rows := gw.Quota()
+	if len(rows) != 2 {
+		t.Fatalf("%#v", rows)
+	}
+	var reported, unknown int
+	for _, row := range rows {
+		if row.AccountID == "acct-a" {
+			if row.RemainingRequests == nil || *row.RemainingRequests != 11 {
+				t.Fatalf("acct-a %#v", row)
+			}
+			if row.RemainingCredits != nil {
+				t.Fatalf("must not invent credits: %#v", row)
+			}
+			reported++
+		}
+		if row.AccountID == "acct-b" {
+			if row.Reported() {
+				t.Fatalf("acct-b invented remaining: %#v", row)
+			}
+			if row.RemainingRequests != nil {
+				t.Fatalf("unknown must not be 0: %#v", row)
+			}
+			unknown++
+		}
+	}
+	if reported != 1 || unknown != 1 {
+		t.Fatalf("%#v", rows)
+	}
+}
+
+func TestQuotaProbeOpenRouterKeyOnRefresh(t *testing.T) {
+	var keyHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "openrouter/auto"}}})
+		case "/v1/key":
+			keyHits++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{"limit": 10.0, "limit_remaining": 6.5, "usage": 3.5},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{{
+			ID: "or1", Adapter: "openrouter", Tier: "freemium",
+			BaseURL: srv.URL + "/v1", APIKey: "sk-or-test",
+		}},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	if keyHits != 1 {
+		t.Fatalf("GET /key hits %d", keyHits)
+	}
+	rows := gw.Quota()
+	if len(rows) != 1 || rows[0].RemainingCredits == nil || *rows[0].RemainingCredits != 6.5 {
+		t.Fatalf("%#v", rows)
+	}
+	if rows[0].Source != "probe" {
+		t.Fatalf("source %s", rows[0].Source)
+	}
+}
+
+func TestQuotaCapturesChatHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("x-ratelimit-remaining-requests", "8")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{{
+			ID: "oa", Adapter: "openai_compat", Tier: "paid", BaseURL: srv.URL + "/v1",
+		}},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	before := gw.Quota()
+	if len(before) != 1 || before[0].Reported() {
+		t.Fatalf("models must not invent remaining: %#v", before)
+	}
+	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	after := gw.Quota()
+	if len(after) != 1 || after[0].RemainingRequests == nil || *after[0].RemainingRequests != 8 {
+		t.Fatalf("%#v", after)
+	}
+}

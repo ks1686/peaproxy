@@ -76,7 +76,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		userURL:         UserURL,
 		apiBase:         base,
 		apiBaseLocked:   locked,
-		httpClient:      &http.Client{Timeout: 30 * time.Second},
+		httpClient:      adapter.HTTPClient(30*time.Second, opts.ObserveHeaders),
 		persist:         opts.PersistOAuth,
 		token:           opts.OAuth,
 		pollInterval:    5 * time.Second,

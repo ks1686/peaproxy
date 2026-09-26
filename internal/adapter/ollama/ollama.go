@@ -54,7 +54,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		id:        id,
 		compatURL: compat,
 		nativeURL: native,
-		client:    &http.Client{Timeout: 3 * time.Second},
+		client:    adapter.HTTPClient(3*time.Second, opts.ObserveHeaders),
 	}, nil
 }
 

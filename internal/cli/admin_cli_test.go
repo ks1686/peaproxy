@@ -190,6 +190,7 @@ func TestHealthMatchesAdminHealthFields(t *testing.T) {
 		"models:",
 		"adapters:",
 		"adapterHealth:",
+		"quota:",
 		"cooldowns:",
 		"failoverPolicy: round-robin",
 		"cooldownTtlMs: 30000",
