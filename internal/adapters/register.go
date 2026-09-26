@@ -6,6 +6,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/hosted"
 	"github.com/ks1686/peaproxy/internal/adapter/ollama"
 	"github.com/ks1686/peaproxy/internal/adapter/openai"
 	"github.com/ks1686/peaproxy/internal/adapter/openai_compat"
@@ -23,6 +24,17 @@ func DefaultRegistry() *adapter.Registry {
 	r.Register(anthropic.Name, anthropic.New)
 	r.Register(openrouter.Name, openrouter.New)
 	r.Register(opencodezen.Name, opencodezen.New)
+	for _, spec := range hosted.All() {
+		r.Register(spec.Name, hosted.Wrap(spec))
+	}
+	// Alias: Gemini is Google AI Studio's official OpenAI-compat endpoint.
+	r.Register("gemini", hosted.Wrap(hosted.Spec{
+		Name:           "gemini",
+		DefaultBaseURL: hosted.Google.DefaultBaseURL,
+		DefaultTier:    hosted.Google.DefaultTier,
+		EnvKey:         hosted.Google.EnvKey,
+		Notes:          hosted.Google.Notes,
+	}))
 	r.Register(anthropic_oauth.Name, anthropic_oauth.New)
 	r.Register(openai_oauth.Name, openai_oauth.New)
 	return r

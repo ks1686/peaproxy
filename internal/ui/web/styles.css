@@ -68,3 +68,37 @@ pre { overflow: auto; background: #0e110c; padding: 0.75rem; border-radius: 8px;
 footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); }
 .snippet { position: relative; }
 .snippet .btn { position: absolute; top: 0.4rem; right: 0.4rem; }
+.banner {
+  background: #3a2414;
+  color: #f3d2b0;
+  padding: 0.7rem 1.5rem;
+  border-bottom: 1px solid var(--danger);
+  font-size: 0.9rem;
+}
+.banner .row { margin-top: 0.4rem; }
+.empty {
+  color: var(--muted);
+  padding: 1.25rem 0.25rem;
+  text-align: center;
+  line-height: 1.5;
+}
+.toasts {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  z-index: 20;
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+.toast {
+  background: #2a2318;
+  border: 1px solid var(--danger);
+  color: var(--fg);
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  box-shadow: 0 8px 24px #0006;
+}
+.toast.ok { border-color: var(--accent); background: #1c2614; }

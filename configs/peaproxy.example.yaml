@@ -1,7 +1,11 @@
 # PeaProxy example config (schemaVersion 1)
 #
 # Copy to ~/.config/peaproxy/config.yaml or pass --config.
+# First `peaproxy serve` writes this skeleton if the file is missing.
 # File mode should stay 0600. Prefer apiKeyEnv over inline apiKey.
+#
+# Override order: config file < PEAPROXY_* env < CLI flags.
+# See docs/CONFIG.md.
 
 schemaVersion: 1
 bind: 127.0.0.1
@@ -24,10 +28,42 @@ providers:
     tier: local
     baseURL: http://127.0.0.1:11434/v1
 
+  # Local LM Studio OpenAI server (first-class adapter; default http://127.0.0.1:1234/v1).
   # - id: lmstudio-local
-  #   adapter: openai_compat
+  #   adapter: lmstudio
   #   tier: local
-  #   baseURL: http://127.0.0.1:1234/v1
+
+  # Groq (OpenAI-compat).
+  # - id: groq
+  #   adapter: groq
+  #   tier: freemium
+  #   apiKeyEnv: GROQ_API_KEY
+
+  # Cerebras (OpenAI-compat).
+  # - id: cerebras
+  #   adapter: cerebras
+  #   tier: freemium
+  #   apiKeyEnv: CEREBRAS_API_KEY
+
+  # Google AI Studio via official Gemini OpenAI-compat endpoint
+  # (https://ai.google.dev/gemini-api/docs/openai). Not generateContent.
+  # Adapter alias: gemini
+  # - id: google-key
+  #   adapter: google
+  #   tier: freemium
+  #   apiKeyEnv: GEMINI_API_KEY
+
+  # xAI Grok (OpenAI-compat).
+  # - id: xai-key
+  #   adapter: xai
+  #   tier: paid
+  #   apiKeyEnv: XAI_API_KEY
+
+  # Hugging Face Inference Providers router (OpenAI-compat).
+  # - id: huggingface
+  #   adapter: huggingface
+  #   tier: freemium
+  #   apiKeyEnv: HF_TOKEN
 
   # - id: openrouter
   #   adapter: openrouter
@@ -55,7 +91,7 @@ providers:
   #   baseURL: https://opencode.ai/zen/v1
   #   apiKeyEnv: OPENCODE_API_KEY
 
-  # OAuth stubs — not implemented.
+  # OAuth stubs — not implemented. Prefer official API keys (docs/OAUTH.md).
   # - id: anthropic-oauth
   #   adapter: anthropic_oauth
   #   tier: paid

@@ -11,8 +11,14 @@ import (
 	"github.com/ks1686/peaproxy/internal/server"
 )
 
-func runServe(out io.Writer, cfg config.Config, path string) error {
+func runServe(out io.Writer, cfg config.Config, path string, created bool) error {
+	if created {
+		_, _ = fmt.Fprintf(out, "wrote first-run config %s\n", path)
+	}
 	_, _ = fmt.Fprintf(out, "starting peaproxy on http://%s\nconfig: %s\n", cfg.Addr(), path)
+	if cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind) {
+		_, _ = fmt.Fprintf(out, "WARNING: listening on %s — /admin requires X-Admin-Token\n", cfg.Bind)
+	}
 	gw, err := gateway.New(cfg, path, adapters.DefaultRegistry())
 	if err != nil {
 		return err

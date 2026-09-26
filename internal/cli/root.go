@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -62,20 +61,25 @@ func loadCfg(path string) (config.Config, string, error) {
 func serveCmd(configPath *string) *cobra.Command {
 	bind := config.DefaultBind
 	port := config.DefaultPort
+	allowLAN := false
+	adminToken := ""
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the localhost gateway and UI",
-		Long: `Bind defaults to 127.0.0.1:8317. Non-loopback bind requires config
-allowNonLoopback plus an admin token.
+		Long: `Bind defaults to 127.0.0.1:8317. Binding 0.0.0.0 requires --allow-lan
+plus a non-empty admin token (--admin-token or PEAPROXY_ADMIN_TOKEN).
+
+A missing config file is written on first serve (Default() skeleton).
 
 Examples:
   peaproxy serve
   peaproxy serve --port 8317
+  peaproxy serve --bind 0.0.0.0 --allow-lan --admin-token "$TOKEN"
   peaproxy serve --config ./peaproxy.yaml
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, path, err := loadCfg(*configPath)
+			cfg, path, created, err := config.EnsureFile(*configPath)
 			if err != nil {
 				return err
 			}
@@ -85,14 +89,22 @@ Examples:
 			if cmd.Flags().Changed("port") {
 				cfg.Port = port
 			}
+			if cmd.Flags().Changed("allow-lan") && allowLAN {
+				cfg.AllowNonLoopback = true
+			}
+			if cmd.Flags().Changed("admin-token") {
+				cfg.AdminToken = adminToken
+			}
 			if err := cfg.Validate(); err != nil {
 				return err
 			}
-			return runServe(cmd.OutOrStdout(), cfg, path)
+			return runServe(cmd.OutOrStdout(), cfg, path, created)
 		},
 	}
 	cmd.Flags().StringVar(&bind, "bind", config.DefaultBind, "Listen address (loopback default)")
 	cmd.Flags().IntVar(&port, "port", config.DefaultPort, "Listen port")
+	cmd.Flags().BoolVar(&allowLAN, "allow-lan", false, "Permit non-loopback bind (also requires --admin-token)")
+	cmd.Flags().StringVar(&adminToken, "admin-token", "", "Admin token required for /admin when bound off loopback")
 	return cmd
 }
 
@@ -114,7 +126,7 @@ func authCmd() *cobra.Command {
 			if provider == "" {
 				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  known stubs: anthropic, openai")
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "auth login: provider=%s status=not-implemented\nTODO: official OAuth only — no reverse-engineered clients\n", provider)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), oauthHint(provider))
 			return nil
 		},
 	}
@@ -266,19 +278,40 @@ func configCmd(configPath *string) *cobra.Command {
 			return nil
 		},
 	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "init",
+		Short: "Write the default config file if missing",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = args
+			cfg, path, created, err := config.EnsureFile(*configPath)
+			if err != nil {
+				return err
+			}
+			if created {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s (%d providers)\n", path, len(cfg.Providers))
+			} else {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "exists %s (%d providers)\n", path, len(cfg.Providers))
+			}
+			return nil
+		},
+	})
 	return cmd
 }
 
 func clientsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clients",
-		Short: "Harness presets (Cursor, Claude Code, OpenCode, Pi, Codex, Continue)",
+		Short: "Harness presets (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline)",
 		Long: `Examples:
   peaproxy clients list
   peaproxy clients show cursor
   peaproxy clients show opencode
   peaproxy clients show claude-code
+  peaproxy clients show pi
+  peaproxy clients show continue
+  peaproxy clients show cline
   peaproxy clients verify cursor
+  peaproxy clients verify cursor --chat
 `,
 	}
 	cmd.AddCommand(&cobra.Command{
@@ -305,38 +338,26 @@ func clientsCmd() *cobra.Command {
 			return nil
 		},
 	})
-	cmd.AddCommand(&cobra.Command{
+	var doChat bool
+	var origin string
+	verify := &cobra.Command{
 		Use:   "verify [name]",
-		Short: "GET /v1/models on the local gateway",
+		Short: "GET /v1/models (and optionally a tiny chat) on the local gateway",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			p, ok := clients.Get(args[0])
-			if !ok {
-				return fmt.Errorf("unknown client %q\n  peaproxy clients list", args[0])
-			}
-			url := "http://127.0.0.1:8317/v1/models"
-			if p.Name == "claude-code" {
-				url = "http://127.0.0.1:8317/v1/models"
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				return err
+			res, err := clients.Verify(ctx, args[0], origin, doChat)
+			_, _ = io.WriteString(cmd.OutOrStdout(), clients.FormatVerify(res))
+			if res.Detail != "" && err != nil {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), res.Detail)
 			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				return fmt.Errorf("verify %s: is peaproxy serve running?\n  %v", p.Name, err)
-			}
-			defer resp.Body.Close()
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "verify %s: HTTP %d\n%s\n", p.Name, resp.StatusCode, body)
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("unexpected status %d", resp.StatusCode)
-			}
-			return nil
+			return err
 		},
-	})
+	}
+	verify.Flags().BoolVar(&doChat, "chat", false, "Also POST a tiny completion using the first listed model")
+	verify.Flags().StringVar(&origin, "origin", "http://127.0.0.1:8317", "Gateway origin")
+	cmd.AddCommand(verify)
 	return cmd
 }
 
@@ -353,4 +374,23 @@ func ExecuteWithArgs(args []string, out *bytes.Buffer) error {
 	cmd.SetErr(out)
 	cmd.SetIn(os.Stdin)
 	return cmd.Execute()
+}
+
+func oauthHint(provider string) string {
+	switch provider {
+	case "anthropic":
+		return `auth login: provider=anthropic status=not-implemented
+Claude Pro/Max subscription OAuth is not a public third-party API.
+Create an official API key: https://console.anthropic.com/settings/keys
+Then: Accounts → Anthropic API key (adapter anthropic).
+Docs: https://docs.anthropic.com/en/api/getting-started`
+	case "openai":
+		return `auth login: provider=openai status=not-implemented
+ChatGPT/Codex subscription OAuth is not a public third-party API.
+Create a platform API key: https://platform.openai.com/api-keys
+Then: Accounts → OpenAI API key (adapter openai).
+Docs: https://platform.openai.com/docs/api-reference`
+	default:
+		return fmt.Sprintf("auth login: provider=%s status=not-implemented\nPrefer official API keys. No reverse-engineered OAuth.", provider)
+	}
 }

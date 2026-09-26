@@ -10,7 +10,7 @@ func TestListIncludesHarnessesFromPlan(t *testing.T) {
 	for _, n := range List() {
 		got[n] = true
 	}
-	for _, want := range []string{"cursor", "claude-code", "opencode", "pi", "codex", "continue"} {
+	for _, want := range []string{"cursor", "claude-code", "opencode", "pi", "codex", "continue", "cline"} {
 		if !got[want] {
 			t.Fatalf("missing preset %s in %v", want, List())
 		}
@@ -24,6 +24,29 @@ func TestGetPiDocumentsCloakWarning(t *testing.T) {
 	}
 	if p.Notes == "" {
 		t.Fatal("pi notes must mention cloak defaults")
+	}
+	if !strings.Contains(p.Snippet, "ANTHROPIC_BASE_URL=http://127.0.0.1:8317\n") {
+		t.Fatalf("pi anthropic wire must omit /v1: %s", p.Snippet)
+	}
+	if !strings.Contains(p.Snippet, "OPENAI_BASE_URL=http://127.0.0.1:8317/v1") {
+		t.Fatalf("pi openai wire must include /v1: %s", p.Snippet)
+	}
+}
+
+func TestContinueAndClinePresets(t *testing.T) {
+	c, ok := Get("continue")
+	if !ok {
+		t.Fatal("missing continue")
+	}
+	if !strings.Contains(c.Snippet, `"apiBase"`) {
+		t.Fatalf("continue: %s", c.Snippet)
+	}
+	cl, ok := Get("cline")
+	if !ok {
+		t.Fatal("missing cline")
+	}
+	if !strings.Contains(cl.Snippet, "OpenAI Compatible") {
+		t.Fatalf("cline: %s", cl.Snippet)
 	}
 }
 

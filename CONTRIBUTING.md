@@ -4,7 +4,7 @@ Public repo: https://github.com/ks1686/peaproxy
 
 ## Scope right now
 
-Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters, live catalog, Claude SSE, vision Showcase, multi-account failover, persisted usage. OAuth adapters (`anthropic_oauth`, `openai_oauth`) remain stubs. Do not land reverse-engineered login flows or harvested client secrets.
+Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters, hosted OpenAI-compat presets (LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face), live catalog, Claude SSE, vision Showcase, multi-account failover, persisted usage. OAuth adapters remain stubs — official API keys only ([docs/OAUTH.md](docs/OAUTH.md)). Do not land reverse-engineered login flows or harvested client secrets.
 
 ## Dev loop
 

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -48,18 +49,20 @@ func New(opts Options) *Server {
 	mux.HandleFunc("GET /v0/catalog", s.handleCatalogAPI)
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/messages", s.handleClaudeMessages)
-	mux.HandleFunc("GET /admin/health", s.handleHealth)
-	mux.HandleFunc("GET /admin/accounts", s.handleAccounts)
-	mux.HandleFunc("POST /admin/accounts", s.handleAddAccount)
-	mux.HandleFunc("DELETE /admin/accounts/{id}", s.handleDeleteAccount)
-	mux.HandleFunc("GET /admin/catalog", s.handleAdminCatalog)
-	mux.HandleFunc("POST /admin/catalog/refresh", s.handleRefresh)
-	mux.HandleFunc("POST /admin/hide", s.handleHide)
-	mux.HandleFunc("POST /admin/showcase", s.handleShowcase)
-	mux.HandleFunc("GET /admin/usage", s.handleUsage)
-	mux.HandleFunc("GET /admin/clients", s.handleClients)
-	mux.HandleFunc("GET /admin/settings", s.handleSettings)
-	mux.HandleFunc("POST /admin/settings", s.handleSettingsPost)
+	admin := func(h http.HandlerFunc) http.HandlerFunc { return s.requireAdmin(h) }
+	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
+	mux.HandleFunc("GET /admin/presets", admin(s.handlePresets))
+	mux.HandleFunc("GET /admin/accounts", admin(s.handleAccounts))
+	mux.HandleFunc("POST /admin/accounts", admin(s.handleAddAccount))
+	mux.HandleFunc("DELETE /admin/accounts/{id}", admin(s.handleDeleteAccount))
+	mux.HandleFunc("GET /admin/catalog", admin(s.handleAdminCatalog))
+	mux.HandleFunc("POST /admin/catalog/refresh", admin(s.handleRefresh))
+	mux.HandleFunc("POST /admin/hide", admin(s.handleHide))
+	mux.HandleFunc("POST /admin/showcase", admin(s.handleShowcase))
+	mux.HandleFunc("GET /admin/usage", admin(s.handleUsage))
+	mux.HandleFunc("GET /admin/clients", admin(s.handleClients))
+	mux.HandleFunc("GET /admin/settings", admin(s.handleSettings))
+	mux.HandleFunc("POST /admin/settings", admin(s.handleSettingsPost))
 	uiFS, err := fs.Sub(ui.FS, "web")
 	if err != nil {
 		log.Printf("ui embed: %v", err)
@@ -67,7 +70,7 @@ func New(opts Options) *Server {
 	}
 	mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(uiFS))))
 	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.HandleFunc("GET /healthz", s.handleHealth)
+	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	addr := "127.0.0.1:8317"
 	if s.gw != nil {
 		addr = s.gw.Config().Addr()
@@ -199,18 +202,41 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		usagePath = s.gw.Usage.Path()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     "ok",
-		"version":    version.Version,
-		"bind":       cfg.Bind,
-		"port":       cfg.Port,
-		"oauth":      "not implemented",
-		"config":     s.gw.ConfigPath(),
-		"usageFile":  usagePath,
-		"requestLog": cfg.RequestLog,
-		"models":     len(s.gw.Models()),
-		"adapters":   adapters.Names(),
-		"cooldowns":  s.gw.Cooldowns(),
+		"status":             "ok",
+		"version":            version.Version,
+		"bind":               cfg.Bind,
+		"port":               cfg.Port,
+		"oauth":              "not implemented",
+		"config":             s.gw.ConfigPath(),
+		"usageFile":          usagePath,
+		"requestLog":         cfg.RequestLog,
+		"models":             len(s.gw.Models()),
+		"adapters":           adapters.Names(),
+		"cooldowns":          s.gw.Cooldowns(),
+		"allowNonLoopback":   cfg.AllowNonLoopback,
+		"lan":                cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
+		"adminTokenRequired": s.adminRequired(),
 	})
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	out := map[string]any{"status": "ok", "version": version.Version}
+	if s.gw != nil {
+		cfg := s.gw.Config()
+		lan := cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind)
+		out["bind"] = cfg.Bind
+		out["port"] = cfg.Port
+		out["lan"] = lan
+		out["adminTokenRequired"] = s.adminRequired()
+		out["lanWarning"] = lan
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	writeJSON(w, http.StatusOK, map[string]any{"presets": adapters.AccountPresets()})
 }
 
 func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +399,8 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"configPath":       s.gw.ConfigPath(),
 		"listingOnlyHide":  !cfg.Hide.BlockRouting,
 		"requestLog":       cfg.RequestLog,
+		"lan":              cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
+		"lanWarning":       cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
 	})
 }
 
@@ -391,6 +419,35 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.handleSettings(w, r)
+}
+
+func (s *Server) adminRequired() bool {
+	if s.gw == nil {
+		return false
+	}
+	cfg := s.gw.Config()
+	return cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind)
+}
+
+func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.adminRequired() {
+			next(w, r)
+			return
+		}
+		token := s.gw.Config().AdminToken
+		got := r.Header.Get("X-Admin-Token")
+		if got == "" {
+			if a := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(a), "bearer ") {
+				got = strings.TrimSpace(a[7:])
+			}
+		}
+		if token == "" || got != token {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "admin token required (X-Admin-Token)"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) record(account, model, proto string, stream bool, status int, err error, preview string) {
