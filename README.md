@@ -41,11 +41,30 @@ go run ./cmd/peaproxy serve   # from a clone
 Open http://127.0.0.1:8317/
 
 ![Accounts](docs/screenshots/accounts.png)
+
+First-run **Accounts** — local / API-key onboarding CTAs first. Subscription OAuth is last-resort (**ToS/ban risk**; authors are not liable).
+
 ![Catalog](docs/screenshots/catalog.png)
+
+**Catalog** — live `ListModels` with pin/rename overlays. `image_out` is a modality tag on the row (here `gpt-image-1`).
+
 ![Showcase](docs/screenshots/showcase.png)
+
+**Showcase** — `image_out` one-click generate via `POST /v1/images/generations` (never faked as chat). The lime square is a throwaway mock upstream, not a photoreal generator.
+
+![Request log](docs/screenshots/requests.png)
+
+**Request log** — opt-in redacted inspector (`requestLog: true` or the Settings / Request log toggle).
+
+![Settings](docs/screenshots/settings.png)
+
+**Settings** — loopback bind, secret backend, request-log toggle, catalog overlay counts. Tokens and API keys are not shown.
+
 ![Health](docs/screenshots/health.png)
 
-Screenshots are from an earlier UI build; Settings, Request log, and first-run Accounts CTAs exist on main even if the images lag.
+**Health** — adapter `ListModels` status and cooldown overlay.
+
+Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/capture-readme-screenshots.mjs`). No API keys or OAuth tokens appear in the images.
 
 ## Feature matrix (v0.2.8)
 
