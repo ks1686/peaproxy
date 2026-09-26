@@ -1,42 +1,46 @@
-# Harness presets (stub)
+# Harness presets
 
-`peaproxy clients` prints copy-ready snippets. **None of these are verified against a live gateway yet.** `peaproxy clients verify <name>` is an explicit no-op until the spike.
+`peaproxy clients show <name>` prints copy-ready snippets. `peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running).
 
 Default gateway: `http://127.0.0.1:8317`
 
-| Client | Path | Notes |
-|---|---|---|
-| Cursor | `/v1` OpenAI-compat | Set OpenAI Base URL. Tool-call wire bugs in other proxies (#411-class) need golden tests. |
-| Claude Code | Anthropic `/v1/messages` | Endpoint is **stubbed**. Do not expect chat. |
-| OpenCode | `/v1` OpenAI-compat | Provider block in `opencode.json`. |
-| Pi | Anthropic-messages **or** OpenAI | **Do not apply Claude-Code cloak defaults to Pi** (competitor #6120). Thinking injection must be a profile, not a global rewrite (#509). |
-| Codex CLI / app | `/v1` + later Responses | Responses vs Messages quirks; image_gen tool conflicts. Not implemented. |
-| Continue / Cline | `/v1` OpenAI-compat | Generic template. |
+**OpenCode and Claude Code do not share the same Anthropic base URL.** Claude Code typically wants `ANTHROPIC_BASE_URL` *without* `/v1` (it appends `/v1/messages`). OpenCode's Anthropic provider often wants `baseURL` *including* `/v1` ([anomalyco/opencode#35005](https://github.com/anomalyco/opencode/issues/35005)).
 
-## Cursor (OpenAI-compat)
+| Client | Wire | Base URL | Gotchas |
+|---|---|---|---|
+| Cursor | OpenAI chat completions | `http://127.0.0.1:8317/v1` | Override OpenAI Base URL |
+| Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | Cloak/thinking must stay opt-in per profile |
+| OpenCode | OpenAI-compat **and** Anthropic | both use `.../v1` | Separate snippet from Claude Code |
+| Pi | Anthropic **or** OpenAI | see snippet | Do not apply Claude-Code cloak defaults |
+| Codex | OpenAI chat completions | `.../v1` | Responses API still TODO |
+| Continue | OpenAI-compat | `.../v1` | |
+
+## Cursor
 
 ```
 OpenAI Base URL: http://127.0.0.1:8317/v1
 API Key: peaproxy
 ```
 
-Loopback does not require a real key; LAN bind will.
-
-## Claude Code
+## Claude Code (no /v1)
 
 ```
-ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-ANTHROPIC_API_KEY=peaproxy
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_API_KEY=peaproxy
 ```
 
-## OpenCode
+## OpenCode (includes /v1)
 
 ```json
 {
   "provider": {
-    "peaproxy": {
+    "peaproxy-openai": {
       "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1" }
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
+    },
+    "peaproxy-anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
     }
   }
 }
@@ -44,21 +48,16 @@ ANTHROPIC_API_KEY=peaproxy
 
 ## Pi
 
-Use the Anthropic-messages path **or** the OpenAI path. Cloak / `clear_thinking` rewrites belong in a Claude Code profile only. Document the profile in code when the translator lands; until then the preset only prints URLs.
-
-## Codex
-
 ```
+ANTHROPIC_BASE_URL=http://127.0.0.1:8317
 OPENAI_BASE_URL=http://127.0.0.1:8317/v1
-OPENAI_API_KEY=peaproxy
 ```
 
-Responses API is a later wire. Do not claim Codex works.
+Do not inject Claude-Code cloak / `clear_thinking` for Pi.
 
-## Verify (TODO)
+## Verify
 
 ```
+peaproxy serve
 peaproxy clients verify cursor
 ```
-
-Intended smoke: `GET /v1/models` returns at least one exposed id; a tiny chat round-trip if an adapter is healthy. Not implemented in the scaffold.

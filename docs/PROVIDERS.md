@@ -1,65 +1,51 @@
 # Providers
 
-Live `ListModels` is the source of truth. This page is a **tier map**, not an allowlist of model IDs. When a provider adds a model, PeaProxy should show it without a code change.
+Live `ListModels` is the source of truth. This page is a **tier map**, not an allowlist of model IDs.
 
 Adapters in this repo today:
 
 | Adapter | Status | Typical auth | Default |
 |---|---|---|---|
-| `ollama` | List/Chat HTTP client (needs a running Ollama) | none | `http://127.0.0.1:11434/v1` |
-| `openai_compat` | Generic base URL + optional key | none / API key | required `baseURL` |
+| `ollama` | List + chat + stream (`/v1` with `/api/tags` fallback) | none | `http://127.0.0.1:11434/v1` |
+| `openai_compat` | Generic base URL + optional key, stream + non-stream | none / API key | required `baseURL` |
+| `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
 | `anthropic_oauth` | **Stub** — `ErrNotImplemented` | OAuth (TODO) | — |
 | `openai_oauth` | **Stub** — `ErrNotImplemented` | OAuth (TODO) | — |
 
 ## Paid / subscription
 
-### P0 OAuth (maximize — not in this scaffold)
+**P0 OAuth (stubs only):** Anthropic Claude, OpenAI ChatGPT/Codex, later Gemini/Grok/Kimi/Qwen.
 
-| Provider | Notes |
-|---|---|
-| Anthropic Claude | Subscription OAuth stub: `anthropic_oauth` |
-| OpenAI ChatGPT / Codex | Subscription OAuth stub: `openai_oauth` |
-| Google Gemini | (+ Antigravity if distinct) — no adapter yet |
-| xAI Grok | no adapter yet |
-| Moonshot Kimi | no adapter yet |
-| Qwen consumer OAuth | no adapter yet |
+**P0 keys:** Anthropic/OpenAI/Google AI Studio/xAI/Z.AI/OpenRouter via `openai_compat` (or native Anthropic later).
 
-### P0 API keys
-
-Anthropic, OpenAI, Google AI Studio, xAI, Z.AI, OpenRouter, any OpenAI-compat `baseURL` via `openai_compat`.
-
-### P1+
-
-Cline, OpenCode Go subscription, GitHub Copilot, Factory/Amp — as adapters prove out.
+Do **not** advertise Claude Free OAuth (CPA #6016).
 
 ## Free / open (first-class)
 
 | Provider | How | Auth | Catalog tier |
 |---|---|---|---|
-| Ollama | OpenAI-compat `localhost:11434` | none | `local` |
-| LM Studio | OpenAI-compat local server (`:1234/v1`) | none / optional | `local` |
-| llama.cpp / vLLM server | OpenAI-compat | none | `local` |
-| OpenRouter free models | API key; tag `:free` / `pricing=free` | key | `free` |
-| GitHub Models | GitHub token | token | `free` |
-| Hugging Face Inference / router | token | token | `free` |
-| Google AI Studio | API key | key | `free` / `freemium` (quota) |
-| Groq and other freemium | key | key | `freemium` |
-| Cerebras | key | key | `freemium` |
-| NVIDIA NIM free | key | key | `free` |
-| Ollama Cloud free plan | account / key | varies | `free` |
-| Cloudflare Workers AI | token where applicable | token | `free` |
-| OpenCode free routes | per their docs | varies | named preset later |
+| Ollama | `localhost:11434/v1` | none | `local` |
+| LM Studio | `:1234/v1` | none / optional | `local` |
+| llama.cpp / vLLM | user `baseURL` | none | `local` |
+| OpenRouter `:free` | `https://openrouter.ai/api/v1` | key | `free` (ids ending `:free`) |
+| **OpenCode Zen free** | `https://opencode.ai/zen/v1` | official key from [opencode.ai](https://opencode.ai/docs/zen/); community empty Bearer + `x-session-id` is ToS-fragile | `free` for `-free` / named free ids |
+| Hugging Face Inference | HF router OpenAI-compat | token | `freemium` |
+| Google AI Studio | Gemini API / OpenAI-compat if offered | free key | `freemium` |
+| Groq / Cerebras / NIM / Workers AI | OpenAI-compat | key | `freemium` |
+| Ollama Cloud | hosted OpenAI-compat | account / key | `freemium` |
+
+**GitHub Models is retired (2026-07-30).** Do not ship it. Migrate narrative: Azure AI Foundry (paid) or Copilot OAuth (separate, later).
+
+### OpenCode Zen privacy
+
+Several **free** Zen models may use prompts for training (NVIDIA Nemotron free, Big Pickle, MiMo free, Muse contributor free). PeaProxy shows a privacy note on those catalog rows. Prefer an official API key; document ToS yourself.
 
 ## Catalog UX
 
 Filters: **All | Free | Paid | Local | Subscription OAuth**.
 
-- Hide provider (dropped from `/v1/models` and UI pickers).
-- Hide model (per-id).
-- Expose-to-clients subset (coding tools can see less than PeaProxy knows).
+- Hide provider / hide model: omitted from `GET /v1/models` **only**. POST routing still works unless `hide.blockRouting: true` (CPA #5995 / #5349).
+- Rich metadata: `GET /v0/catalog` and `GET /admin/catalog` (tier, modalities, privacy).
+- Vanilla `/v1/models` stays OpenAI-minimal (`id`, `object`, `owned_by`).
 
-`FilterFree` includes `free` **and** `freemium`. Paid is subscription/key hosted. Local is process-on-machine.
-
-## ToS
-
-Using a local proxy with **consumer subscription OAuth** may violate a provider’s terms. PeaProxy will keep that warning in the README. Official OAuth (user-consented, no harvested secrets) only — no reverse-engineered private clients in-tree until a spike explicitly decides otherwise.
+`FilterFree` includes `free` **and** `freemium`.

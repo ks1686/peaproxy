@@ -15,14 +15,14 @@ func sampleModels() []Model {
 }
 
 func TestFilterAllKeepsEveryModel(t *testing.T) {
-	got := Apply(sampleModels(), Query{Filter: FilterAll})
+	got := List(sampleModels(), Query{Filter: FilterAll})
 	if len(got) != 5 {
 		t.Fatalf("FilterAll: got %d models, want 5", len(got))
 	}
 }
 
 func TestFilterFreeIncludesFreeAndFreemium(t *testing.T) {
-	got := Apply(sampleModels(), Query{Filter: FilterFree})
+	got := List(sampleModels(), Query{Filter: FilterFree})
 	if len(got) != 2 {
 		t.Fatalf("FilterFree: got %d models, want 2 (free+freemium)", len(got))
 	}
@@ -34,7 +34,7 @@ func TestFilterFreeIncludesFreeAndFreemium(t *testing.T) {
 }
 
 func TestFilterPaidExcludesLocalAndFree(t *testing.T) {
-	got := Apply(sampleModels(), Query{Filter: FilterPaid})
+	got := List(sampleModels(), Query{Filter: FilterPaid})
 	if len(got) != 2 {
 		t.Fatalf("FilterPaid: got %d models, want 2", len(got))
 	}
@@ -46,27 +46,27 @@ func TestFilterPaidExcludesLocalAndFree(t *testing.T) {
 }
 
 func TestFilterLocal(t *testing.T) {
-	got := Apply(sampleModels(), Query{Filter: FilterLocal})
+	got := List(sampleModels(), Query{Filter: FilterLocal})
 	if len(got) != 1 || got[0].ID != "llama3.2" {
 		t.Fatalf("FilterLocal: %#v", got)
 	}
 }
 
 func TestFilterSubscriptionOAuth(t *testing.T) {
-	got := Apply(sampleModels(), Query{Filter: FilterSubscriptionOAuth})
+	got := List(sampleModels(), Query{Filter: FilterSubscriptionOAuth})
 	if len(got) != 1 || got[0].ID != "claude-opus" {
 		t.Fatalf("FilterSubscriptionOAuth: %#v", got)
 	}
 }
 
-func TestHideProviderDropsAllModelsFromProvider(t *testing.T) {
-	got := Apply(sampleModels(), Query{
+func TestHideProviderDropsAllModelsFromProviderListing(t *testing.T) {
+	got := List(sampleModels(), Query{
 		Filter:        FilterAll,
 		HideProviders: []string{"anthropic"},
 	})
 	for _, m := range got {
 		if m.Provider == "anthropic" {
-			t.Fatalf("hidden provider still present: %q", m.ID)
+			t.Fatalf("hidden provider still listed: %q", m.ID)
 		}
 	}
 	if len(got) != 4 {
@@ -74,20 +74,39 @@ func TestHideProviderDropsAllModelsFromProvider(t *testing.T) {
 	}
 }
 
-func TestHideModelDropsMatchingIDs(t *testing.T) {
-	got := Apply(sampleModels(), Query{
+func TestHideDoesNotBlockRouting(t *testing.T) {
+	q := Query{HideProviders: []string{"anthropic"}, HideModels: []string{"gpt-4o"}}
+	m, ok := FindRoutable(sampleModels(), q, "gpt-4o")
+	if !ok || m.AccountID != "oa-key" {
+		t.Fatalf("hidden model must still route: %#v ok=%v", m, ok)
+	}
+	m, ok = FindRoutable(sampleModels(), q, "claude-opus")
+	if !ok || m.AccountID != "anth-oauth" {
+		t.Fatalf("hidden provider must still route: %#v ok=%v", m, ok)
+	}
+}
+
+func TestBlockRoutingHonorsOptIn(t *testing.T) {
+	q := Query{HideModels: []string{"gpt-4o"}, BlockRouting: true}
+	if _, ok := FindRoutable(sampleModels(), q, "gpt-4o"); ok {
+		t.Fatal("blockRouting should refuse hidden models")
+	}
+}
+
+func TestHideModelDropsMatchingIDsFromList(t *testing.T) {
+	got := List(sampleModels(), Query{
 		Filter:     FilterAll,
 		HideModels: []string{"gpt-4o"},
 	})
 	for _, m := range got {
 		if m.ID == "gpt-4o" {
-			t.Fatal("hidden model gpt-4o still present")
+			t.Fatal("hidden model gpt-4o still listed")
 		}
 	}
 }
 
 func TestExposeSubsetIsWhatClientsSee(t *testing.T) {
-	got := Apply(sampleModels(), Query{
+	got := List(sampleModels(), Query{
 		Filter:       FilterAll,
 		ExposeModels: []string{"llama3.2", "claude-opus"},
 		ForClients:   true,
@@ -95,10 +114,13 @@ func TestExposeSubsetIsWhatClientsSee(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expose subset: got %d, want 2", len(got))
 	}
+	if _, ok := FindRoutable(sampleModels(), Query{ExposeModels: []string{"llama3.2"}, ForClients: true}, "claude-opus"); !ok {
+		t.Fatal("unexposed model must still be routable by id")
+	}
 }
 
 func TestExposeEmptyMeansAllNonHidden(t *testing.T) {
-	got := Apply(sampleModels(), Query{
+	got := List(sampleModels(), Query{
 		Filter:     FilterAll,
 		ForClients: true,
 	})
@@ -108,7 +130,7 @@ func TestExposeEmptyMeansAllNonHidden(t *testing.T) {
 }
 
 func TestOpenAIModelsShapeUsesIDOnly(t *testing.T) {
-	exposed := Apply(sampleModels(), Query{Filter: FilterLocal, ForClients: true})
+	exposed := List(sampleModels(), Query{Filter: FilterLocal, ForClients: true})
 	out := ToOpenAIList(exposed)
 	if out.Object != "list" {
 		t.Fatalf("object: %q", out.Object)

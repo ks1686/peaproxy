@@ -1,7 +1,6 @@
 package ollama
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
+	"github.com/ks1686/peaproxy/internal/adapter/openai_compat"
 	"github.com/ks1686/peaproxy/internal/catalog"
 )
 
@@ -19,40 +19,51 @@ const (
 	DefaultBaseURL = "http://127.0.0.1:11434/v1"
 )
 
-// Adapter talks to a local Ollama OpenAI-compatible server.
+// Adapter talks to a local Ollama OpenAI-compatible server, with /api/tags fallback.
 type Adapter struct {
-	id      string
-	baseURL string
-	client  *http.Client
+	inner     adapter.Adapter
+	id        string
+	compatURL string
+	nativeURL string
+	client    *http.Client
 }
 
-// New constructs an Ollama adapter. ListModels hits the live /v1/models (or /api/tags later).
+// New constructs an Ollama adapter.
 func New(opts adapter.Options) (adapter.Adapter, error) {
 	base := opts.BaseURL
 	if base == "" {
 		base = DefaultBaseURL
 	}
+	opts.BaseURL = base
+	opts.Tier = catalog.TierLocal
+	inner, err := openai_compat.New(opts)
+	if err != nil {
+		return nil, err
+	}
+	if named, ok := inner.(*openai_compat.Adapter); ok {
+		named.SetProviderName(Name)
+	}
 	id := opts.ID
 	if id == "" {
 		id = Name
 	}
+	compat := strings.TrimRight(base, "/")
+	native := strings.TrimSuffix(compat, "/v1")
 	return &Adapter{
-		id:      id,
-		baseURL: strings.TrimRight(base, "/"),
-		client:  &http.Client{Timeout: 30 * time.Second},
+		inner:     inner,
+		id:        id,
+		compatURL: compat,
+		nativeURL: native,
+		client:    &http.Client{Timeout: 3 * time.Second},
 	}, nil
 }
 
 func (a *Adapter) ID() string { return a.id }
 
 func (a *Adapter) Capabilities() adapter.Capabilities {
-	return adapter.Capabilities{
-		Chat:       true,
-		Stream:     true,
-		VisionIn:   true,
-		ListModels: true,
-		Local:      true,
-	}
+	c := a.inner.Capabilities()
+	c.Local = true
+	return c
 }
 
 func (a *Adapter) Validate(ctx context.Context) error {
@@ -61,110 +72,73 @@ func (a *Adapter) Validate(ctx context.Context) error {
 }
 
 func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL+"/models", nil)
+	models, err := a.inner.ListModels(ctx)
+	if err == nil && len(models) > 0 {
+		return tagLocal(models, a.id), nil
+	}
+	tags, tagsErr := a.listTags(ctx)
+	if tagsErr == nil {
+		return tags, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return nil, tagsErr
+}
+
+func (a *Adapter) listTags(ctx context.Context) ([]catalog.Model, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.nativeURL+"/api/tags", nil)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ollama list models: %w", err)
+		return nil, fmt.Errorf("ollama /api/tags: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("ollama list models: HTTP %d: %s", resp.StatusCode, truncate(body))
+		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: string(body)}
 	}
-	var list struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+	var parsed struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
 	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, err
 	}
-	out := make([]catalog.Model, 0, len(list.Data))
-	for _, m := range list.Data {
+	out := make([]catalog.Model, 0, len(parsed.Models))
+	for _, m := range parsed.Models {
 		out = append(out, catalog.Model{
-			ID:        m.ID,
+			ID:        m.Name,
 			Provider:  Name,
 			AccountID: a.id,
 			Tier:      catalog.TierLocal,
 			Status:    "ready",
+			Exposed:   true,
+			Routable:  true,
 		})
 	}
 	return out, nil
 }
 
 func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.ChatResponse, error) {
-	raw := req.Raw
-	if len(raw) == 0 {
-		payload := map[string]any{
-			"model":    req.Model,
-			"messages": toOpenAIMessages(req.Messages),
-			"stream":   false,
-		}
-		var err error
-		raw, err = json.Marshal(payload)
-		if err != nil {
-			return adapter.ChatResponse{}, err
-		}
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(raw))
-	if err != nil {
-		return adapter.ChatResponse{}, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
-		return adapter.ChatResponse{}, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return adapter.ChatResponse{}, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return adapter.ChatResponse{}, fmt.Errorf("ollama chat: HTTP %d: %s", resp.StatusCode, truncate(body))
-	}
-	return adapter.ChatResponse{Model: req.Model, Raw: body, Content: extractContent(body)}, nil
+	return a.inner.Chat(ctx, req)
 }
 
 func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.Writer) error {
-	_ = ctx
-	_ = req
-	_ = w
-	return adapter.ErrNotImplemented
+	return a.inner.ChatStream(ctx, req, w)
 }
 
-func toOpenAIMessages(msgs []adapter.Message) []map[string]string {
-	out := make([]map[string]string, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, map[string]string{"role": m.Role, "content": m.Content})
+func tagLocal(models []catalog.Model, account string) []catalog.Model {
+	for i := range models {
+		models[i].Provider = Name
+		models[i].AccountID = account
+		models[i].Tier = catalog.TierLocal
 	}
-	return out
-}
-
-func extractContent(body []byte) string {
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Choices) == 0 {
-		return ""
-	}
-	return parsed.Choices[0].Message.Content
-}
-
-func truncate(b []byte) string {
-	const n = 240
-	if len(b) <= n {
-		return string(b)
-	}
-	return string(b[:n]) + "…"
+	return models
 }

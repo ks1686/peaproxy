@@ -1,4 +1,4 @@
-// Package clients holds copy-ready harness presets. Verify is a spike TODO.
+// Package clients holds copy-ready harness presets.
 package clients
 
 import (
@@ -21,60 +21,67 @@ var presets = map[string]Preset{
 	"cursor": {
 		Name:       "cursor",
 		BaseURL:    "http://127.0.0.1:8317/v1",
-		AuthHeader: "Authorization: Bearer peaproxy (optional on loopback)",
-		Notes:      "OpenAI-compatible. Set OpenAI Base URL in Cursor models.",
+		AuthHeader: "Authorization: Bearer peaproxy",
+		Notes:      "OpenAI-compatible. Settings → Models → Override OpenAI Base URL.",
 		Snippet: `OpenAI Base URL: http://127.0.0.1:8317/v1
 API Key: peaproxy
 `,
-		VerifyTODO: "peaproxy clients verify cursor — GET /v1/models through Cursor's base URL",
+		VerifyTODO: "peaproxy clients verify cursor",
 	},
 	"claude-code": {
 		Name:       "claude-code",
 		BaseURL:    "http://127.0.0.1:8317",
-		AuthHeader: "x-api-key: peaproxy (optional on loopback)",
-		Notes:      "Anthropic Messages API. /v1/messages is stubbed until the spike.",
-		Snippet: `ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-ANTHROPIC_API_KEY=peaproxy
+		AuthHeader: "x-api-key: peaproxy",
+		Notes:      "Anthropic Messages. Claude Code appends /v1/messages — do NOT put /v1 on ANTHROPIC_BASE_URL (differs from OpenCode).",
+		Snippet: `# Claude Code — base URL WITHOUT /v1
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_API_KEY=peaproxy
 `,
-		VerifyTODO: "POST /v1/messages smoke once Claude adapter is live",
+		VerifyTODO: "peaproxy clients verify claude-code",
 	},
 	"opencode": {
 		Name:       "opencode",
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
-		Notes:      "OpenAI-compat provider block in opencode.json.",
+		Notes:      "OpenCode Anthropic provider wants baseURL INCLUDING /v1. Do not reuse the Claude Code env as-is.",
 		Snippet: `{
   "provider": {
-    "peaproxy": {
+    "peaproxy-openai": {
       "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1" }
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
+    },
+    "peaproxy-anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
     }
   }
 }
 `,
-		VerifyTODO: "opencode model list against peaproxy",
+		VerifyTODO: "peaproxy clients verify opencode",
 	},
 	"pi": {
 		Name:       "pi",
 		BaseURL:    "http://127.0.0.1:8317",
 		AuthHeader: "depends on anthropic-messages vs OpenAI path",
-		Notes:      "Do not apply Claude-Code cloak defaults to Pi. See docs/HARNESS.md.",
-		Snippet: `# Anthropic-messages path
+		Notes:      "Do not apply Claude-Code cloak defaults to Pi.",
+		Snippet: `# Pi — Anthropic-messages path (no cloak)
 ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-# OpenAI path
+ANTHROPIC_API_KEY=peaproxy
+# Pi — OpenAI path
 OPENAI_BASE_URL=http://127.0.0.1:8317/v1
+OPENAI_API_KEY=peaproxy
 `,
-		VerifyTODO: "golden test: Pi without thinking/cloak injection",
+		VerifyTODO: "peaproxy clients verify pi",
 	},
 	"codex": {
 		Name:       "codex",
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
-		Notes:      "Responses API vs Chat Completions — wire notes in docs/HARNESS.md. Not implemented.",
+		Notes:      "Chat Completions work now. Responses API still TODO.",
 		Snippet: `OPENAI_BASE_URL=http://127.0.0.1:8317/v1
 OPENAI_API_KEY=peaproxy
 `,
-		VerifyTODO: "Codex Responses endpoint once adapter exists",
+		VerifyTODO: "peaproxy clients verify codex",
 	},
 	"continue": {
 		Name:       "continue",
@@ -89,7 +96,7 @@ OPENAI_API_KEY=peaproxy
   }]
 }
 `,
-		VerifyTODO: "continue model dropdown lists live catalog",
+		VerifyTODO: "peaproxy clients verify continue",
 	},
 }
 

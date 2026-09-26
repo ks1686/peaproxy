@@ -2,12 +2,18 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"time"
 
+	"github.com/ks1686/peaproxy/internal/adapters"
+	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/clients"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/gateway"
 	"github.com/spf13/cobra"
 )
 
@@ -28,11 +34,13 @@ Examples:
   peaproxy serve --bind 127.0.0.1 --port 8317
   peaproxy models list --filter free
   peaproxy clients show cursor
+  peaproxy clients show opencode
+  peaproxy clients show claude-code
 `,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
-	root.PersistentFlags().StringVar(&configPath, "config", "", "Path to peaproxy.yaml (optional)")
+	root.PersistentFlags().StringVar(&configPath, "config", "", "Path to peaproxy.yaml (default: user config dir)")
 
 	root.AddCommand(serveCmd(&configPath))
 	root.AddCommand(authCmd())
@@ -44,11 +52,8 @@ Examples:
 	return root
 }
 
-func loadCfg(path string) (config.Config, error) {
-	if path == "" {
-		return config.Default(), nil
-	}
-	return config.Load(path)
+func loadCfg(path string) (config.Config, string, error) {
+	return config.LoadOrDefault(path)
 }
 
 func serveCmd(configPath *string) *cobra.Command {
@@ -67,7 +72,7 @@ Examples:
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, err := loadCfg(*configPath)
+			cfg, path, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
@@ -80,7 +85,7 @@ Examples:
 			if err := cfg.Validate(); err != nil {
 				return err
 			}
-			return runServe(cmd.OutOrStdout(), cfg)
+			return runServe(cmd.OutOrStdout(), cfg, path)
 		},
 	}
 	cmd.Flags().StringVar(&bind, "bind", config.DefaultBind, "Listen address (loopback default)")
@@ -106,7 +111,7 @@ func authCmd() *cobra.Command {
 			if provider == "" {
 				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  known stubs: anthropic, openai")
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "auth login: provider=%s status=not-implemented\nTODO: spike OAuth without reverse-engineering private clients\n", provider)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "auth login: provider=%s status=not-implemented\nTODO: official OAuth only — no reverse-engineered clients\n", provider)
 			return nil
 		},
 	}
@@ -126,10 +131,10 @@ func accountsCmd(configPath *string) *cobra.Command {
 	}
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "Print account stubs from config",
+		Short: "Print accounts from config",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, err := loadCfg(*configPath)
+			cfg, _, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
@@ -138,7 +143,7 @@ func accountsCmd(configPath *string) *cobra.Command {
 				return nil
 			}
 			for _, p := range cfg.Providers {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\tadapter=%s\ttier=%s\n", p.ID, p.Adapter, p.Tier)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\tadapter=%s\ttier=%s\tbase=%s\n", p.ID, p.Adapter, p.Tier, p.BaseURL)
 			}
 			return nil
 		},
@@ -150,7 +155,7 @@ func accountsCmd(configPath *string) *cobra.Command {
 func modelsCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "models",
-		Short: "Inspect the live catalog (stub list until serve is up)",
+		Short: "Live catalog from configured adapters",
 		Long: `Examples:
   peaproxy models list
   peaproxy models list --filter free
@@ -160,15 +165,24 @@ func modelsCmd(configPath *string) *cobra.Command {
 	var filter string
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List models after hide/filter (empty until adapters are queried)",
+		Short: "List models after listing-only hide/filter",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, err := loadCfg(*configPath)
+			cfg, path, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "filter=%s hide.providers=%v hide.models=%v\n", filter, cfg.Hide.Providers, cfg.Hide.Models)
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "models: (none in CLI stub — start peaproxy serve and GET /v1/models)")
+			gw, err := gateway.New(cfg, path, adapters.DefaultRegistry())
+			if err != nil {
+				return err
+			}
+			gw.Refresh(context.Background())
+			listed := gw.Listed(catalog.Filter(filter))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "filter=%s hide.providers=%v hide.models=%v listed=%d (hidden still routable)\n",
+				filter, cfg.Hide.Providers, cfg.Hide.Models, len(listed))
+			for _, m := range listed {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\ttier=%s\tprovider=%s\taccount=%s\n", m.ID, m.Tier, m.Provider, m.AccountID)
+			}
 			return nil
 		},
 	}
@@ -180,17 +194,17 @@ func modelsCmd(configPath *string) *cobra.Command {
 func statusCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
-		Short: "Show bind address and scaffold phase",
+		Short: "Show bind address and phase",
 		Long: `Examples:
   peaproxy status
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, err := loadCfg(*configPath)
+			cfg, path, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: scaffold\nlisten: %s\noauth: not implemented\nui: http://%s/\n", cfg.Addr(), cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: v0.1\nlisten: %s\nconfig: %s\noauth: not implemented\nui: http://%s/\n", cfg.Addr(), path, cfg.Addr())
 			return nil
 		},
 	}
@@ -208,27 +222,28 @@ func configCmd(configPath *string) *cobra.Command {
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "path",
-		Short: "Print the config path flag (empty means defaults)",
+		Short: "Print the resolved config path",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			p := *configPath
-			if p == "" {
-				p = "(defaults; pass --config)"
+			_, path, err := loadCfg(*configPath)
+			if err != nil {
+				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), p)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), path)
 			return nil
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "show",
-		Short: "Print effective config as YAML-ish text",
+		Short: "Print effective config summary",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, err := loadCfg(*configPath)
+			cfg, path, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "schemaVersion: %d\nbind: %s\nport: %d\nproviders: %d\n", cfg.SchemaVersion, cfg.Bind, cfg.Port, len(cfg.Providers))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nproviders: %d\nhide.blockRouting: %v\n",
+				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, len(cfg.Providers), cfg.Hide.BlockRouting)
 			return nil
 		},
 	})
@@ -237,7 +252,7 @@ func configCmd(configPath *string) *cobra.Command {
 		Short: "Exit non-zero if config is invalid",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, err := loadCfg(*configPath)
+			cfg, _, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
@@ -258,6 +273,8 @@ func clientsCmd() *cobra.Command {
 		Long: `Examples:
   peaproxy clients list
   peaproxy clients show cursor
+  peaproxy clients show opencode
+  peaproxy clients show claude-code
   peaproxy clients verify cursor
 `,
 	}
@@ -287,14 +304,33 @@ func clientsCmd() *cobra.Command {
 	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "verify [name]",
-		Short: "Smoke-check a harness preset (stub)",
+		Short: "GET /v1/models on the local gateway",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, ok := clients.Get(args[0])
 			if !ok {
 				return fmt.Errorf("unknown client %q\n  peaproxy clients list", args[0])
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "verify %s: not implemented\n%s\n", p.Name, p.VerifyTODO)
+			url := "http://127.0.0.1:8317/v1/models"
+			if p.Name == "claude-code" {
+				url = "http://127.0.0.1:8317/v1/models"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return fmt.Errorf("verify %s: is peaproxy serve running?\n  %v", p.Name, err)
+			}
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "verify %s: HTTP %d\n%s\n", p.Name, resp.StatusCode, body)
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("unexpected status %d", resp.StatusCode)
+			}
 			return nil
 		},
 	})

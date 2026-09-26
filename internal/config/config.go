@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,9 +30,11 @@ type Config struct {
 }
 
 // HideList drops providers or model IDs from /v1/models and UI pickers.
+// Routing is unchanged unless BlockRouting is true (CPA #5995).
 type HideList struct {
-	Providers []string `yaml:"providers"`
-	Models    []string `yaml:"models"`
+	Providers    []string `yaml:"providers"`
+	Models       []string `yaml:"models"`
+	BlockRouting bool     `yaml:"blockRouting,omitempty"`
 }
 
 // ExposeList is the optional subset coding tools see. Empty = all non-hidden.
@@ -45,13 +48,28 @@ type Provider struct {
 	Adapter string `yaml:"adapter"`
 	Tier    string `yaml:"tier"`
 	BaseURL string `yaml:"baseURL,omitempty"`
-	// APIKeyEnv names an env var; the value is never written back to YAML.
+	// APIKeyEnv names an env var; preferred over apiKey when set.
 	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
+	// APIKey may be stored locally (file mode 0600). Prefer APIKeyEnv.
+	APIKey string `yaml:"apiKey,omitempty"`
+	// SessionID is used by OpenCode Zen (x-session-id). Fragile vs API key.
+	SessionID string `yaml:"sessionId,omitempty"`
 	// Label is a user-facing tier override (free|freemium|paid|local).
-	Label string `yaml:"label,omitempty"`
+	Label    string `yaml:"label,omitempty"`
+	Disabled bool   `yaml:"disabled,omitempty"`
 }
 
-// Default returns a loopback-only skeleton config.
+// ResolveKey returns the API key from env or the inline field.
+func (p Provider) ResolveKey() string {
+	if p.APIKeyEnv != "" {
+		if v := os.Getenv(p.APIKeyEnv); v != "" {
+			return v
+		}
+	}
+	return p.APIKey
+}
+
+// Default returns a loopback-only skeleton config with local Ollama.
 func Default() Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
@@ -66,6 +84,30 @@ func Default() Config {
 			},
 		},
 	}
+}
+
+// DefaultPath is ~/.config/peaproxy/config.yaml (or %AppData% on Windows).
+func DefaultPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "peaproxy.yaml"
+	}
+	return filepath.Join(dir, "peaproxy", "config.yaml")
+}
+
+// LoadOrDefault loads path, or DefaultPath if empty. Missing files yield Default().
+func LoadOrDefault(path string) (Config, string, error) {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return Default(), path, nil
+		}
+		return Config{}, path, err
+	}
+	cfg, err := Load(path)
+	return cfg, path, err
 }
 
 // Load reads YAML from path.
@@ -91,6 +133,21 @@ func Load(path string) (Config, error) {
 	return cfg, cfg.Validate()
 }
 
+// Save writes YAML with mode 0600.
+func Save(path string, cfg Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
+		return err
+	}
+	b, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, b, 0o600)
+}
+
 // Validate enforces loopback-by-default security.
 func (c Config) Validate() error {
 	if c.SchemaVersion != SchemaVersion {
@@ -105,6 +162,16 @@ func (c Config) Validate() error {
 		if !c.AllowNonLoopback || c.AdminToken == "" {
 			return fmt.Errorf("non-loopback bind %q requires allowNonLoopback: true and a non-empty adminToken", c.Bind)
 		}
+	}
+	ids := map[string]struct{}{}
+	for _, p := range c.Providers {
+		if p.ID == "" {
+			return fmt.Errorf("provider missing id")
+		}
+		if _, ok := ids[p.ID]; ok {
+			return fmt.Errorf("duplicate provider id %q", p.ID)
+		}
+		ids[p.ID] = struct{}{}
 	}
 	return nil
 }

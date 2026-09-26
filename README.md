@@ -2,11 +2,11 @@
 
 Local multi-provider AI gateway in Go: **subscription OAuth + API keys + free/local providers**, first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
 
-Status: **v0 scaffold**. Adapters compile and the HTTP surface exists. **OAuth login is not implemented.** Do not treat this tree as a working Claude/ChatGPT subscription proxy yet.
+Status: **usable v0.1 core**. Add Ollama or an OpenRouter key, see live models, chat from Showcase or `curl`. **OAuth login is not implemented.**
 
 ## One-liner
 
-Maximize whatever you already pay for (OAuth where we can do it cleanly), fall back to keys, and treat Ollama / LM Studio / OpenRouter-free as first-class — then expose one OpenAI-shaped and one Claude-shaped local endpoint that coding tools already speak.
+Maximize whatever you already pay for (OAuth where we can do it cleanly), fall back to keys, and treat Ollama / LM Studio / OpenRouter-free / OpenCode Zen as first-class — then expose one OpenAI-shaped and one Claude-shaped local endpoint that coding tools already speak.
 
 ## Why this exists
 
@@ -16,59 +16,62 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 2. **Failover that works** — quota/429 → next credential without hand-disabling accounts.
 3. **Harness fidelity** — Pi cloak defaults, thinking injection, Cursor tools, Codex quirks.
 4. **Secure localhost default** — `127.0.0.1:8317`, not `*:8317`.
-5. **UI without a macOS tray** — CLI + browser only (no TCC/menu-bar fight).
-6. **Credential reliability** — refresh must not wipe the account list.
-7. **Onboarding** — copy-paste presets for Cursor, OpenCode, Pi, Claude Code, Codex.
-8. **Free + custom providers** — first-class, with Free/Paid/Local catalog filters.
-9. **Multimodal** — vision in v1; image-out as a live capability flag.
+5. **UI without a macOS tray** — CLI + browser only.
+6. **Catalog hide ≠ routing** — listing-only exclusion (CPA #5995 still open).
+7. **Prompt-cache-safe JSON** — never reshuffle keys with Go maps (VibeProxy #292).
+8. **Free + custom providers** — including OpenCode Zen (CPA declined #6018).
+9. **Built-in usage / showcase** — CPA removed usage in v6.10+.
 
-PeaProxy is built around those wins. Details: [docs/PLAN.md](docs/PLAN.md), [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md).
+Details: [docs/PLAN.md](docs/PLAN.md), [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md).
 
-## Quick start (scaffold)
+## Quick start
 
 ```bash
-go run ./cmd/peaproxy --help
-go run ./cmd/peaproxy status
 go run ./cmd/peaproxy serve
 ```
 
-Then open http://127.0.0.1:8317/
+Open http://127.0.0.1:8317/ → **Accounts** → add Ollama (or OpenRouter with a key) → **Catalog** → **Showcase**.
+
+```bash
+curl -s http://127.0.0.1:8317/v1/models
+curl -s http://127.0.0.1:8317/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}'
+peaproxy clients show cursor
+peaproxy clients show opencode   # includes /v1
+peaproxy clients show claude-code  # does NOT include /v1
+```
+
+Config defaults to `~/.config/peaproxy/config.yaml` (created when you add accounts). Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml).
 
 | Command | Purpose |
 |---|---|
-| `serve` | Listen (default `127.0.0.1:8317`) + localhost UI |
+| `serve` | Listen `127.0.0.1:8317` + UI |
 | `auth` | OAuth login **stub** |
 | `accounts` | Configured provider accounts |
-| `models` | Catalog list stub (`GET /v1/models` is the real path) |
-| `status` | Bind / phase |
+| `models` | Live catalog (`--filter free\|paid\|local`) |
+| `status` | Bind / config path |
 | `config` | `path` / `show` / `validate` |
 | `clients` | Harness presets (`list` / `show` / `verify`) |
 
-```bash
-peaproxy clients show cursor
-peaproxy models list --filter free
-```
-
-Copy [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml) and pass `--config`.
-
-## HTTP (placeholders)
+## HTTP
 
 | Path | Status |
 |---|---|
-| `GET /v1/models` | Live-catalog **shape** + hide/filter (in-memory / config) |
-| `POST /v1/chat/completions` | Routed to adapters when configured; otherwise stub |
-| `POST /v1/messages` | Claude-compatible **stub** |
-| `GET /` | Localhost UI (Accounts, Catalog, Showcase, Clients, Health, Settings) |
-| `GET /admin/health` | Health JSON |
+| `GET /v1/models` | Live list; hide/expose affect **listing only** |
+| `GET /v0/catalog` | Rich catalog (tier, privacy, hidden/routable flags) |
+| `POST /v1/chat/completions` | Stream + non-stream via adapters |
+| `POST /v1/messages` | Claude → OpenAI translation for ollama/openai_compat |
+| `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Settings |
+| `GET /admin/usage` | In-memory usage log |
 
 ## Security
 
 - Default bind is **loopback**. Binding `0.0.0.0` requires `allowNonLoopback: true` **and** a non-empty `adminToken`.
-- Never log secrets. Request inspector (later) redacts by default.
-- **ToS:** routing subscription OAuth through a local proxy may violate a provider’s terms. You run that risk; PeaProxy will not hide it.
+- Never log secrets.
+- **ToS:** subscription OAuth through a local proxy may violate a provider’s terms. OpenCode Zen **free** models may train on prompts — see catalog privacy notes.
+- **GitHub Models is retired** (2026-07-30) and is not a provider.
 
 ## License
 
 [MIT](LICENSE)
-
-Pea Pod OSS — a pea-pod.me/peaproxy page comes only when this is actually shippable.

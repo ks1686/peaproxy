@@ -4,7 +4,7 @@ Public repo: https://github.com/ks1686/peaproxy
 
 ## Scope right now
 
-This tree is a **v0 scaffold**. OAuth adapters (`anthropic_oauth`, `openai_oauth`) are stubs. Do not land reverse-engineered login flows or harvested client secrets.
+This tree is a **usable v0.1 core**. OAuth adapters (`anthropic_oauth`, `openai_oauth`) are stubs. Do not land reverse-engineered login flows or harvested client secrets.
 
 ## Dev loop
 

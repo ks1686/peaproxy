@@ -8,6 +8,7 @@ package adapter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/ks1686/peaproxy/internal/catalog"
@@ -83,12 +84,26 @@ type Authenticator interface {
 // Factory builds an adapter from config fields.
 type Factory func(opts Options) (Adapter, error)
 
+// HTTPError is an upstream HTTP failure. 429 is treated as retryable by the router.
+type HTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e HTTPError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("upstream HTTP %d", e.Status)
+	}
+	return fmt.Sprintf("upstream HTTP %d: %s", e.Status, e.Body)
+}
+
 // Options is the generic constructor input for stub adapters.
 type Options struct {
-	ID      string
-	BaseURL string
-	APIKey  string
-	Tier    catalog.Tier
+	ID        string
+	BaseURL   string
+	APIKey    string
+	SessionID string
+	Tier      catalog.Tier
 }
 
 // Registry looks up adapter factories by name.

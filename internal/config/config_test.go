@@ -54,6 +54,17 @@ providers:
 	if len(cfg.Providers) != 1 || cfg.Providers[0].Adapter != "ollama" {
 		t.Fatalf("providers: %#v", cfg.Providers)
 	}
+	cfg.Providers[0].APIKey = "sk-test"
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	again, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Providers[0].APIKey != "sk-test" {
+		t.Fatalf("save lost apiKey")
+	}
 }
 
 func TestExampleYAMLLoads(t *testing.T) {

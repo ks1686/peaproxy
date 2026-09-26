@@ -95,6 +95,10 @@ func retryable(err error) bool {
 	if errors.As(err, &re) {
 		return re.Retryable || re.Status == http.StatusTooManyRequests
 	}
+	var he adapter.HTTPError
+	if errors.As(err, &he) {
+		return he.Status == http.StatusTooManyRequests || he.Status == http.StatusServiceUnavailable
+	}
 	return false
 }
 

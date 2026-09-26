@@ -99,7 +99,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 4. OAuth maximize + more free adapters
 5. Releases + pea-pod.me/peaproxy page
 
-**This commit is the scaffold for phase 1, not the spike itself.**
+**This tree implements the phase-1 core (live catalog, ollama/openai_compat/zen, UI, listing-only hide). OAuth remains a stub.**
 
 ## 11. Security
 
@@ -121,6 +121,6 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 
 Local (no key): Ollama (`:11434/v1`), LM Studio (`:1234/v1`), llama.cpp / vLLM OpenAI-compat.
 
-Hosted free / freemium (API key, live `/models`): OpenRouter `:free` models, GitHub Models, Hugging Face router, Groq, Cerebras, Google AI Studio free quota, NVIDIA NIM free, Ollama Cloud free plan, Cloudflare Workers AI where applicable.
+Hosted free / freemium (API key, live `/models`): OpenRouter `:free` models, OpenCode Zen free, Hugging Face router, Groq, Cerebras, Google AI Studio free quota, NVIDIA NIM free, Ollama Cloud free plan, Cloudflare Workers AI where applicable. **GitHub Models retired 2026-07-30 — do not list.**
 
 Generic `openai_compat` adapter covers most with `base_url` + key + tier tag inferred from provider metadata or user label.

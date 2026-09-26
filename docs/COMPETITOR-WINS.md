@@ -61,7 +61,7 @@ Factory Droid model config confusion (#467); OpenCode Go subscription request (#
 
 Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not productized.
 
-**PeaProxy:** first-class free tier (Ollama, LM Studio, llama.cpp, OpenRouter free, HF, GitHub Models, etc.) + free/paid filter + hide.
+**PeaProxy:** first-class free tier (Ollama, LM Studio, llama.cpp, OpenRouter free, OpenCode Zen, HF, …) + free/paid filter + listing-only hide. GitHub Models is retired.
 
 ## Must-have differentiators
 

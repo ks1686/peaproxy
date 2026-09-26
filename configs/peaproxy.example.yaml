@@ -1,20 +1,19 @@
 # PeaProxy example config (schemaVersion 1)
 #
-# Copy to peaproxy.yaml (gitignored). Secrets belong in the OS keychain or
-# environment variables — not in this file.
+# Copy to ~/.config/peaproxy/config.yaml or pass --config.
+# File mode should stay 0600. Prefer apiKeyEnv over inline apiKey.
 
 schemaVersion: 1
 bind: 127.0.0.1
 port: 8317
-# Non-loopback bind (0.0.0.0 / LAN) requires both of these:
 allowNonLoopback: false
-# adminToken: ""
 
 hide:
   providers: []
   models: []
+  # Listing-only by default (CPA #5995). Set true to also refuse POST routing.
+  blockRouting: false
 expose:
-  # Empty = all non-hidden models are visible to /v1/models.
   models: []
 
 providers:
@@ -23,7 +22,6 @@ providers:
     tier: local
     baseURL: http://127.0.0.1:11434/v1
 
-  # Generic OpenAI-compatible (LM Studio, llama.cpp, Groq, OpenRouter, …)
   # - id: lmstudio-local
   #   adapter: openai_compat
   #   tier: local
@@ -35,7 +33,15 @@ providers:
   #   baseURL: https://openrouter.ai/api/v1
   #   apiKeyEnv: OPENROUTER_API_KEY
 
-  # OAuth stubs — not implemented. Do not expect login to work.
+  # OpenCode Zen free (CPA declined #6018). Official key from opencode.ai.
+  # Free models may train on prompts — see docs/PROVIDERS.md.
+  # - id: opencode-zen
+  #   adapter: opencode_zen
+  #   tier: free
+  #   baseURL: https://opencode.ai/zen/v1
+  #   apiKeyEnv: OPENCODE_API_KEY
+
+  # OAuth stubs — not implemented.
   # - id: anthropic-oauth
   #   adapter: anthropic_oauth
   #   tier: paid
