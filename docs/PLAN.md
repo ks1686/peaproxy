@@ -126,7 +126,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 - Showcase for paid (key or OAuth) and free/local
 - `peaproxy serve` one command; first-run config; Settings + onboarding CTAs
 
-**v1.0** is a cut decision, not a new phase: [V1.md](V1.md). Do not treat Qwen OAuth, uTLS, or a tray app as 1.0 blockers. Image-out is a 1.x leftover now shipped.
+**v1.0** is a cut decision, not a new phase: [V1.md](V1.md). Do not treat Qwen OAuth, uTLS, or a tray app as 1.0 blockers. Image-out is a 1.x leftover now shipped. README screenshot refresh is leftover #3.
 
 ## 13. Free-provider expansion
 

@@ -46,6 +46,13 @@ main { flex: 1; }
 }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 label { font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.2rem; }
+label.row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+label.row input[type="checkbox"] { width: auto; margin: 0; }
 input, select, textarea {
   font: inherit;
   background: #0e110c;

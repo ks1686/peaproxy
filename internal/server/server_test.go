@@ -484,6 +484,12 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 			t.Fatalf("app.js missing %s", want)
 		}
 	}
+	css := httptest.NewRequest(http.MethodGet, "/ui/styles.css", nil)
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, css)
+	if !strings.Contains(crr.Body.String(), "label.row") {
+		t.Fatal("styles.css missing label.row (checkbox labels must stay inline)")
+	}
 }
 
 func TestAdminSettingsReportsPathBackendAndRequestLogWithoutSecrets(t *testing.T) {
