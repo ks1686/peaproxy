@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/ks1686/peaproxy/internal/oauth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,6 +62,19 @@ type Provider struct {
 	// Label is a user-facing tier override (free|freemium|paid|local).
 	Label    string `yaml:"label,omitempty"`
 	Disabled bool   `yaml:"disabled,omitempty"`
+	// OAuth holds subscription tokens (file mode 0600). Prefer env/API keys.
+	OAuth *OAuthToken `yaml:"oauth,omitempty"`
+}
+
+// OAuthToken is persisted next to the provider. Never log these fields.
+type OAuthToken struct {
+	AccessToken  string `yaml:"accessToken,omitempty"`
+	RefreshToken string `yaml:"refreshToken,omitempty"`
+	ExpiresAt    string `yaml:"expiresAt,omitempty"`
+	IDToken      string `yaml:"idToken,omitempty"`
+	AccountID    string `yaml:"accountId,omitempty"`
+	Email        string `yaml:"email,omitempty"`
+	PlanType     string `yaml:"planType,omitempty"`
 }
 
 // ResolveKey returns the API key from env or the inline field.
@@ -70,6 +85,45 @@ func (p Provider) ResolveKey() string {
 		}
 	}
 	return p.APIKey
+}
+
+// HasOAuth reports whether subscription tokens are stored for this account.
+func (p Provider) HasOAuth() bool {
+	return p.OAuth != nil && p.OAuth.AccessToken != ""
+}
+
+// Runtime converts persisted YAML tokens into the in-memory shape.
+func (t OAuthToken) Runtime() oauth.Token {
+	tok := oauth.Token{
+		AccessToken:  t.AccessToken,
+		RefreshToken: t.RefreshToken,
+		IDToken:      t.IDToken,
+		AccountID:    t.AccountID,
+		Email:        t.Email,
+		PlanType:     t.PlanType,
+	}
+	if t.ExpiresAt != "" {
+		if ts, err := time.Parse(time.RFC3339, t.ExpiresAt); err == nil {
+			tok.ExpiresAt = ts
+		}
+	}
+	return tok
+}
+
+// OAuthFromRuntime persists an in-memory token.
+func OAuthFromRuntime(tok oauth.Token) OAuthToken {
+	out := OAuthToken{
+		AccessToken:  tok.AccessToken,
+		RefreshToken: tok.RefreshToken,
+		IDToken:      tok.IDToken,
+		AccountID:    tok.AccountID,
+		Email:        tok.Email,
+		PlanType:     tok.PlanType,
+	}
+	if !tok.ExpiresAt.IsZero() {
+		out.ExpiresAt = tok.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 // Default returns a loopback-only skeleton config with local Ollama.

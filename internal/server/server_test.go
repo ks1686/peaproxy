@@ -279,7 +279,7 @@ func TestHealthzPublicAndPresets(t *testing.T) {
 	if prr.Code != http.StatusOK {
 		t.Fatalf("presets %d %s", prr.Code, prr.Body)
 	}
-	for _, name := range []string{"lmstudio", "groq", "google", "huggingface"} {
+	for _, name := range []string{"lmstudio", "groq", "google", "huggingface", "anthropic_oauth", "openai_oauth"} {
 		if !strings.Contains(prr.Body.String(), name) {
 			t.Fatalf("missing %s in %s", name, prr.Body)
 		}
@@ -342,7 +342,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}

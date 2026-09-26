@@ -91,10 +91,17 @@ providers:
   #   baseURL: https://opencode.ai/zen/v1
   #   apiKeyEnv: OPENCODE_API_KEY
 
-  # OAuth stubs — not implemented. Prefer official API keys (docs/OAUTH.md).
+  # Claude Pro/Max subscription OAuth. ToS/ban risk — docs/OAUTH.md.
+  # peaproxy auth login --provider anthropic
   # - id: anthropic-oauth
   #   adapter: anthropic_oauth
   #   tier: paid
+  #   oauth:
+  #     accessToken: (written by auth login)
+  #     refreshToken: (written by auth login)
+
+  # ChatGPT/Codex subscription OAuth. ToS/ban risk — docs/OAUTH.md.
+  # peaproxy auth login --provider openai
   # - id: openai-oauth
   #   adapter: openai_oauth
   #   tier: paid

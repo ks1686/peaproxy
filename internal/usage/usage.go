@@ -169,7 +169,7 @@ func Redact(s string) string {
 		return s
 	}
 	lower := strings.ToLower(s)
-	for _, key := range []string{"bearer ", "sk-", "x-api-key", "api_key"} {
+	for _, key := range []string{"bearer ", "sk-", "x-api-key", "api_key", "access_token", "refresh_token", "id_token"} {
 		if strings.Contains(lower, key) {
 			return "[redacted]"
 		}

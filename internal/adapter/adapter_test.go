@@ -65,28 +65,30 @@ func TestOpenAICompatRequiresBaseURL(t *testing.T) {
 	}
 }
 
-func TestOAuthStubsAreNotImplemented(t *testing.T) {
+func TestOAuthAdaptersImplementAuthenticator(t *testing.T) {
 	ctx := context.Background()
 	anth, err := anthropic_oauth.New(adapter.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := anth.ListModels(ctx); !errors.Is(err, adapter.ErrNotImplemented) {
-		t.Fatalf("anthropic_oauth: %v", err)
+	if _, err := anth.ListModels(ctx); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("anthropic_oauth without token: %v", err)
 	}
 	oa, err := openai_oauth.New(adapter.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := oa.Chat(ctx, adapter.ChatRequest{}); !errors.Is(err, adapter.ErrNotImplemented) {
-		t.Fatalf("openai_oauth: %v", err)
+	if _, err := oa.Chat(ctx, adapter.ChatRequest{}); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("openai_oauth without token: %v", err)
 	}
-	auth, ok := anth.(adapter.Authenticator)
-	if !ok {
+	if _, ok := anth.(adapter.Authenticator); !ok {
 		t.Fatal("anthropic_oauth must implement Authenticator")
 	}
-	if _, err := auth.AuthStart(ctx); !errors.Is(err, adapter.ErrNotImplemented) {
-		t.Fatalf("AuthStart: %v", err)
+	if _, ok := oa.(adapter.Authenticator); !ok {
+		t.Fatal("openai_oauth must implement Authenticator")
+	}
+	if !anth.Capabilities().OAuth || !oa.Capabilities().OAuth {
+		t.Fatal("OAuth capability should be advertised")
 	}
 }
 

@@ -67,6 +67,42 @@ providers:
 	}
 }
 
+func TestOAuthTokenRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	cfg := config.Default()
+	cfg.Providers = append(cfg.Providers, config.Provider{
+		ID:      "anthropic-oauth",
+		Adapter: "anthropic_oauth",
+		Tier:    "paid",
+		OAuth: &config.OAuthToken{
+			AccessToken:  "at",
+			RefreshToken: "rt",
+			ExpiresAt:    "2026-09-26T12:00:00Z",
+			Email:        "a@b.c",
+		},
+	})
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	again, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *config.OAuthToken
+	for _, p := range again.Providers {
+		if p.ID == "anthropic-oauth" {
+			found = p.OAuth
+		}
+	}
+	if found == nil || found.AccessToken != "at" || found.RefreshToken != "rt" || found.Email != "a@b.c" {
+		t.Fatalf("%#v", found)
+	}
+	if !found.Runtime().Valid() {
+		t.Fatal("runtime token should be valid")
+	}
+}
+
 func TestExampleYAMLLoads(t *testing.T) {
 	cfg, err := config.Load(filepath.Join("..", "..", "configs", "peaproxy.example.yaml"))
 	if err != nil {

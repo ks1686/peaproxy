@@ -132,3 +132,38 @@ func TestNonRetryableDoesNotFailover(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestInstancesRedactOAuthTokens(t *testing.T) {
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{{
+			ID:      "anthropic-oauth",
+			Adapter: "anthropic_oauth",
+			Tier:    "paid",
+			OAuth: &config.OAuthToken{
+				AccessToken:  "secret-at",
+				RefreshToken: "secret-rt",
+				Email:        "a@b.c",
+			},
+		}},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := gw.Instances()
+	if len(got) != 1 {
+		t.Fatalf("%#v", got)
+	}
+	if got[0].OAuth == nil || got[0].OAuth.AccessToken != "configured" {
+		t.Fatalf("access token leaked: %#v", got[0].OAuth)
+	}
+	if got[0].OAuth.RefreshToken != "" {
+		t.Fatalf("refresh leaked: %#v", got[0].OAuth)
+	}
+	if got[0].OAuth.Email != "a@b.c" {
+		t.Fatalf("email %s", got[0].OAuth.Email)
+	}
+}

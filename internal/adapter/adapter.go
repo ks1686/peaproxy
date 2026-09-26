@@ -12,6 +12,7 @@ import (
 	"io"
 
 	"github.com/ks1686/peaproxy/internal/catalog"
+	"github.com/ks1686/peaproxy/internal/oauth"
 )
 
 // ErrNotImplemented marks spike-phase stubs (OAuth adapters, streaming, etc.).
@@ -63,6 +64,9 @@ type AuthSession struct {
 	LoginURL  string
 	State     string
 	ExpiresIn int
+	// UserCode and VerificationURL are set for device-code flows (Codex).
+	UserCode        string
+	VerificationURL string
 }
 
 // Adapter is the unit the router failsover across.
@@ -97,7 +101,7 @@ func (e HTTPError) Error() string {
 	return fmt.Sprintf("upstream HTTP %d: %s", e.Status, e.Body)
 }
 
-// Options is the generic constructor input for stub adapters.
+// Options is the generic constructor input for adapters.
 type Options struct {
 	ID           string
 	BaseURL      string
@@ -105,6 +109,12 @@ type Options struct {
 	SessionID    string
 	Tier         catalog.Tier
 	ExtraHeaders map[string]string
+	OAuth        oauth.Token
+	PersistOAuth func(oauth.Token) error
+	// OAuthFlow is "device" for Codex device-code login; empty is loopback PKCE.
+	OAuthFlow string
+	// SkipLoopback builds the login URL without binding a callback port (CLI --print-url).
+	SkipLoopback bool
 }
 
 // NativeMessages is implemented by adapters that speak Anthropic /v1/messages natively.

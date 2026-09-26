@@ -27,8 +27,10 @@ func AccountPresets() []AccountPreset {
 	out := []AccountPreset{
 		{ID: "ollama-local", Adapter: ollama.Name, Label: "Ollama (local)", BaseURL: ollama.DefaultBaseURL, Tier: string(catalog.TierLocal)},
 		{ID: "lmstudio-local", Adapter: hosted.LMStudio.Name, Label: "LM Studio (local)", BaseURL: hosted.LMStudio.DefaultBaseURL, Tier: string(catalog.TierLocal)},
-		{ID: "anthropic-key", Adapter: anthropic.Name, Label: "Anthropic API key", BaseURL: anthropic.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "ANTHROPIC_API_KEY"},
-		{ID: "openai-key", Adapter: openai.Name, Label: "OpenAI API key", BaseURL: openai.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENAI_API_KEY"},
+		{ID: "anthropic-key", Adapter: anthropic.Name, Label: "Anthropic API key (official)", BaseURL: anthropic.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "ANTHROPIC_API_KEY", Note: "Official Messages API. Safer than subscription OAuth."},
+		{ID: "openai-key", Adapter: openai.Name, Label: "OpenAI API key (official)", BaseURL: openai.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENAI_API_KEY", Note: "Official Platform API. Safer than ChatGPT/Codex subscription OAuth."},
+		{ID: "anthropic-oauth", Adapter: "anthropic_oauth", Label: "Claude Pro/Max (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Anthropic ToS and can ban the account. PeaProxy authors are not liable. Prefer the Anthropic API key preset. Run: peaproxy auth login --provider anthropic"},
+		{ID: "openai-oauth", Adapter: "openai_oauth", Label: "ChatGPT / Codex (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate OpenAI ToS and can ban the account. PeaProxy authors are not liable. Prefer the OpenAI API key preset. Run: peaproxy auth login --provider openai"},
 		{ID: "google-key", Adapter: hosted.Google.Name, Label: "Google AI Studio (Gemini OpenAI-compat)", BaseURL: hosted.Google.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.Google.EnvKey, Note: hosted.Google.Notes},
 		{ID: "groq-key", Adapter: hosted.Groq.Name, Label: "Groq", BaseURL: hosted.Groq.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.Groq.EnvKey},
 		{ID: "cerebras-key", Adapter: hosted.Cerebras.Name, Label: "Cerebras", BaseURL: hosted.Cerebras.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.Cerebras.EnvKey},

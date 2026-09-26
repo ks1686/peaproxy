@@ -97,11 +97,29 @@ func TestClientsShowPiBothWires(t *testing.T) {
 
 func TestAuthLoginPrintsOfficialKeyDocs(t *testing.T) {
 	out := &bytes.Buffer{}
-	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "anthropic"}, out); err != nil {
+	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "anthropic", "--print-url"}, out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "console.anthropic.com") {
-		t.Fatalf("%s", out)
+	got := out.String()
+	if !strings.Contains(got, "console.anthropic.com") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "not liable") || !strings.Contains(got, "claude.ai/oauth/authorize") {
+		t.Fatalf("expected liability warning and login URL:\n%s", got)
+	}
+}
+
+func TestAuthLoginOpenAIPrintURL(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "openai", "--print-url", "--no-browser"}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "auth.openai.com/oauth/authorize") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "platform.openai.com/api-keys") {
+		t.Fatalf("%s", got)
 	}
 }
 

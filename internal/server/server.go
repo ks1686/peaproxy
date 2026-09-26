@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -20,6 +21,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/gateway"
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/oauth"
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/ui"
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -30,8 +32,17 @@ const maxBody = 8 << 20
 
 // Server is the localhost gateway (OpenAI + Claude + admin + UI).
 type Server struct {
-	gw   *gateway.Gateway
-	http *http.Server
+	gw        *gateway.Gateway
+	http      *http.Server
+	oauthMu   sync.Mutex
+	oauthJobs map[string]*oauthJob
+}
+
+type oauthJob struct {
+	LoginURL string
+	UserCode string
+	Done     bool
+	Err      string
 }
 
 // Options wires dependencies for tests.
@@ -43,7 +54,7 @@ type Options struct {
 
 // New builds an HTTP server that is not yet listening.
 func New(opts Options) *Server {
-	s := &Server{gw: opts.Gateway}
+	s := &Server{gw: opts.Gateway, oauthJobs: map[string]*oauthJob{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", s.handleOpenAIModels)
 	mux.HandleFunc("GET /v0/catalog", s.handleCatalogAPI)
@@ -61,6 +72,8 @@ func New(opts Options) *Server {
 	mux.HandleFunc("POST /admin/showcase", admin(s.handleShowcase))
 	mux.HandleFunc("GET /admin/usage", admin(s.handleUsage))
 	mux.HandleFunc("GET /admin/clients", admin(s.handleClients))
+	mux.HandleFunc("POST /admin/oauth/start", admin(s.handleOAuthStart))
+	mux.HandleFunc("GET /admin/oauth/status", admin(s.handleOAuthStatus))
 	mux.HandleFunc("GET /admin/settings", admin(s.handleSettings))
 	mux.HandleFunc("POST /admin/settings", admin(s.handleSettingsPost))
 	uiFS, err := fs.Sub(ui.FS, "web")
@@ -206,7 +219,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"version":            version.Version,
 		"bind":               cfg.Bind,
 		"port":               cfg.Port,
-		"oauth":              "not implemented",
+		"oauth":              "claude+codex subscription (ToS risk)",
 		"config":             s.gw.ConfigPath(),
 		"usageFile":          usagePath,
 		"requestLog":         cfg.RequestLog,
@@ -254,7 +267,11 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 		status := "configured"
 		switch p.Adapter {
 		case "anthropic_oauth", "openai_oauth":
-			status = "oauth-stub"
+			if p.HasOAuth() || p.APIKey == "configured" {
+				status = "oauth-ready"
+			} else {
+				status = "oauth-login-required"
+			}
 		}
 		out = append(out, row{
 			ID: p.ID, Adapter: p.Adapter, Tier: p.Tier, BaseURL: p.BaseURL,
@@ -288,6 +305,105 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID   string `json:"id"`
+		Flow string `json:"flow"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	if body.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+		return
+	}
+	adp, ok := s.gw.AdapterByID(body.ID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown account; add the OAuth preset first"})
+		return
+	}
+	auth, ok := adp.(adapter.Authenticator)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account does not support OAuth"})
+		return
+	}
+	sess, err := auth.AuthStart(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	job := &oauthJob{LoginURL: sess.LoginURL, UserCode: sess.UserCode}
+	s.oauthMu.Lock()
+	s.oauthJobs[body.ID] = job
+	s.oauthMu.Unlock()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		err := auth.AuthComplete(ctx, sess, "")
+		s.oauthMu.Lock()
+		defer s.oauthMu.Unlock()
+		job.Done = true
+		if err != nil {
+			job.Err = err.Error()
+		}
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   "pending",
+		"id":       body.ID,
+		"loginURL": sess.LoginURL,
+		"userCode": sess.UserCode,
+		"warning":  oauth.LiabilityWarning(),
+		"cli":      "peaproxy auth login --provider " + s.cliProviderFor(body.ID),
+	})
+}
+
+func (s *Server) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	s.oauthMu.Lock()
+	job := s.oauthJobs[id]
+	s.oauthMu.Unlock()
+	if job == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "idle", "id": id})
+		return
+	}
+	status := "pending"
+	if job.Done && job.Err == "" {
+		status = "complete"
+	} else if job.Done {
+		status = "error"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   status,
+		"id":       id,
+		"loginURL": job.LoginURL,
+		"userCode": job.UserCode,
+		"error":    job.Err,
+		"warning":  oauth.LiabilityWarning(),
+	})
+}
+
+func (s *Server) cliProviderFor(id string) string {
+	for _, p := range s.gw.Instances() {
+		if p.ID == id {
+			if p.Adapter == "openai_oauth" {
+				return "openai"
+			}
+			if p.Adapter == "anthropic_oauth" {
+				return "anthropic"
+			}
+		}
+	}
+	return oauthCLIProvider(id)
+}
+
+func oauthCLIProvider(accountID string) string {
+	if strings.Contains(accountID, "openai") || strings.Contains(accountID, "codex") {
+		return "openai"
+	}
+	return "anthropic"
 }
 
 func (s *Server) handleAdminCatalog(w http.ResponseWriter, r *http.Request) {

@@ -18,8 +18,8 @@ Adapters in this repo today:
 | `openrouter` | Preset; ids ending `:free` tagged free; live list | API key | `https://openrouter.ai/api/v1` |
 | `openai_compat` | Generic base URL + optional key, stream + non-stream | none / API key | required `baseURL` |
 | `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
-| `anthropic_oauth` | **Stub** — `ErrNotImplemented` | OAuth (TODO, official path only) | — |
-| `openai_oauth` | **Stub** — `ErrNotImplemented` | OAuth (TODO, official path only) | — |
+| `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
+| `openai_oauth` | ChatGPT/Codex subscription OAuth + Responses→chat. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
 
 Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default base URL and catalog tier, then delegate to `openai_compat`.
 
@@ -33,7 +33,7 @@ PeaProxy does **not** call `generateContent`. Set `GEMINI_API_KEY` and adapter `
 
 ## Paid / subscription
 
-**P0 OAuth (stubs only):** Anthropic Claude, OpenAI ChatGPT/Codex, later Gemini/Grok/Kimi/Qwen consumer login. Use the provider’s **official** OAuth / login docs when those adapters are implemented. Do not reverse-engineer private clients. See [OAUTH.md](OAUTH.md).
+**P0 OAuth (Claude + Codex shipped):** Anthropic Claude Pro/Max and OpenAI ChatGPT/Codex subscription login. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys. Gemini/Grok/Kimi/Qwen consumer OAuth is deferred.
 
 **P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `openrouter`.
 

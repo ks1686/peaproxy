@@ -27,7 +27,8 @@ func NewRoot() *cobra.Command {
 		Long: `PeaProxy is a localhost gateway: subscription OAuth + API keys + free/local
 providers, a live model catalog, and OpenAI/Claude-compatible endpoints.
 
-OAuth adapters in this tree are stubs. Do not expect working Claude/ChatGPT login yet.
+Subscription OAuth (Claude Pro/Max, ChatGPT/Codex) is implemented and may violate
+provider ToS — see docs/OAUTH.md. API keys remain the official path.
 
 Examples:
   peaproxy serve
@@ -45,7 +46,7 @@ Examples:
 	root.PersistentFlags().StringVar(&configPath, "config", "", "Path to peaproxy.yaml (default: user config dir)")
 
 	root.AddCommand(serveCmd(&configPath))
-	root.AddCommand(authCmd())
+	root.AddCommand(authCmd(&configPath))
 	root.AddCommand(accountsCmd(&configPath))
 	root.AddCommand(modelsCmd(&configPath))
 	root.AddCommand(statusCmd(&configPath))
@@ -105,33 +106,6 @@ Examples:
 	cmd.Flags().IntVar(&port, "port", config.DefaultPort, "Listen port")
 	cmd.Flags().BoolVar(&allowLAN, "allow-lan", false, "Permit non-loopback bind (also requires --admin-token)")
 	cmd.Flags().StringVar(&adminToken, "admin-token", "", "Admin token required for /admin when bound off loopback")
-	return cmd
-}
-
-func authCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "auth",
-		Short: "Subscription OAuth login (stub)",
-		Long: `Examples:
-  peaproxy auth login --provider anthropic
-  peaproxy auth login --provider openai
-`,
-	}
-	login := &cobra.Command{
-		Use:   "login",
-		Short: "Start an OAuth login (not implemented)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = args
-			provider, _ := cmd.Flags().GetString("provider")
-			if provider == "" {
-				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  known stubs: anthropic, openai")
-			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), oauthHint(provider))
-			return nil
-		},
-	}
-	login.Flags().String("provider", "", "Provider stub: anthropic | openai")
-	cmd.AddCommand(login)
 	return cmd
 }
 
@@ -219,7 +193,7 @@ func statusCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: not implemented\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: claude+codex subscription (ToS risk; docs/OAUTH.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
 			return nil
 		},
 	}
@@ -374,23 +348,4 @@ func ExecuteWithArgs(args []string, out *bytes.Buffer) error {
 	cmd.SetErr(out)
 	cmd.SetIn(os.Stdin)
 	return cmd.Execute()
-}
-
-func oauthHint(provider string) string {
-	switch provider {
-	case "anthropic":
-		return `auth login: provider=anthropic status=not-implemented
-Claude Pro/Max subscription OAuth is not a public third-party API.
-Create an official API key: https://console.anthropic.com/settings/keys
-Then: Accounts → Anthropic API key (adapter anthropic).
-Docs: https://docs.anthropic.com/en/api/getting-started`
-	case "openai":
-		return `auth login: provider=openai status=not-implemented
-ChatGPT/Codex subscription OAuth is not a public third-party API.
-Create a platform API key: https://platform.openai.com/api-keys
-Then: Accounts → OpenAI API key (adapter openai).
-Docs: https://platform.openai.com/docs/api-reference`
-	default:
-		return fmt.Sprintf("auth login: provider=%s status=not-implemented\nPrefer official API keys. No reverse-engineered OAuth.", provider)
-	}
 }
