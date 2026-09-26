@@ -50,6 +50,9 @@ type Model struct {
 	// ImageOutReady is true when this row is tagged image_out and the account's
 	// adapter can proxy POST /v1/images/generations. Listing overlay only.
 	ImageOutReady bool `json:"imageOutReady,omitempty"`
+	// EmbeddingsReady is true when this row is tagged embeddings and the
+	// account's adapter can proxy POST /v1/embeddings. Listing overlay only.
+	EmbeddingsReady bool `json:"embeddingsReady,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.
@@ -230,9 +233,10 @@ func ToOpenAIList(models []Model) OpenAIModelList {
 	return OpenAIModelList{Object: "list", Data: data}
 }
 
-// InferModalities tags text and optional image_in / image_out from well-known
-// model id patterns. This is enrichment only — live ListModels remains the
-// source of IDs. Prefer ModalitiesFromLive when the provider sends architecture.
+// InferModalities tags text and optional image_in / image_out / embeddings from
+// well-known model id patterns. This is enrichment only — live ListModels
+// remains the source of IDs. Prefer ModalitiesFromLive when the provider sends
+// architecture.
 func InferModalities(id string) []string {
 	return ModalitiesFromLive(id, nil, nil)
 }
@@ -241,7 +245,7 @@ func InferModalities(id string) []string {
 // input_modalities / output_modalities) with id-pattern enrichment.
 func ModalitiesFromLive(id string, input, output []string) []string {
 	seen := map[string]bool{}
-	out := make([]string, 0, 3)
+	out := make([]string, 0, 4)
 	add := func(tag string) {
 		if tag == "" || seen[tag] {
 			return
@@ -260,15 +264,23 @@ func ModalitiesFromLive(id string, input, output []string) []string {
 		switch strings.ToLower(strings.TrimSpace(m)) {
 		case "image":
 			add("image_out")
+		case "embedding", "embeddings":
+			add("embeddings")
 		}
 	}
 	lower := strings.ToLower(id)
-	if imageOutID(lower) {
+	if embeddingsID(lower) {
+		add("embeddings")
+	} else if imageOutID(lower) {
 		add("image_out")
 	} else if imageInID(lower) {
 		add("image_in")
 	}
 	return out
+}
+
+func embeddingsID(lower string) bool {
+	return strings.Contains(lower, "embed")
 }
 
 func imageOutID(lower string) bool {

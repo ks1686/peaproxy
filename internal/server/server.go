@@ -64,6 +64,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("POST /v1/messages", s.handleClaudeMessages)
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
 	mux.HandleFunc("POST /v1/images/generations", s.handleImageGenerations)
+	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 	admin := func(h http.HandlerFunc) http.HandlerFunc { return s.requireAdmin(h) }
 	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
 	mux.HandleFunc("GET /admin/presets", admin(s.handlePresets))
@@ -240,6 +241,34 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"created": resp.Created,
 		"data":    imageDataJSON(resp),
+	})
+}
+
+func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	raw, err := readBody(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	peek := jsonx.PeekBody(raw)
+	resp, account, err := s.gw.CreateEmbeddings(r.Context(), raw)
+	if err != nil {
+		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		writeErr(w, err)
+		return
+	}
+	s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started)
+	if len(resp.Raw) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(resp.Raw)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"object": "list",
+		"model":  resp.Model,
+		"data":   []any{},
 	})
 }
 
@@ -482,6 +511,7 @@ func (s *Server) handleAdminCatalog(w http.ResponseWriter, r *http.Request) {
 		"models":          s.gw.Annotated(filter),
 		"note":            "hide affects listing only; models stay routable by id",
 		"imageGeneration": "proxy",
+		"embeddings":      "proxy",
 	})
 }
 
@@ -531,10 +561,11 @@ func (s *Server) handleHide(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	var body struct {
-		Model         string `json:"model"`
-		Prompt        string `json:"prompt"`
-		ImageURL      string `json:"imageUrl"`
-		GenerateImage bool   `json:"generateImage"`
+		Model            string `json:"model"`
+		Prompt           string `json:"prompt"`
+		ImageURL         string `json:"imageUrl"`
+		GenerateImage    bool   `json:"generateImage"`
+		CreateEmbeddings bool   `json:"createEmbeddings"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
@@ -567,6 +598,36 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 			"raw":      json.RawMessage(resp.Raw),
 			"redacted": true,
 			"imageOut": true,
+		})
+		return
+	}
+	if body.CreateEmbeddings {
+		if body.Prompt == "" {
+			body.Prompt = "hello world"
+		}
+		raw, err := json.Marshal(struct {
+			Model string `json:"model"`
+			Input string `json:"input"`
+		}{Model: body.Model, Input: body.Prompt})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errJSON(err))
+			return
+		}
+		resp, account, err := s.gw.CreateEmbeddings(r.Context(), raw)
+		if err != nil {
+			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+			writeErr(w, err)
+			return
+		}
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account":    account,
+			"model":      body.Model,
+			"count":      resp.Count,
+			"dimensions": resp.Dimensions,
+			"raw":        json.RawMessage(resp.Raw),
+			"redacted":   true,
+			"embeddings": true,
 		})
 		return
 	}
@@ -815,6 +876,9 @@ func statusOf(err error) int {
 	if errors.Is(err, adapter.ErrModelNotImageOut) || errors.Is(err, adapter.ErrImageOutUnsupported) || errors.Is(err, adapter.ErrImageModelRequired) {
 		return http.StatusBadRequest
 	}
+	if errors.Is(err, adapter.ErrModelNotEmbeddings) || errors.Is(err, adapter.ErrEmbeddingsUnsupported) || errors.Is(err, adapter.ErrEmbeddingModelRequired) {
+		return http.StatusBadRequest
+	}
 	var he adapter.HTTPError
 	if errors.As(err, &he) && he.Status >= 400 {
 		return he.Status
@@ -850,6 +914,10 @@ func imagePreview(resp adapter.ImageResponse) string {
 		return fmt.Sprintf("%d b64 image(s)", len(resp.B64))
 	}
 	return ""
+}
+
+func embeddingPreview(resp adapter.EmbeddingResponse) string {
+	return fmt.Sprintf("%d embedding(s) dim=%d", resp.Count, resp.Dimensions)
 }
 
 func imageDataJSON(resp adapter.ImageResponse) []map[string]string {

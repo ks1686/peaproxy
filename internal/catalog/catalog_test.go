@@ -181,6 +181,36 @@ func TestModalitiesFromLiveArchitecture(t *testing.T) {
 	}
 }
 
+func TestInferModalitiesEmbeddings(t *testing.T) {
+	for _, id := range []string{
+		"text-embedding-3-small",
+		"text-embedding-ada-002",
+		"openai/text-embedding-3-large",
+		"nomic-embed-text",
+		"mxbai-embed-large",
+		"gemini-embedding-001",
+	} {
+		got := InferModalities(id)
+		if !contains(got, "embeddings") {
+			t.Fatalf("%s: %v", id, got)
+		}
+	}
+	if contains(InferModalities("llama3.2"), "embeddings") {
+		t.Fatal("chat-only llama3.2 must not be tagged embeddings")
+	}
+	if contains(InferModalities("dall-e-3"), "embeddings") {
+		t.Fatal("image-out models must not be tagged embeddings from id heuristics")
+	}
+	got := ModalitiesFromLive("vendor/vec", []string{"text"}, []string{"embeddings"})
+	if !contains(got, "embeddings") {
+		t.Fatalf("live embeddings output: %v", got)
+	}
+	got = ModalitiesFromLive("vendor/vec2", nil, []string{"embedding"})
+	if !contains(got, "embeddings") {
+		t.Fatalf("live embedding output: %v", got)
+	}
+}
+
 func contains(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {

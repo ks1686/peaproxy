@@ -64,6 +64,7 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 		Stream:     true,
 		VisionIn:   true,
 		ImageOut:   true,
+		Embeddings: true,
 		ListModels: true,
 		APIKey:     a.apiKey != "",
 		Local:      a.tier == catalog.TierLocal,
@@ -217,8 +218,43 @@ func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (
 	return adapter.ParseImageResponse(body, req.Model), nil
 }
 
+func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
+	raw := req.Raw
+	if len(raw) == 0 {
+		payload := struct {
+			Model string `json:"model"`
+			Input string `json:"input"`
+		}{Model: req.Model}
+		var err error
+		raw, err = json.Marshal(payload)
+		if err != nil {
+			return adapter.EmbeddingResponse{}, err
+		}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/embeddings", bytes.NewReader(raw))
+	if err != nil {
+		return adapter.EmbeddingResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.auth(httpReq)
+	resp, err := a.client.Do(httpReq)
+	if err != nil {
+		return adapter.EmbeddingResponse{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return adapter.EmbeddingResponse{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return adapter.EmbeddingResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+	}
+	return adapter.ParseEmbeddingResponse(body, req.Model), nil
+}
+
 var _ adapter.Adapter = (*Adapter)(nil)
 var _ adapter.ImageGenerator = (*Adapter)(nil)
+var _ adapter.Embedder = (*Adapter)(nil)
 
 func (a *Adapter) body(req adapter.ChatRequest, stream bool) ([]byte, error) {
 	if len(req.Raw) > 0 {

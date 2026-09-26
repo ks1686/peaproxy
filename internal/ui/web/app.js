@@ -581,13 +581,14 @@ function showcasePage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Showcase</h2>
-      <p class="muted">Try a live chat or image generation. Usage is persisted next to the config file. Models with <code>image_in</code> accept an image URL or upload (OpenAI content parts). Models tagged <code>image_out</code> one-click generate via <code>POST /v1/images/generations</code> — never faked as chat. Subscription OAuth adapters do not proxy image-out; use an API-key OpenAI / Google / xAI / OpenAI-compat account.</p>
+      <p class="muted">Try a live chat, image generation, or embeddings. Usage is persisted next to the config file. Models with <code>image_in</code> accept an image URL or upload (OpenAI content parts). Models tagged <code>image_out</code> one-click generate via <code>POST /v1/images/generations</code> — never faked as chat. Models tagged <code>embeddings</code> try via <code>POST /v1/embeddings</code> — never faked as chat. Subscription OAuth adapters do not proxy image-out or embeddings; use an API-key OpenAI / Google / xAI / OpenAI-compat account.</p>
       <div class="row">
         <label>Model
           <select id="show-model"></select>
         </label>
         <button class="btn primary" id="show-send">Send</button>
         <button class="btn primary" id="show-generate" hidden>Generate image</button>
+        <button class="btn primary" id="show-embed" hidden>Embed</button>
       </div>
       <label>Prompt <textarea id="show-prompt">Say hello in one short sentence.</textarea></label>
       <div id="show-vision" hidden>
@@ -614,20 +615,30 @@ function showcasePage(root) {
     const mods = m?.modalities || [];
     const hasIn = mods.includes("image_in");
     const hasOut = mods.includes("image_out");
+    const hasEmbed = mods.includes("embeddings");
     const ready = !!m?.imageOutReady;
-    document.getElementById("show-vision").hidden = !hasIn || hasOut;
-    document.getElementById("show-image-out").hidden = !hasOut;
-    document.getElementById("show-send").hidden = hasOut;
+    const embedReady = !!m?.embeddingsReady;
+    document.getElementById("show-vision").hidden = !hasIn || hasOut || hasEmbed;
+    document.getElementById("show-image-out").hidden = !hasOut && !hasEmbed;
+    document.getElementById("show-send").hidden = hasOut || hasEmbed;
     document.getElementById("show-generate").hidden = !hasOut;
     document.getElementById("show-generate").disabled = hasOut && !ready;
+    document.getElementById("show-embed").hidden = !hasEmbed;
+    document.getElementById("show-embed").disabled = hasEmbed && !embedReady;
     const msg = document.getElementById("show-image-out-msg");
     if (hasOut && ready) {
       msg.innerHTML = "<strong>Image generation.</strong> This model is tagged <code>image_out</code>. Generate uses <code>POST /v1/images/generations</code>, not chat.";
     } else if (hasOut) {
       msg.innerHTML = "<strong>Image-out not on this adapter.</strong> Tagged <code>image_out</code>, but the connected account cannot proxy generations (subscription OAuth or chat-only). Use an API-key OpenAI / Google / xAI / OpenAI-compat account.";
+    } else if (hasEmbed && embedReady) {
+      msg.innerHTML = "<strong>Embeddings.</strong> This model is tagged <code>embeddings</code>. Embed uses <code>POST /v1/embeddings</code>, not chat.";
+    } else if (hasEmbed) {
+      msg.innerHTML = "<strong>Embeddings not on this adapter.</strong> Tagged <code>embeddings</code>, but the connected account cannot proxy embeddings (subscription OAuth or chat-only). Use an API-key OpenAI / Google / xAI / OpenAI-compat account.";
     }
     if (hasOut) {
       document.getElementById("show-prompt").value = "a simple icon of a pea pod";
+    } else if (hasEmbed) {
+      document.getElementById("show-prompt").value = "hello world";
     }
   };
   (async () => {
@@ -642,6 +653,7 @@ function showcasePage(root) {
         );
         document.getElementById("show-send").disabled = true;
         document.getElementById("show-generate").disabled = true;
+        document.getElementById("show-embed").disabled = true;
       }
       fillModelSelect(sel, models);
       sel.addEventListener("change", toggleVision);
@@ -656,7 +668,7 @@ function showcasePage(root) {
       document.getElementById("show-usage").textContent = err.message;
     }
   })();
-  const runShowcase = async (generateImage) => {
+  const runShowcase = async (mode) => {
     const out = document.getElementById("show-out");
     const imgs = document.getElementById("show-images");
     out.textContent = "sending…";
@@ -672,8 +684,10 @@ function showcasePage(root) {
         model: sel.value,
         prompt: document.getElementById("show-prompt").value,
       };
-      if (generateImage) {
+      if (mode === "image") {
         payload.generateImage = true;
+      } else if (mode === "embeddings") {
+        payload.createEmbeddings = true;
       } else if (!document.getElementById("show-vision").hidden && imageUrl) {
         payload.imageUrl = imageUrl;
       }
@@ -697,6 +711,13 @@ function showcasePage(root) {
         });
         imgs.hidden = imgs.childElementCount === 0;
         out.textContent = JSON.stringify({ account: data.account, model: data.model, urls, b64Count: b64.length }, null, 2);
+      } else if (data.embeddings) {
+        out.textContent = JSON.stringify({
+          account: data.account,
+          model: data.model,
+          count: data.count,
+          dimensions: data.dimensions,
+        }, null, 2);
       } else {
         out.textContent = data.content || JSON.stringify(data, null, 2);
       }
@@ -706,8 +727,9 @@ function showcasePage(root) {
       toast(err.message);
     }
   };
-  document.getElementById("show-send").addEventListener("click", () => runShowcase(false));
-  document.getElementById("show-generate").addEventListener("click", () => runShowcase(true));
+  document.getElementById("show-send").addEventListener("click", () => runShowcase("chat"));
+  document.getElementById("show-generate").addEventListener("click", () => runShowcase("image"));
+  document.getElementById("show-embed").addEventListener("click", () => runShowcase("embeddings"));
 }
 
 function clientsPage(root) {

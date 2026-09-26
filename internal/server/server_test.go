@@ -384,6 +384,91 @@ func TestShowcaseImageOutGeneratesViaProxy(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsProxiesTaggedModelAndRefusesChatOnly(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "text-embedding-3-small"}, {"id": "llama3.2"}},
+			})
+		case "/v1/embeddings":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"model":  "text-embedding-3-small",
+				"data": []map[string]any{{
+					"object":    "embedding",
+					"index":     0,
+					"embedding": []float64{0.1, 0.2, 0.3},
+				}},
+			})
+		case "/v1/chat/completions":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "hello from chat"}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{{
+			ID: "oa", Adapter: "openai_compat", Tier: "paid", BaseURL: up.URL + "/v1", APIKey: "sk-test",
+		}},
+	}
+	gw, err := gateway.New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	s := New(Options{Gateway: gw})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"text-embedding-3-small","input":"hello pea"}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("embeddings %d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"embedding"`) || !strings.Contains(rr.Body.String(), "0.1") {
+		t.Fatalf("embeddings body %s", rr.Body)
+	}
+
+	show := httptest.NewRequest(http.MethodPost, "/admin/showcase", strings.NewReader(`{"model":"text-embedding-3-small","prompt":"hello pea","createEmbeddings":true}`))
+	srr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(srr, show)
+	if srr.Code != http.StatusOK {
+		t.Fatalf("showcase %d %s", srr.Code, srr.Body)
+	}
+	if !strings.Contains(srr.Body.String(), `"embeddings":true`) {
+		t.Fatalf("showcase %s", srr.Body)
+	}
+	if strings.Contains(srr.Body.String(), "hello from chat") {
+		t.Fatal("must not fake embeddings as chat")
+	}
+
+	refuse := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"llama3.2","input":"hello"}`))
+	frr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(frr, refuse)
+	if frr.Code != http.StatusBadRequest {
+		t.Fatalf("chat-only model status %d %s", frr.Code, frr.Body)
+	}
+	if strings.Contains(frr.Body.String(), "hello from") {
+		t.Fatal("must not fake embeddings as chat")
+	}
+
+	cat := httptest.NewRequest(http.MethodGet, "/admin/catalog?filter=all", nil)
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, cat)
+	if !strings.Contains(crr.Body.String(), `"embeddings":"proxy"`) {
+		t.Fatalf("catalog: %s", crr.Body)
+	}
+	if !strings.Contains(crr.Body.String(), `"embeddingsReady":true`) {
+		t.Fatalf("text-embedding-3-small should be embeddingsReady: %s", crr.Body)
+	}
+}
+
 func TestHealthListsNativeAdaptersAndCooldowns(t *testing.T) {
 	s, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
@@ -539,7 +624,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
