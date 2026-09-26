@@ -327,7 +327,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			HasKey: p.APIKey != "", Status: status,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": out, "onboarding": s.gw.Config().NeedsOnboarding()})
 }
 
 func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
@@ -553,6 +553,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"recent":     s.gw.Usage.Recent(),
 		"byAccount":  s.gw.Usage.ByAccount(),
+		"byProvider": s.gw.Usage.ByProvider(),
 		"path":       path,
 		"disclaimer": "Persisted to usage.json next to the config file. Opt-in requestLog writes redacted JSONL to requests.log.",
 	})
@@ -589,32 +590,63 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		Cloak   string `json:"cloak"`
 		Notes   string `json:"notes"`
 		Snippet string `json:"snippet"`
+		Verify  string `json:"verify"`
 	}
 	var out []item
 	for _, n := range clients.List() {
 		p, _ := clients.Get(n)
-		out = append(out, item{Name: p.Name, BaseURL: p.BaseURL, Cloak: p.Cloak, Notes: p.Notes, Snippet: p.Snippet})
+		out = append(out, item{Name: p.Name, BaseURL: p.BaseURL, Cloak: p.Cloak, Notes: p.Notes, Snippet: p.Snippet, Verify: p.Verify})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"clients": out})
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	_ = r
+	writeJSON(w, http.StatusOK, s.settingsPayload())
+}
+
+func (s *Server) settingsPayload() map[string]any {
 	cfg := s.gw.Config()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"schemaVersion":    cfg.SchemaVersion,
-		"bind":             cfg.Bind,
-		"port":             cfg.Port,
-		"allowNonLoopback": cfg.AllowNonLoopback,
-		"hide":             cfg.Hide,
-		"expose":           cfg.Expose,
-		"configPath":       s.gw.ConfigPath(),
-		"listingOnlyHide":  !cfg.Hide.BlockRouting,
-		"requestLog":       cfg.RequestLog,
-		"catalog":          cfg.Catalog,
-		"lan":              cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
-		"lanWarning":       cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
-	})
+	loopback := config.IsLoopback(cfg.Bind)
+	lan := cfg.AllowNonLoopback && !loopback
+	reqPath := ""
+	usagePath := ""
+	if s.gw.Usage != nil {
+		reqPath = s.gw.Usage.RequestLogPath()
+		usagePath = s.gw.Usage.Path()
+	}
+	backend := "file"
+	backendNote := "AES-GCM file next to the config (secrets.enc). Tokens are never shown here."
+	if path := s.gw.ConfigPath(); path != "" {
+		if store, err := config.OpenStore(path); err == nil && store != nil {
+			backend = string(store.Backend())
+		}
+	}
+	if backend == "keyring" {
+		backendNote = "OS keychain (macOS Keychain / Windows Credential Manager / Linux Secret Service). Tokens are never shown here."
+	}
+	return map[string]any{
+		"schemaVersion":      cfg.SchemaVersion,
+		"bind":               cfg.Bind,
+		"port":               cfg.Port,
+		"addr":               cfg.Addr(),
+		"allowNonLoopback":   cfg.AllowNonLoopback,
+		"loopback":           loopback,
+		"hasAdminToken":      cfg.AdminToken != "",
+		"adminTokenRequired": s.adminRequired(),
+		"hide":               cfg.Hide,
+		"expose":             cfg.Expose,
+		"configPath":         s.gw.ConfigPath(),
+		"listingOnlyHide":    !cfg.Hide.BlockRouting,
+		"requestLog":         cfg.RequestLog,
+		"requestLogPath":     reqPath,
+		"usagePath":          usagePath,
+		"catalog":            cfg.Catalog,
+		"lan":                lan,
+		"lanWarning":         lan,
+		"secretBackend":      backend,
+		"secretBackendNote":  backendNote,
+	}
 }
 
 func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
@@ -669,6 +701,7 @@ func (s *Server) record(account, model, proto, path string, stream bool, status 
 	}
 	e := usage.Event{
 		AccountID:  account,
+		Provider:   s.providerOf(account),
 		Model:      model,
 		Protocol:   proto,
 		Path:       path,
@@ -684,6 +717,18 @@ func (s *Server) record(account, model, proto, path string, stream bool, status 
 		}
 	}
 	s.gw.Usage.Add(e)
+}
+
+func (s *Server) providerOf(accountID string) string {
+	if s.gw == nil || accountID == "" {
+		return ""
+	}
+	for _, p := range s.gw.Config().Providers {
+		if p.ID == accountID {
+			return p.Adapter
+		}
+	}
+	return ""
 }
 
 func inspectorPreview(raw []byte, response string) string {

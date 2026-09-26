@@ -40,21 +40,21 @@ type Config struct {
 // HideList drops providers or model IDs from /v1/models and UI pickers.
 // Routing is unchanged unless BlockRouting is true (CPA #5995).
 type HideList struct {
-	Providers    []string `yaml:"providers"`
-	Models       []string `yaml:"models"`
-	BlockRouting bool     `yaml:"blockRouting,omitempty"`
+	Providers    []string `yaml:"providers" json:"providers"`
+	Models       []string `yaml:"models" json:"models"`
+	BlockRouting bool     `yaml:"blockRouting,omitempty" json:"blockRouting,omitempty"`
 }
 
 // ExposeList is the optional subset coding tools see. Empty = all non-hidden.
 type ExposeList struct {
-	Models []string `yaml:"models"`
+	Models []string `yaml:"models" json:"models"`
 }
 
 // CatalogPrefs are optional UI overlays. Live ListModels remains the source of IDs.
 // Rename/pin never affect routing unless hide.blockRouting is set.
 type CatalogPrefs struct {
-	Pin    []string          `yaml:"pin,omitempty"`
-	Rename map[string]string `yaml:"rename,omitempty"`
+	Pin    []string          `yaml:"pin,omitempty" json:"pin,omitempty"`
+	Rename map[string]string `yaml:"rename,omitempty" json:"rename,omitempty"`
 }
 
 // Provider is one adapter instance (Ollama, a key, or an OAuth account stub).
@@ -317,15 +317,94 @@ func (c Config) Validate() error {
 	}
 	ids := map[string]struct{}{}
 	for _, p := range c.Providers {
-		if p.ID == "" {
+		if strings.TrimSpace(p.ID) == "" {
 			return fmt.Errorf("provider missing id")
+		}
+		if strings.TrimSpace(p.Adapter) == "" {
+			return fmt.Errorf("provider %q missing adapter", p.ID)
+		}
+		if err := validTier(p.Tier); err != nil {
+			return fmt.Errorf("provider %q: %w", p.ID, err)
 		}
 		if _, ok := ids[p.ID]; ok {
 			return fmt.Errorf("duplicate provider id %q", p.ID)
 		}
 		ids[p.ID] = struct{}{}
 	}
+	if err := requireIDs("hide.providers", c.Hide.Providers); err != nil {
+		return err
+	}
+	if err := requireIDs("hide.models", c.Hide.Models); err != nil {
+		return err
+	}
+	if err := requireIDs("expose.models", c.Expose.Models); err != nil {
+		return err
+	}
+	if err := requireIDs("catalog.pin", c.Catalog.Pin); err != nil {
+		return err
+	}
+	for id, name := range c.Catalog.Rename {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("catalog.rename has an empty model id")
+		}
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("catalog.rename %q has an empty display name", id)
+		}
+	}
 	return nil
+}
+
+func validTier(tier string) error {
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "", "free", "freemium", "paid", "local":
+		return nil
+	default:
+		return fmt.Errorf("invalid tier %q (want free|freemium|paid|local)", tier)
+	}
+}
+
+func requireIDs(kind string, ids []string) error {
+	seen := map[string]struct{}{}
+	for i, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("%s[%d] is empty", kind, i)
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("duplicate %s %q", kind, id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateKnownAdapters rejects adapter names that are not in the registry.
+func (c Config) ValidateKnownAdapters(known []string) error {
+	set := make(map[string]struct{}, len(known))
+	for _, n := range known {
+		set[n] = struct{}{}
+	}
+	for _, p := range c.Providers {
+		if p.Adapter == "" {
+			continue
+		}
+		if _, ok := set[p.Adapter]; !ok {
+			return fmt.Errorf("unknown adapter %q for provider %q (see docs/PROVIDERS.md)", p.Adapter, p.ID)
+		}
+	}
+	return nil
+}
+
+// NeedsOnboarding is true when there are no accounts, or only the first-run
+// Ollama skeleton (no key, no OAuth, not disabled).
+func (c Config) NeedsOnboarding() bool {
+	if len(c.Providers) == 0 {
+		return true
+	}
+	if len(c.Providers) != 1 {
+		return false
+	}
+	p := c.Providers[0]
+	return p.ID == "ollama-local" && p.Adapter == "ollama" && p.APIKey == "" && p.APIKeyEnv == "" && !p.HasOAuth() && !p.Disabled
 }
 
 // Addr returns host:port.

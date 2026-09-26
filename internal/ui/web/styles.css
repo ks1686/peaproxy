@@ -70,7 +70,13 @@ pre { overflow: auto; background: #0e110c; padding: 0.75rem; border-radius: 8px;
 td.preview { max-width: 28rem; word-break: break-word; font-size: 0.8rem; color: var(--muted); }
 footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); }
 .snippet { position: relative; }
-.snippet .btn { position: absolute; top: 0.4rem; right: 0.4rem; }
+.snippet-actions { margin: 0.45rem 0 0.6rem; }
+.card h3 { font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+details { margin-top: 0.75rem; }
+details summary { cursor: pointer; color: var(--muted); }
+.empty.cta { text-align: left; }
+.empty.cta p { margin: 0.55rem 0; }
+.empty.cta .row { justify-content: flex-start; margin: 0.65rem 0; }
 .banner {
   background: #3a2414;
   color: #f3d2b0;

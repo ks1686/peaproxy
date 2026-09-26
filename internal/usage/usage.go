@@ -24,6 +24,7 @@ const (
 type Event struct {
 	Time             time.Time `json:"time"`
 	AccountID        string    `json:"accountId"`
+	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model"`
 	Protocol         string    `json:"protocol"`
 	Path             string    `json:"path,omitempty"`
@@ -39,9 +40,19 @@ type Event struct {
 // AccountRollup is a per-account summary.
 type AccountRollup struct {
 	AccountID string `json:"accountId"`
+	Provider  string `json:"provider,omitempty"`
 	Calls     int    `json:"calls"`
 	Errors    int    `json:"errors"`
 	Tokens    int    `json:"tokens"`
+}
+
+// ProviderRollup is a per-adapter summary across accounts that share a provider.
+type ProviderRollup struct {
+	Provider string `json:"provider"`
+	Calls    int    `json:"calls"`
+	Errors   int    `json:"errors"`
+	Tokens   int    `json:"tokens"`
+	Accounts int    `json:"accounts"`
 }
 
 type diskFile struct {
@@ -110,6 +121,7 @@ func (s *Store) Add(e Event) {
 	e.Preview = clip(Redact(e.Preview), maxPreview)
 	e.Error = clip(Redact(e.Error), maxPreview)
 	e.AccountID = clip(e.AccountID, 120)
+	e.Provider = clip(e.Provider, 80)
 	e.Model = clip(e.Model, 200)
 	e.Protocol = clip(e.Protocol, 40)
 	e.Path = clip(e.Path, 80)
@@ -301,13 +313,50 @@ func (s *Store) ByAccount() []AccountRollup {
 		if !ok {
 			i = len(out)
 			idx[e.AccountID] = i
-			out = append(out, AccountRollup{AccountID: e.AccountID})
+			out = append(out, AccountRollup{AccountID: e.AccountID, Provider: e.Provider})
+		}
+		if out[i].Provider == "" {
+			out[i].Provider = e.Provider
 		}
 		out[i].Calls++
 		out[i].Tokens += e.PromptTokens + e.CompletionTokens
 		if e.Status >= 400 || e.Error != "" {
 			out[i].Errors++
 		}
+	}
+	return out
+}
+
+// ByProvider rolls up counts by adapter name (falls back to account id).
+func (s *Store) ByProvider() []ProviderRollup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	idx := map[string]int{}
+	accts := map[string]map[string]struct{}{}
+	var out []ProviderRollup
+	for _, e := range s.events {
+		key := e.Provider
+		if key == "" {
+			key = e.AccountID
+		}
+		i, ok := idx[key]
+		if !ok {
+			i = len(out)
+			idx[key] = i
+			out = append(out, ProviderRollup{Provider: key})
+			accts[key] = map[string]struct{}{}
+		}
+		out[i].Calls++
+		out[i].Tokens += e.PromptTokens + e.CompletionTokens
+		if e.Status >= 400 || e.Error != "" {
+			out[i].Errors++
+		}
+		if e.AccountID != "" {
+			accts[key][e.AccountID] = struct{}{}
+		}
+	}
+	for i := range out {
+		out[i].Accounts = len(accts[out[i].Provider])
 	}
 	return out
 }

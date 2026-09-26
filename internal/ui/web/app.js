@@ -68,6 +68,135 @@ function emptyState(title, detail) {
   return `<div class="empty"><strong>${escapeHtml(title)}</strong><br />${escapeHtml(detail)}</div>`;
 }
 
+function onboardingCard() {
+  return `<div class="empty cta" id="onboarding">
+    <strong>Getting started</strong>
+    <p>Add a local runtime or an official API key, then point a coding tool at this gateway. Subscription OAuth may violate provider ToS and can ban the account; PeaProxy authors are not liable. Prefer API keys.</p>
+    <div class="row">
+      <button class="btn primary" type="button" data-pick="ollama-local">Ollama local</button>
+      <button class="btn" type="button" data-pick="lmstudio-local">LM Studio</button>
+      <button class="btn" type="button" data-pick="jan-local">Jan local</button>
+      <button class="btn" type="button" data-pick="anthropic-key">Anthropic API key</button>
+      <button class="btn" type="button" data-pick="openai-key">OpenAI API key</button>
+    </div>
+    <p class="warn">OAuth is last-resort. Use only if you accept the ban risk.</p>
+    <div class="row">
+      <button class="btn" type="button" data-pick="anthropic-oauth">Claude OAuth</button>
+      <button class="btn" type="button" data-jump="clients">Then verify a client</button>
+    </div>
+  </div>`;
+}
+
+function bindOnboarding(root, pickPreset) {
+  root.querySelectorAll("[data-pick]").forEach((btn) => {
+    btn.addEventListener("click", () => pickPreset(btn.dataset.pick));
+  });
+  root.querySelectorAll("[data-jump]").forEach((btn) => {
+    btn.addEventListener("click", () => render(btn.dataset.jump));
+  });
+}
+
+function usageTables(data) {
+  const providers = data.byProvider || [];
+  const accounts = data.byAccount || [];
+  const recent = data.recent || [];
+  const providerRows = providers
+    .map(
+      (p) => `<tr>
+        <td>${escapeHtml(p.provider || "")}</td>
+        <td>${escapeHtml(String(p.calls || 0))}</td>
+        <td>${escapeHtml(String(p.errors || 0))}</td>
+        <td>${escapeHtml(String(p.tokens || 0))}</td>
+        <td>${escapeHtml(String(p.accounts || 0))}</td>
+      </tr>`
+    )
+    .join("");
+  const accountRows = accounts
+    .map(
+      (a) => `<tr>
+        <td>${escapeHtml(a.accountId || "")}</td>
+        <td>${escapeHtml(a.provider || "")}</td>
+        <td>${escapeHtml(String(a.calls || 0))}</td>
+        <td>${escapeHtml(String(a.errors || 0))}</td>
+        <td>${escapeHtml(String(a.tokens || 0))}</td>
+      </tr>`
+    )
+    .join("");
+  const recentRows = recent
+    .slice(0, 12)
+    .map((e) => {
+      const t = e.time ? new Date(e.time).toLocaleTimeString() : "";
+      return `<tr>
+        <td>${escapeHtml(t)}</td>
+        <td>${escapeHtml(e.provider || "")}</td>
+        <td>${escapeHtml(e.accountId || "")}</td>
+        <td>${escapeHtml(e.model || "")}</td>
+        <td>${escapeHtml(String(e.status || ""))}</td>
+        <td class="preview">${escapeHtml(e.preview || e.error || "")}</td>
+      </tr>`;
+    })
+    .join("");
+  return `
+    <h3>By provider</h3>
+    ${
+      providerRows
+        ? `<table>
+      <thead><tr><th>Provider</th><th>Calls</th><th>Errors</th><th>Tokens</th><th>Accounts</th></tr></thead>
+      <tbody>${providerRows}</tbody></table>`
+        : emptyState("No provider usage yet", "Send a Showcase prompt or a client chat to see per-provider totals.")
+    }
+    <h3>By account</h3>
+    ${
+      accountRows
+        ? `<table>
+      <thead><tr><th>Account</th><th>Provider</th><th>Calls</th><th>Errors</th><th>Tokens</th></tr></thead>
+      <tbody>${accountRows}</tbody></table>`
+        : emptyState("No account usage yet", "Each configured account that serves a request appears here.")
+    }
+    <h3>Recent</h3>
+    ${
+      recentRows
+        ? `<table>
+      <thead><tr><th>Time</th><th>Provider</th><th>Account</th><th>Model</th><th>Status</th><th>Preview</th></tr></thead>
+      <tbody>${recentRows}</tbody></table>`
+        : emptyState("No recent calls", "Usage is always written to usage.json next to the config.")
+    }
+    <p class="muted">${escapeHtml(data.path || "usage.json not persisted in this process")}</p>`;
+}
+
+function fillModelSelect(sel, models) {
+  const groups = {};
+  models.forEach((m) => {
+    const g = m.provider || "other";
+    (groups[g] || (groups[g] = [])).push(m);
+  });
+  Object.keys(groups)
+    .sort()
+    .forEach((provider) => {
+      const og = document.createElement("optgroup");
+      og.label = provider;
+      groups[provider].forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = `${m.displayName ? m.displayName + " · " : ""}${m.id} (${m.tier})`;
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
+    });
+}
+
+async function toggleRequestLog(box) {
+  try {
+    const d = await sendJSON("/admin/settings", "POST", { requestLog: box.checked });
+    toast(box.checked ? "Request log enabled" : "Request log disabled", "ok");
+    return d;
+  } catch (err) {
+    toast(err.message);
+    box.checked = !box.checked;
+    return null;
+  }
+}
+
 async function refreshLanBanner() {
   const el = document.getElementById("lan-banner");
   if (!el) return;
@@ -171,6 +300,17 @@ function accountsPage(root) {
     if (id) url = url.split(placeholder).join(id);
     document.getElementById("acc-url").value = url;
   };
+  const pickPreset = (id) => {
+    if (![...sel.options].some((o) => o.value === id)) {
+      toast("Preset unavailable: " + id);
+      return;
+    }
+    sel.value = id;
+    applyPreset();
+    document.getElementById("acc-id")?.focus();
+    document.querySelector("#acc-add")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    toast("Preset selected — add it above", "ok");
+  };
   document.getElementById("preset").addEventListener("change", applyPreset);
   document.getElementById("acc-account-id").addEventListener("input", fillAccountID);
   document.getElementById("acc-add").addEventListener("click", async () => {
@@ -206,9 +346,16 @@ function accountsPage(root) {
     try {
       const data = await getJSON("/admin/accounts");
       const accounts = data.accounts || [];
-      if (!accounts.length) {
-        host.innerHTML = emptyState("No accounts yet", "Add Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Ollama Cloud, or an API key using a preset above.");
-        return;
+      if (!accounts.length || data.onboarding) {
+        const cta = onboardingCard();
+        if (!accounts.length) {
+          host.innerHTML = cta;
+          bindOnboarding(host, pickPreset);
+          return;
+        }
+        host.innerHTML = cta;
+      } else {
+        host.innerHTML = "";
       }
       const rows = accounts
         .map((a) => {
@@ -226,9 +373,13 @@ function accountsPage(root) {
       </tr>`;
         })
         .join("");
-      host.innerHTML = `<table>
+      host.insertAdjacentHTML(
+        "beforeend",
+        `<table>
       <thead><tr><th>ID</th><th>Adapter</th><th>Tier</th><th>Base URL</th><th>Status</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table>`;
+      <tbody>${rows}</tbody></table>`
+      );
+      bindOnboarding(host, pickPreset);
       document.querySelectorAll("[data-del]").forEach((btn) => {
         btn.addEventListener("click", async () => {
           try {
@@ -450,8 +601,9 @@ function showcasePage(root) {
       <pre id="show-out">Pick a model and send.</pre>
     </section>
     <section class="card">
-      <h2>Recent usage</h2>
-      <pre id="show-usage">loading…</pre>
+      <h2>Usage by provider</h2>
+      <p class="muted">Totals from <code>usage.json</code>. Each provider is the adapter that served the call (multiple accounts for the same adapter share a row).</p>
+      <div id="show-usage">loading…</div>
     </section>`;
   let models = [];
   const sel = document.getElementById("show-model");
@@ -475,12 +627,7 @@ function showcasePage(root) {
         );
         document.getElementById("show-send").disabled = true;
       }
-      models.forEach((m) => {
-        const opt = document.createElement("option");
-        opt.value = m.id;
-        opt.textContent = `${m.displayName ? m.displayName + " · " : ""}${m.id} (${m.tier})`;
-        sel.appendChild(opt);
-      });
+      fillModelSelect(sel, models);
       sel.addEventListener("change", toggleVision);
       toggleVision();
     } catch (err) {
@@ -488,7 +635,7 @@ function showcasePage(root) {
       document.getElementById("show-out").textContent = err.message;
     }
     try {
-      document.getElementById("show-usage").textContent = JSON.stringify(await getJSON("/admin/usage"), null, 2);
+      document.getElementById("show-usage").innerHTML = usageTables(await getJSON("/admin/usage"));
     } catch (err) {
       document.getElementById("show-usage").textContent = err.message;
     }
@@ -511,7 +658,7 @@ function showcasePage(root) {
       }
       const data = await sendJSON("/admin/showcase", "POST", payload);
       out.textContent = data.content || JSON.stringify(data, null, 2);
-      document.getElementById("show-usage").textContent = JSON.stringify(await getJSON("/admin/usage"), null, 2);
+      document.getElementById("show-usage").innerHTML = usageTables(await getJSON("/admin/usage"));
     } catch (err) {
       out.textContent = err.message;
       toast(err.message);
@@ -534,7 +681,11 @@ function clientsPage(root) {
         <h2>${escapeHtml(c.name)}</h2>
         <p class="muted">${escapeHtml(c.notes)}</p>
         <p><code>${escapeHtml(c.baseURL)}</code> · cloak ${escapeHtml(c.cloak || "off")}</p>
-        <button class="btn" data-copy>Copy</button>
+        <p class="muted">Verify: <code>${escapeHtml(c.verify || "peaproxy clients verify " + c.name)}</code> against a running <code>peaproxy serve</code>.</p>
+        <div class="row snippet-actions">
+          <button class="btn" data-copy>Copy snippet</button>
+          <button class="btn" data-verify="${escapeHtml(c.verify || "")}">Copy verify</button>
+        </div>
         <pre>${escapeHtml(c.snippet)}</pre>
       </div>`
         )
@@ -548,6 +699,18 @@ function clientsPage(root) {
             toast("Copied preset", "ok");
           } catch (err) {
             toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-verify]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const cmd = btn.dataset.verify || "";
+          try {
+            await navigator.clipboard.writeText(cmd);
+            btn.textContent = "Copied verify";
+            toast("Copied " + cmd, "ok");
+          } catch (err) {
+            toast(cmd || err.message);
           }
         });
       });
@@ -569,7 +732,7 @@ function healthPage(root) {
       <div id="cd">loading…</div>
     </section>
     <section class="card"><h2>Gateway</h2><pre id="h">loading…</pre></section>
-    <section class="card"><h2>Usage</h2><pre id="u">loading…</pre></section>`;
+    <section class="card"><h2>Usage</h2><div id="u">loading…</div></section>`;
   const fmtRemaining = (ms) => {
     const n = Number(ms) || 0;
     if (n <= 0) return "expired";
@@ -624,7 +787,9 @@ function healthPage(root) {
     }
   });
   getJSON("/admin/usage")
-    .then((d) => (document.getElementById("u").textContent = JSON.stringify(d, null, 2)))
+    .then((d) => {
+      document.getElementById("u").innerHTML = usageTables(d);
+    })
     .catch((err) => {
       document.getElementById("u").textContent = err.message;
     });
@@ -686,14 +851,8 @@ function requestsPage(root) {
     }
   };
   box.addEventListener("change", async () => {
-    try {
-      await sendJSON("/admin/settings", "POST", { requestLog: box.checked });
-      toast(box.checked ? "Request log enabled" : "Request log disabled", "ok");
-      await load();
-    } catch (err) {
-      toast(err.message);
-      box.checked = !box.checked;
-    }
+    const d = await toggleRequestLog(box);
+    if (d) await load();
   });
   document.getElementById("req-refresh").addEventListener("click", load);
   load().then(() => {
@@ -707,43 +866,93 @@ function requestsPage(root) {
 }
 
 function settingsPage(root) {
-  root.innerHTML = `<section class="card"><h2>Settings</h2>
-    <p class="muted">Bind stays loopback unless <code>--allow-lan</code> (or <code>allowNonLoopback</code>) <strong>and</strong> a non-empty admin token. Hide does not block routing unless <code>hide.blockRouting</code> is true.</p>
-    <div id="lan-settings" class="warn" hidden></div>
-    <label>Admin token (sent as <code>X-Admin-Token</code> from this UI)
-      <input id="ui-token" type="password" autocomplete="off" />
-    </label>
-    <button class="btn" id="save-token">Save token in this browser</button>
-    <label class="row"><input type="checkbox" id="reqlog" /> Opt-in redacted request log (<code>requests.log</code>)</label>
-    <pre id="s">loading…</pre></section>`;
+  root.innerHTML = `
+    <section class="card">
+      <h2>Listen</h2>
+      <p class="muted">Bind stays loopback unless <code>--allow-lan</code> (or <code>allowNonLoopback</code>) <strong>and</strong> a non-empty admin token. Hide does not block routing unless <code>hide.blockRouting</code> is true.</p>
+      <p id="bind-line">loading…</p>
+      <div id="lan-settings" class="warn" hidden></div>
+      <label>Admin token (sent as <code>X-Admin-Token</code> from this UI)
+        <input id="ui-token" type="password" autocomplete="off" />
+      </label>
+      <button class="btn" id="save-token">Save token in this browser</button>
+      <p class="muted" id="token-req"></p>
+    </section>
+    <section class="card">
+      <h2>Config &amp; secrets</h2>
+      <p>Config path: <code id="cfg-path"></code> <button class="btn" id="copy-path">Copy path</button></p>
+      <p>Secret backend: <strong id="secret-backend"></strong></p>
+      <p class="muted" id="secret-note"></p>
+      <p class="muted">YAML lists accounts only. Tokens and inline API keys stay in the keychain or <code>secrets.enc</code> — never shown here.</p>
+    </section>
+    <section class="card">
+      <h2>Request log</h2>
+      <p class="muted">Same toggle as the Request log page. Usage counters still go to <code>usage.json</code> when this is off.</p>
+      <label class="row"><input type="checkbox" id="reqlog" /> Opt-in redacted request log (<code>requests.log</code>)</label>
+      <p class="muted" id="reqlog-path"></p>
+    </section>
+    <section class="card">
+      <h2>Catalog overlays</h2>
+      <p class="muted" id="overlay-summary"></p>
+      <details>
+        <summary>Raw settings JSON (no secrets)</summary>
+        <pre id="s">loading…</pre>
+      </details>
+    </section>`;
   const box = document.getElementById("reqlog");
   document.getElementById("ui-token").value = localStorage.getItem(TOKEN_KEY) || "";
   document.getElementById("save-token").addEventListener("click", () => {
     localStorage.setItem(TOKEN_KEY, document.getElementById("ui-token").value);
     toast("Admin token saved for this browser", "ok");
   });
+  const apply = (d) => {
+    const bind = document.getElementById("bind-line");
+    const loop = d.loopback ? "loopback" : "non-loopback";
+    bind.textContent = `Listening on ${d.bind || ""}:${d.port || ""} (${loop}).`;
+    const lan = document.getElementById("lan-settings");
+    if (d.lanWarning) {
+      lan.hidden = false;
+      lan.textContent = "This process is bound off loopback. Keep the admin token private. /healthz stays public; /admin requires the token.";
+    } else {
+      lan.hidden = true;
+      lan.textContent = "";
+    }
+    document.getElementById("token-req").textContent = d.adminTokenRequired
+      ? "Admin token is required for /admin on this bind."
+      : "Loopback: /admin does not require a token.";
+    document.getElementById("cfg-path").textContent = d.configPath || "(in-memory)";
+    document.getElementById("secret-backend").textContent = d.secretBackend || "file";
+    document.getElementById("secret-note").textContent = d.secretBackendNote || "";
+    box.checked = !!d.requestLog;
+    document.getElementById("reqlog-path").textContent = d.requestLog
+      ? "File: " + (d.requestLogPath || "requests.log")
+      : "No log file (enable to start writing).";
+    const pin = (d.catalog && d.catalog.pin) || [];
+    const rename = (d.catalog && d.catalog.rename) || {};
+    const hide = (d.hide && d.hide.models) || [];
+    document.getElementById("overlay-summary").textContent =
+      `Pin ${pin.length}, rename ${Object.keys(rename).length}, hide ${hide.length} model(s). Listing-only hide: ${d.listingOnlyHide !== false}. Edit pin/rename on Catalog.`;
+    document.getElementById("s").textContent = JSON.stringify(d, null, 2);
+  };
+  document.getElementById("copy-path").addEventListener("click", async () => {
+    const path = document.getElementById("cfg-path").textContent;
+    try {
+      await navigator.clipboard.writeText(path);
+      toast("Copied config path", "ok");
+    } catch (err) {
+      toast(path);
+    }
+  });
   getJSON("/admin/settings")
-    .then((d) => {
-      document.getElementById("s").textContent = JSON.stringify(d, null, 2);
-      box.checked = !!d.requestLog;
-      const lan = document.getElementById("lan-settings");
-      if (d.lanWarning) {
-        lan.hidden = false;
-        lan.textContent = "This process is bound off loopback. Keep the admin token private. /healthz stays public; /admin requires the token.";
-      }
-    })
+    .then(apply)
     .catch((err) => {
       document.getElementById("s").textContent = err.message;
+      document.getElementById("bind-line").textContent = err.message;
       toast(err.message);
     });
   box.addEventListener("change", async () => {
-    try {
-      const d = await sendJSON("/admin/settings", "POST", { requestLog: box.checked });
-      document.getElementById("s").textContent = JSON.stringify(d, null, 2);
-      toast("Settings saved", "ok");
-    } catch (err) {
-      toast(err.message);
-    }
+    const d = await toggleRequestLog(box);
+    if (d) apply(d);
   });
 }
 

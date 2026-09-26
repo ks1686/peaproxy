@@ -62,6 +62,60 @@ func TestConfigValidateOK(t *testing.T) {
 	}
 }
 
+func TestConfigValidateReportsOverlaysRequestLogAndSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	src := []byte(`schemaVersion: 1
+bind: 127.0.0.1
+port: 8317
+requestLog: true
+catalog:
+  pin:
+    - llama3.2
+  rename:
+    llama3.2: Llama local
+providers:
+  - id: ollama-local
+    adapter: ollama
+    tier: local
+    baseURL: http://127.0.0.1:11434/v1
+`)
+	if err := os.WriteFile(path, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"config", "validate", "--config", path}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"ok", "requestLog: true", "catalog.pin: 1", "catalog.rename: 1", "secrets: file"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestConfigValidateRejectsUnknownAdapter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	src := []byte(`schemaVersion: 1
+bind: 127.0.0.1
+port: 8317
+providers:
+  - id: weird
+    adapter: not-a-real-adapter
+    tier: paid
+`)
+	if err := os.WriteFile(path, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	err := ExecuteWithArgs([]string{"config", "validate", "--config", path}, out)
+	if err == nil || !strings.Contains(err.Error(), "unknown adapter") {
+		t.Fatalf("got %v\n%s", err, out)
+	}
+}
+
 func TestVersionFlag(t *testing.T) {
 	out := &bytes.Buffer{}
 	if err := ExecuteWithArgs([]string{"--version"}, out); err != nil {

@@ -421,9 +421,130 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
+		}
+	}
+}
+
+func TestAdminSettingsReportsPathBackendAndRequestLogWithoutSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/peaproxy.yaml"
+	s, _ := testServer(t)
+	s.gw.SetConfigPath(path)
+	req := httptest.NewRequest(http.MethodGet, "/admin/settings", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["configPath"] != path {
+		t.Fatalf("configPath: %#v", body["configPath"])
+	}
+	if body["secretBackend"] != "file" {
+		t.Fatalf("secretBackend: %#v", body["secretBackend"])
+	}
+	if body["loopback"] != true {
+		t.Fatalf("loopback: %#v", body["loopback"])
+	}
+	if _, ok := body["adminToken"]; ok {
+		t.Fatal("admin token must not appear in settings JSON")
+	}
+	raw := rr.Body.String()
+	for _, secret := range []string{"sk-", "accessToken", "refreshToken", "adminToken"} {
+		if strings.Contains(raw, secret) && secret != "adminToken" {
+			t.Fatalf("settings leaked %s: %s", secret, raw)
+		}
+	}
+	if strings.Contains(raw, `"adminToken"`) {
+		t.Fatalf("adminToken field leaked: %s", raw)
+	}
+	post := httptest.NewRequest(http.MethodPost, "/admin/settings", strings.NewReader(`{"requestLog":true}`))
+	prr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(prr, post)
+	if prr.Code != http.StatusOK {
+		t.Fatalf("post %d %s", prr.Code, prr.Body)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(prr.Body.Bytes(), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after["requestLog"] != true {
+		t.Fatalf("requestLog not synced: %#v", after)
+	}
+	logPath, _ := after["requestLogPath"].(string)
+	if !strings.HasSuffix(logPath, "requests.log") {
+		t.Fatalf("requestLogPath: %#v", after["requestLogPath"])
+	}
+	if _, ok := after["catalog"].(map[string]any)["Pin"]; ok {
+		t.Fatalf("catalog JSON should use yaml-aligned lowercase keys: %#v", after["catalog"])
+	}
+}
+
+func TestAdminClientsIncludeVerifyCommand(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/clients", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"verify":"peaproxy clients verify cursor --chat"`) {
+		t.Fatalf("%s", rr.Body)
+	}
+}
+
+func TestAdminAccountsOnboardingFlag(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if strings.Contains(rr.Body.String(), `"onboarding":true`) {
+		t.Fatalf("test server has a configured compat account, should not onboard: %s", rr.Body)
+	}
+	cfg := config.Default()
+	gw, err := gateway.New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := New(Options{Gateway: gw})
+	req2 := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	rr2 := httptest.NewRecorder()
+	empty.Handler().ServeHTTP(rr2, req2)
+	if !strings.Contains(rr2.Body.String(), `"onboarding":true`) {
+		t.Fatalf("%s", rr2.Body)
+	}
+}
+
+func TestAdminUsageIncludesByProvider(t *testing.T) {
+	s, _ := testServer(t)
+	chat := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, chat)
+	if crr.Code != http.StatusOK {
+		t.Fatalf("chat %d %s", crr.Code, crr.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/usage", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"byProvider"`) {
+		t.Fatalf("%s", rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"provider":"openai_compat"`) && !strings.Contains(rr.Body.String(), `"provider":"local"`) {
+		// account adapter is openai_compat in testServer
+		if !strings.Contains(rr.Body.String(), "openai_compat") {
+			t.Fatalf("expected provider on usage: %s", rr.Body)
 		}
 	}
 }
