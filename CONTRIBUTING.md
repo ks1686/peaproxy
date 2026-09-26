@@ -19,7 +19,7 @@ go run ./cmd/peaproxy --version
 
 Default listen address is `127.0.0.1:8317`. Non-loopback bind requires `allowNonLoopback: true` and a non-empty `adminToken`.
 
-Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows, amd64+arm64) and stamps `internal/version.Version` into `--version`. `go install github.com/ks1686/peaproxy/cmd/peaproxy@vX.Y.Z` reads the module version from `runtime/debug.ReadBuildInfo()` when ldflags are unset.
+Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows, amd64+arm64) and stamps `internal/version.Version` into `--version`. Stable tags also push a Homebrew cask to `ks1686/homebrew-tap` when `HOMEBREW_TAP_GITHUB_TOKEN` is set (GitHub Release assets still publish if it is missing). `go install github.com/ks1686/peaproxy/cmd/peaproxy@vX.Y.Z` reads the module version from `runtime/debug.ReadBuildInfo()` when ldflags are unset.
 
 ## Conventions
 

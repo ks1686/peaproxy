@@ -31,6 +31,31 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# ── Homebrew tap ──────────────────────────────────────────────────────────────
+# Publishes a cask to ks1686/homebrew-tap on every non-prerelease tag.
+# Requires secret: HOMEBREW_TAP_GITHUB_TOKEN (fine-grained PAT with
+# Contents: read+write on the homebrew-tap repo).
+#
+# Empty or unset HOMEBREW_TAP_GITHUB_TOKEN → skip upload so GitHub
+# Releases still publish. With the secret set, skip_upload is auto
+# (stable tags upload; prereleases do not).
+#
+# Install after setup:
+#   brew tap ks1686/tap
+#   brew install --cask peaproxy
+homebrew_casks:
+  - name: peaproxy
+    repository:
+      owner: ks1686
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/ks1686/peaproxy"
+    description: "Localhost multi-provider AI gateway with API keys, local runtimes, and optional subscription OAuth."
+    license: MIT
+    skip_upload: '{{ if isEnvSet "HOMEBREW_TAP_GITHUB_TOKEN" }}{{ if .Env.HOMEBREW_TAP_GITHUB_TOKEN }}auto{{ else }}true{{ end }}{{ else }}true{{ end }}'
+    binaries:
+      - peaproxy
+
 changelog:
   sort: asc
   filters:
