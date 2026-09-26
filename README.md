@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse; ToS/ban risk; API keys remain the official path), first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
 
-Status: **v0.1.0-ready** (cut the tag after this checklist is green on `main`). Add Ollama, LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face, Anthropic/OpenAI/OpenRouter keys, OpenCode Zen, or subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse). Live models, chat, Claude SSE, vision in Showcase, multi-account failover. **Do not tag a release from this feature PR.**
+Status: **v0.2.0** — subscription OAuth is in, tokens and inline API keys go to the **OS keychain** (encrypted file fallback). Qwen consumer OAuth remains stubbed. **ToS/ban risk is unchanged: authors are not liable; prefer official API keys.**
 
 ## One-liner
 
@@ -51,7 +51,7 @@ peaproxy clients show pi         # both wires
 peaproxy clients verify cursor --chat
 ```
 
-First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is persisted as `usage.json` next to the config; set `requestLog: true` for a redacted `requests.log`.
+First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is persisted as `usage.json` next to the config; set `requestLog: true` for a redacted `requests.log`. OAuth tokens and inline API keys are stored in the OS keychain, or an encrypted file next to the YAML when no keychain is available. YAML still lists accounts (email, adapter) without printing secrets.
 
 | Command | Purpose |
 |---|---|
@@ -82,7 +82,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 
 Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generativelanguage.googleapis.com/v1beta/openai`), not `generateContent`. Adapter ids: `google` and alias `gemini`. Docs: [PROVIDERS.md](docs/PROVIDERS.md).
 
-## v0.1.0 readiness checklist
+## What shipped in v0.2.0
 
 - [x] Live catalog, OpenAI + Claude chat (incl. true SSE), vision Showcase
 - [x] Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters
@@ -91,18 +91,10 @@ Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generati
 - [x] Clients: Cursor, Claude Code, OpenCode, Pi (both wires), Codex, Continue, Cline + `clients verify`
 - [x] First-run default config on `serve`; example YAML; `PEAPROXY_*` env overlays
 - [x] Refuse `0.0.0.0` without `--allow-lan` + admin token; UI LAN warning
-- [x] OAuth: Claude Pro/Max + ChatGPT/Codex subscription login (ToS/ban risk documented; API keys remain official) — [OAUTH.md](docs/OAUTH.md)
-- [ ] Tag **`v0.1.0`** on `main` after CI is green (GoReleaser publishes binaries). Do not tag from a feature PR.
+- [x] Subscription OAuth: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse (ToS/ban risk documented; API keys remain official) — [OAUTH.md](docs/OAUTH.md)
+- [x] Tag **`v0.2.0`** on `main` (GoReleaser publishes binaries)
 
-### After merge: how to tag
-
-```bash
-git checkout main && git pull
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
-```
-
-Wait for the `release` workflow. Confirm the GitHub Release assets (linux/darwin/windows, amd64+arm64) before calling it shipped. Prefer this over `gh release create` unless that release is already clean.
+Post-v0.2 polish in this tree: OS keychain / encrypted-file secrets; Claude token 403 errors point at docs and the official API-key path. Qwen OAuth stays **not yet** (no CPA consumer flow).
 
 ## Why this exists
 
@@ -123,8 +115,8 @@ Details: [docs/PLAN.md](docs/PLAN.md), [docs/COMPETITOR-WINS.md](docs/COMPETITOR
 ## Security
 
 - Default bind is **loopback**. Binding `0.0.0.0` requires `--allow-lan` **and** a non-empty admin token (`docs/CONFIG.md`).
-- Never log secrets. Opt-in request log is redacted.
-- **ToS:** Claude Pro/Max and ChatGPT/Codex **subscription OAuth** may violate a provider’s terms and can result in account bans. PeaProxy authors are **not liable**. Prefer official API keys. OpenCode Zen **free** models may train on prompts — see catalog privacy notes and [OpenCode Zen docs](https://opencode.ai/docs/zen/). Details: [docs/OAUTH.md](docs/OAUTH.md).
+- Never log secrets. Opt-in request log is redacted. OAuth tokens and inline API keys are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) or an AES-GCM file next to the config when no keychain is available. YAML lists accounts without printing those secrets.
+- **ToS:** **Subscription OAuth** (Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) may violate a provider’s terms and can result in account bans. PeaProxy authors are **not liable**. Prefer official API keys. OpenCode Zen **free** models may train on prompts — see catalog privacy notes and [OpenCode Zen docs](https://opencode.ai/docs/zen/). Details: [docs/OAUTH.md](docs/OAUTH.md).
 - **GitHub Models is retired** (2026-07-30) and is not a provider.
 
 ## License

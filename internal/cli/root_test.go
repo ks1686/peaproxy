@@ -2,8 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ks1686/peaproxy/internal/config"
 )
 
 func TestRootHelpListsPlanCommands(t *testing.T) {
@@ -156,5 +160,51 @@ func TestConfigInitWritesFile(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "wrote") {
 		t.Fatalf("%s", out)
+	}
+}
+
+func TestAccountsListOmitsSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	cfg := config.Default()
+	cfg.Providers = append(cfg.Providers, config.Provider{
+		ID:      "anthropic-oauth",
+		Adapter: "anthropic_oauth",
+		Tier:    "paid",
+		OAuth: &config.OAuthToken{
+			AccessToken:  "secret-access-token",
+			RefreshToken: "secret-refresh-token",
+			Email:        "a@b.c",
+		},
+	})
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"accounts", "list", "--config", path}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, "secret-access-token") || strings.Contains(got, "secret-refresh-token") {
+		t.Fatalf("token leaked:\n%s", got)
+	}
+	if !strings.Contains(got, "anthropic-oauth") || !strings.Contains(got, "auth=oauth") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestConfigShowReportsSecretBackend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	if err := os.WriteFile(path, []byte("schemaVersion: 1\nbind: 127.0.0.1\nport: 8317\nproviders: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"config", "show", "--config", path}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "secrets: file") {
+		t.Fatalf("%s", got)
 	}
 }

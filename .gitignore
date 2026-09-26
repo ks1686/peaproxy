@@ -30,5 +30,7 @@ go.work.sum
 .env.*
 *.pem
 *.key
+secrets.enc
+secrets.index
 peaproxy.yaml
 !configs/peaproxy.example.yaml

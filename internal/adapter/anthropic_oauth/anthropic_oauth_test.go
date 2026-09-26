@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,9 @@ func TestExchangeAndRefreshUseJSONBodies(t *testing.T) {
 		bodies = append(bodies, string(raw))
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("content-type %s", r.Header.Get("Content-Type"))
+		}
+		if r.Header.Get("User-Agent") != TokenUserAgent {
+			t.Errorf("user-agent %s", r.Header.Get("User-Agent"))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  "at-new",
@@ -148,6 +152,31 @@ func TestValidateRequiresToken(t *testing.T) {
 	a := testAdapter(t, "http://127.0.0.1:9")
 	if err := a.Validate(context.Background()); err == nil {
 		t.Fatal("expected auth required")
+	}
+}
+
+func TestTokenEndpoint403ExplainsCloudflare(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, "blocked")
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.pending = &pendingAuth{pkce: oauth.PKCE{Verifier: "ver"}, state: "st"}
+	err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "code-1")
+	if err == nil {
+		t.Fatal("expected 403")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "403") || !strings.Contains(msg, "Cloudflare") {
+		t.Fatalf("want Cloudflare 403 hint, got %v", err)
+	}
+	if !strings.Contains(msg, "console.anthropic.com") || !strings.Contains(msg, "docs/OAUTH.md") {
+		t.Fatalf("want key workaround and docs pointer, got %v", err)
+	}
+	var he adapter.HTTPError
+	if !errors.As(err, &he) || he.Status != 403 {
+		t.Fatalf("want HTTPError 403, got %T %v", err, err)
 	}
 }
 

@@ -1,6 +1,6 @@
 # PeaProxy — approved plan (2026-09-26)
 
-Status: **APPROVED**. Native API-key adapters shipped. **Subscription OAuth shipped 2026-09-26** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) under an explicit owner ToS/ban-risk override ([OAUTH.md](OAUTH.md)). Qwen consumer OAuth is stubbed not-yet.
+Status: **APPROVED**. Native API-key adapters shipped. **Subscription OAuth shipped 2026-09-26** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) under an explicit owner ToS/ban-risk override ([OAUTH.md](OAUTH.md)). **v0.2.0 tagged from that commit.** Qwen consumer OAuth is stubbed not-yet. Post-v0.2: OS keychain / encrypted-file secrets wired.
 
 Overnight scope that produced this repo: research → incorporate free providers → scaffold. No pea-pod marketing page until a real release exists.
 
@@ -88,27 +88,28 @@ Clients → Local HTTP (OpenAI + Claude) → Router (model → account, failover
 
 Adapter contract: `ListModels`, `Chat` (stream/non-stream), `Auth*` / `Validate`, `Capabilities`.
 
-Config: versioned YAML + env; secrets in OS keychain with encrypted file fallback (**keychain not wired**).
+Config: versioned YAML + env; secrets in OS keychain with encrypted file fallback (**wired post-v0.2**).
 
 ## 10. Phases
 
 0. Plan lock ✅
-1. Spike: 1 OAuth + 1 API-key + Ollama; chat + image; live `/v1/models`; minimal UI + free/paid filter stub
-2. Core P0 providers; multi-account failover; CLI; harness presets for Cursor + Claude Code + OpenCode + Pi
-3. Catalog polish (hide/filter); showcase; request log; health
-4. OAuth maximize + more free adapters
-5. Releases + pea-pod.me/peaproxy page
+1. Spike: 1 OAuth + 1 API-key + Ollama; chat + image; live `/v1/models`; minimal UI + free/paid filter stub ✅
+2. Core P0 providers; multi-account failover; CLI; harness presets for Cursor + Claude Code + OpenCode + Pi ✅
+3. Catalog polish (hide/filter); showcase; request log; health ✅
+4. OAuth maximize + more free adapters ✅ (Qwen consumer OAuth still stubbed)
+5. Releases + pea-pod.me/peaproxy page — **v0.2.0 tagged**; marketing page is a separate repo
 
-**This tree implements native API-key adapters (Anthropic, OpenAI, OpenRouter, Zen), Claude SSE, vision Showcase, failover + persisted usage, release scaffolding, and subscription OAuth for Claude, Codex, Gemini/Antigravity, xAI, Kimi, and Meta Muse (ToS risk documented).**
+**This tree implements native API-key adapters (Anthropic, OpenAI, OpenRouter, Zen), Claude SSE, vision Showcase, failover + persisted usage, release scaffolding, subscription OAuth for Claude, Codex, Gemini/Antigravity, xAI, Kimi, and Meta Muse (ToS risk documented), and OS keychain / encrypted-file secret storage.**
 
 ## 11. Security
 
 - Default `127.0.0.1:8317`
 - Optional bind-all requires explicit flag + UI warning + admin token
 - Never log secrets; redact request inspector by default
+- OAuth tokens and inline API keys: OS keychain, else AES-GCM file next to config
 - README ToS warning for subscription OAuth
 
-## 12. Success (v0.1)
+## 12. Success (v0.1 — met; v0.2 adds OAuth maximize + secret store)
 
 - ≥2 OAuth + ≥2 API-key + Ollama free
 - Live models appear without code change when provider adds one

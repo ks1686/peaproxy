@@ -3,6 +3,8 @@
 # Copy to ~/.config/peaproxy/config.yaml or pass --config.
 # First `peaproxy serve` writes this skeleton if the file is missing.
 # File mode should stay 0600. Prefer apiKeyEnv over inline apiKey.
+# OAuth tokens and inline apiKey are stored in the OS keychain (or
+# secrets.enc next to this file), not as plaintext in YAML.
 #
 # Override order: config file < PEAPROXY_* env < CLI flags.
 # See docs/CONFIG.md.
@@ -93,12 +95,12 @@ providers:
 
   # Claude Pro/Max subscription OAuth. ToS/ban risk — docs/OAUTH.md.
   # peaproxy auth login --provider anthropic
+  # Tokens are stored in the OS keychain / secrets.enc, not in this YAML.
   # - id: anthropic-oauth
   #   adapter: anthropic_oauth
   #   tier: paid
   #   oauth:
-  #     accessToken: (written by auth login)
-  #     refreshToken: (written by auth login)
+  #     email: (written by auth login)
 
   # ChatGPT/Codex subscription OAuth. ToS/ban risk — docs/OAUTH.md.
   # peaproxy auth login --provider openai

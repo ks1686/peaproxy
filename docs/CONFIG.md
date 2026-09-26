@@ -23,10 +23,13 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 | `PEAPROXY_ADMIN_TOKEN` | Admin token for `/admin` when bound off loopback |
 | `PEAPROXY_ALLOW_LAN` | `1` / `true` / `yes` / `on` sets `allowNonLoopback` |
 | `PEAPROXY_REQUEST_LOG` | same truthy values enable redacted `requests.log` |
+| `PEAPROXY_SECRET_BACKEND` | `file` forces the AES-GCM file next to the config; `keyring` requires the OS store (macOS Keychain / Windows Credential Manager / Linux Secret Service). Unset: try keyring, then file. `go test` always uses `file`. |
 
-Provider keys stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML.
+Prefer `apiKeyEnv` over inline `apiKey`. Inline keys and OAuth tokens are **not** written back to YAML; they go to the secret store. YAML still lists `providers[]` (id, adapter, email, expiry, non-secret extra).
 
-Subscription OAuth tokens are stored under `providers[].oauth` (access/refresh, expiry, email, optional extra). File mode `0600`. Never commit that file. `peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|meta` writes them. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability.
+Provider keys can also stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML.
+
+`peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|meta` writes the account row plus secrets. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability. Never commit `config.yaml`, `secret.key`, or `secrets.enc`.
 
 ## LAN bind
 

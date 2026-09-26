@@ -129,7 +129,7 @@ Examples:
 			if err := config.Save(path, cfg); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s account %q to %s (email=%s). Tokens are never printed.\n", adapterName, accountID, path, ct.Email)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s account %q to %s (email=%s). Tokens are stored in the OS keychain or an encrypted file next to the config, never printed.\n", adapterName, accountID, path, ct.Email)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Smoke: peaproxy models list --filter subscription_oauth")
 			return nil
 		},

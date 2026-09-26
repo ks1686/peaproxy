@@ -133,7 +133,16 @@ func accountsCmd(configPath *string) *cobra.Command {
 				return nil
 			}
 			for _, p := range cfg.Providers {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\tadapter=%s\ttier=%s\tbase=%s\n", p.ID, p.Adapter, p.Tier, p.BaseURL)
+				auth := "none"
+				switch {
+				case p.HasOAuth():
+					auth = "oauth"
+				case p.APIKeyEnv != "":
+					auth = "env:" + p.APIKeyEnv
+				case p.APIKey != "":
+					auth = "key"
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\tadapter=%s\ttier=%s\tbase=%s\tauth=%s\n", p.ID, p.Adapter, p.Tier, p.BaseURL, auth)
 			}
 			return nil
 		},
@@ -194,7 +203,7 @@ func statusCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: subscription (ToS risk; docs/OAUTH.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: subscription (ToS risk; docs/OAUTH.md)\nsecrets: OS keychain or encrypted file (docs/CONFIG.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
 			return nil
 		},
 	}
@@ -232,8 +241,13 @@ func configCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nproviders: %d\nhide.blockRouting: %v\n",
-				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, len(cfg.Providers), cfg.Hide.BlockRouting)
+			store, _ := config.OpenStore(path)
+			backend := "file"
+			if store != nil {
+				backend = string(store.Backend())
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nproviders: %d\nhide.blockRouting: %v\nsecrets: %s\n",
+				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, len(cfg.Providers), cfg.Hide.BlockRouting, backend)
 			return nil
 		},
 	})
