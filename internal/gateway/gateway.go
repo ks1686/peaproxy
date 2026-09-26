@@ -228,6 +228,7 @@ func (g *Gateway) Annotated(filter catalog.Filter) []catalog.Model {
 	q.ForClients = false
 	out := catalog.AllAnnotated(g.models, q)
 	g.stampImageOutReadyLocked(out)
+	g.stampEmbeddingsReadyLocked(out)
 	return out
 }
 
@@ -239,6 +240,17 @@ func (g *Gateway) stampImageOutReadyLocked(models []catalog.Model) {
 	}
 	for i := range models {
 		models[i].ImageOutReady = catalog.HasModality(models[i], "image_out") && ready[models[i].AccountID]
+	}
+}
+
+func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
+	ready := make(map[string]bool, len(g.inst))
+	for _, inst := range g.inst {
+		_, ok := inst.Adapter.(adapter.Embedder)
+		ready[inst.Provider.ID] = ok && inst.Adapter.Capabilities().Embeddings
+	}
+	for i := range models {
+		models[i].EmbeddingsReady = catalog.HasModality(models[i], "embeddings") && ready[models[i].AccountID]
 	}
 }
 
@@ -355,6 +367,63 @@ func (g *Gateway) supportsImageOut(id string) bool {
 		return catalog.HasModality(m, "image_out")
 	}
 	return slices.Contains(catalog.InferModalities(id), "image_out")
+}
+
+// CreateEmbeddings proxies OpenAI-compatible POST /v1/embeddings.
+// Upstream is only called when the model is tagged embeddings and the adapter
+// implements Embedder with Capabilities.Embeddings.
+func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.EmbeddingResponse, string, error) {
+	peek := jsonx.PeekBody(raw)
+	if strings.TrimSpace(peek.Model) == "" {
+		return adapter.EmbeddingResponse{}, "", adapter.ErrEmbeddingModelRequired
+	}
+	if !g.supportsEmbeddings(peek.Model) {
+		return adapter.EmbeddingResponse{}, "", adapter.ErrModelNotEmbeddings
+	}
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return adapter.EmbeddingResponse{}, "", err
+	}
+	var last error
+	var lastAccount string
+	tried := false
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		emb, ok := inst.Adapter.(adapter.Embedder)
+		if !ok || !inst.Adapter.Capabilities().Embeddings {
+			last = adapter.ErrEmbeddingsUnsupported
+			continue
+		}
+		tried = true
+		resp, err := emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: peek.Model, Raw: raw})
+		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
+			return resp, lastAccount, nil
+		}
+		last = err
+		if retryable(err) {
+			g.markCooldown(inst.Provider.ID, err)
+			continue
+		}
+		return adapter.EmbeddingResponse{}, lastAccount, err
+	}
+	if !tried {
+		return adapter.EmbeddingResponse{}, lastAccount, adapter.ErrEmbeddingsUnsupported
+	}
+	if retryable(last) {
+		return adapter.EmbeddingResponse{}, lastAccount, cooldownErr(last)
+	}
+	return adapter.EmbeddingResponse{}, lastAccount, last
+}
+
+func (g *Gateway) supportsEmbeddings(id string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	q := g.queryLocked()
+	if m, ok := catalog.FindRoutable(g.models, q, id); ok {
+		return catalog.HasModality(m, "embeddings")
+	}
+	return slices.Contains(catalog.InferModalities(id), "embeddings")
 }
 
 // Responses uses native Responses when available, otherwise OpenAI chat translation.

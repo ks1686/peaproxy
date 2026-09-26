@@ -32,12 +32,23 @@ var ErrModelNotImageOut = errors.New("model does not support image generation")
 // (chat-only or subscription OAuth — use an API-key OpenAI-compat path).
 var ErrImageOutUnsupported = errors.New("image generation is not supported by this adapter; use an API-key OpenAI, Google, xAI, or OpenAI-compat account")
 
+// ErrEmbeddingModelRequired means POST /v1/embeddings omitted model.
+var ErrEmbeddingModelRequired = errors.New("embeddings requires a model")
+
+// ErrModelNotEmbeddings means the requested model is not tagged embeddings.
+var ErrModelNotEmbeddings = errors.New("model does not support embeddings")
+
+// ErrEmbeddingsUnsupported means the routed adapter cannot proxy embeddings
+// (chat-only or subscription OAuth — use an API-key OpenAI-compat path).
+var ErrEmbeddingsUnsupported = errors.New("embeddings is not supported by this adapter; use an API-key OpenAI, Google, xAI, or OpenAI-compat account")
+
 // Capabilities is advertised per adapter from live data where possible.
 type Capabilities struct {
 	Chat       bool `json:"chat"`
 	Stream     bool `json:"stream"`
 	VisionIn   bool `json:"visionIn"`
 	ImageOut   bool `json:"imageOut"`
+	Embeddings bool `json:"embeddings"`
 	Tools      bool `json:"tools"`
 	ListModels bool `json:"listModels"`
 	OAuth      bool `json:"oauth"`
@@ -181,6 +192,61 @@ func GenerateImageFrom(inner Adapter, ctx context.Context, req ImageRequest) (Im
 		return ImageResponse{}, ErrImageOutUnsupported
 	}
 	return gen.GenerateImage(ctx, req)
+}
+
+// EmbeddingRequest is a provider-neutral embeddings call.
+type EmbeddingRequest struct {
+	Model string
+	Input string
+	// Raw is the original client body for adapters that pass through OpenAI-compat JSON.
+	Raw []byte
+}
+
+// EmbeddingResponse is a non-streaming embeddings result.
+type EmbeddingResponse struct {
+	Model      string
+	Raw        []byte
+	Count      int
+	Dimensions int
+}
+
+// Embedder is optional. API-key OpenAI-compat adapters that can POST
+// /embeddings implement it. Subscription OAuth adapters must not.
+type Embedder interface {
+	CreateEmbeddings(ctx context.Context, req EmbeddingRequest) (EmbeddingResponse, error)
+}
+
+// ParseEmbeddingResponse extracts count/dimensions from an OpenAI-shaped
+// embeddings body without reserializing it.
+func ParseEmbeddingResponse(raw []byte, model string) EmbeddingResponse {
+	var parsed struct {
+		Model string `json:"model"`
+		Data  []struct {
+			Embedding json.RawMessage `json:"embedding"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	out := EmbeddingResponse{Model: model, Raw: raw, Count: len(parsed.Data)}
+	if parsed.Model != "" {
+		out.Model = parsed.Model
+	}
+	if len(parsed.Data) == 0 {
+		return out
+	}
+	var floats []float64
+	if err := json.Unmarshal(parsed.Data[0].Embedding, &floats); err == nil {
+		out.Dimensions = len(floats)
+	}
+	return out
+}
+
+// EmbedFrom forwards to inner when it implements Embedder.
+func EmbedFrom(inner Adapter, ctx context.Context, req EmbeddingRequest) (EmbeddingResponse, error) {
+	emb, ok := inner.(Embedder)
+	if !ok {
+		return EmbeddingResponse{}, ErrEmbeddingsUnsupported
+	}
+	return emb.CreateEmbeddings(ctx, req)
 }
 
 // NativeMessages is implemented by adapters that speak Anthropic /v1/messages natively.

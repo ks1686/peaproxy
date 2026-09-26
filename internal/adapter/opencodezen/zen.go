@@ -84,6 +84,10 @@ func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (
 	return adapter.GenerateImageFrom(a.inner, ctx, req)
 }
 
+func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
+	return adapter.EmbedFrom(a.inner, ctx, req)
+}
+
 func looksFree(id string) bool {
 	lower := strings.ToLower(id)
 	if strings.HasSuffix(lower, "-free") || strings.Contains(lower, "-free-") || strings.Contains(lower, " free") {

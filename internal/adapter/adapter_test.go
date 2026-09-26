@@ -412,6 +412,92 @@ func TestOAuthCompatDoesNotProxyImageOut(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatCreateEmbeddingsProxiesUpstream(t *testing.T) {
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+		case "/v1/embeddings":
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			raw, _ := io.ReadAll(r.Body)
+			gotBody = string(raw)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"model":  "text-embedding-3-small",
+				"data": []map[string]any{{
+					"object":    "embedding",
+					"index":     0,
+					"embedding": []float64{0.1, 0.2, 0.3},
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	a, err := openai_compat.New(adapter.Options{ID: "oa", BaseURL: srv.URL + "/v1", APIKey: "sk-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	emb, ok := a.(adapter.Embedder)
+	if !ok {
+		t.Fatal("openai_compat must implement Embedder")
+	}
+	if !a.Capabilities().Embeddings {
+		t.Fatal("openai_compat must advertise a real embeddings proxy")
+	}
+	resp, err := emb.CreateEmbeddings(context.Background(), adapter.EmbeddingRequest{
+		Model: "text-embedding-3-small",
+		Raw:   []byte(`{"model":"text-embedding-3-small","input":"hello pea"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/embeddings" {
+		t.Fatalf("path %s", gotPath)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("auth %s", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"input":"hello pea"`) {
+		t.Fatalf("body %s", gotBody)
+	}
+	arrayResp, err := emb.CreateEmbeddings(context.Background(), adapter.EmbeddingRequest{
+		Model: "text-embedding-3-small",
+		Raw:   []byte(`{"model":"text-embedding-3-small","input":["a","b"],"encoding_format":"float","dimensions":3}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, `"input":["a","b"]`) || !strings.Contains(gotBody, `"encoding_format":"float"`) {
+		t.Fatalf("array body %s", gotBody)
+	}
+	if arrayResp.Count != 1 {
+		t.Fatalf("array resp %#v", arrayResp)
+	}
+	if resp.Count != 1 || resp.Dimensions != 3 {
+		t.Fatalf("parsed %#v", resp)
+	}
+	if !bytes.Contains(resp.Raw, []byte(`"embedding"`)) {
+		t.Fatalf("raw %s", resp.Raw)
+	}
+}
+
+func TestOAuthCompatDoesNotProxyEmbeddings(t *testing.T) {
+	a, err := oauthcompat.Open(adapter.Options{ID: "muse", BaseURL: "http://127.0.0.1:9/v1"}, "meta_oauth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Capabilities().Embeddings {
+		t.Fatal("subscription OAuth must not advertise embeddings")
+	}
+	if _, ok := any(a).(adapter.Embedder); ok {
+		t.Fatal("subscription OAuth must not implement Embedder")
+	}
+}
+
 func containsStr(list []string, want string) bool {
 	for _, s := range list {
 		if s == want {

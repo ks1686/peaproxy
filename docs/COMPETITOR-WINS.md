@@ -79,6 +79,6 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 ## Nice-to-have (not 1.0 blockers)
 
 - Usage statistics persistence — **shipped** (`usage.json`)
-- Embeddings endpoint — not shipped
+- Embeddings endpoint — **shipped** (`POST /v1/embeddings` for keyed OpenAI-compat + `embeddings` models)
 - Image generations API — **shipped** (`POST /v1/images/generations` for keyed OpenAI-compat + `image_out` models)
 - Quota remaining API when provider exposes it — not shipped

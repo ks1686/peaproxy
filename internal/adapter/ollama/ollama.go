@@ -114,13 +114,14 @@ func (a *Adapter) listTags(ctx context.Context) ([]catalog.Model, error) {
 	out := make([]catalog.Model, 0, len(parsed.Models))
 	for _, m := range parsed.Models {
 		out = append(out, catalog.Model{
-			ID:        m.Name,
-			Provider:  Name,
-			AccountID: a.id,
-			Tier:      catalog.TierLocal,
-			Status:    "ready",
-			Exposed:   true,
-			Routable:  true,
+			ID:         m.Name,
+			Provider:   Name,
+			AccountID:  a.id,
+			Tier:       catalog.TierLocal,
+			Modalities: catalog.InferModalities(m.Name),
+			Status:     "ready",
+			Exposed:    true,
+			Routable:   true,
 		})
 	}
 	return out, nil
@@ -136,6 +137,10 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 
 func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
 	return adapter.GenerateImageFrom(a.inner, ctx, req)
+}
+
+func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
+	return adapter.EmbedFrom(a.inner, ctx, req)
 }
 
 func tagLocal(models []catalog.Model, account string) []catalog.Model {

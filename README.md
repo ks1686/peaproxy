@@ -76,6 +76,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |
 | Image-out / `POST /v1/images/generations` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
+| Embeddings / `POST /v1/embeddings` | **Shipped** for API-key OpenAI-compat when the catalog tags `embeddings`. Showcase can try. OAuth / Messages-only adapters refuse clearly (no fake vectors). Quota-remaining is later |
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse) | Shipped, **ToS/ban risk** |
@@ -88,7 +89,6 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Loopback default; LAN needs token | Shipped |
 | macOS / Windows tray | **No, by design** (CLI + localhost UI) |
 | Claude OAuth through Cloudflare | Stock Go TLS; may **403**. Prefer API key. No uTLS. |
-| Embeddings endpoint | Not shipped |
 
 Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PLAN.md](docs/PLAN.md).
 
@@ -96,7 +96,7 @@ Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PL
 
 1. **Accounts** — pick a preset. Official **API key** and **local** presets first. OAuth presets show a ban-risk warning. Workers AI needs an account id (`CLOUDFLARE_ACCOUNT_ID`). Presets show the env var **name** they expect and whether it is set (never the value).
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename. Filters persist in the UI.
-3. **Showcase** — try a prompt; `image_in` models accept an image URL or upload. `image_out` one-click generates via `/v1/images/generations` when the account can proxy it.
+3. **Showcase** — try a prompt; `image_in` models accept an image URL or upload. `image_out` one-click generates via `/v1/images/generations` when the account can proxy it. `embeddings` models try via `/v1/embeddings`.
 4. **Request log** — opt-in redacted inspector (`requestLog: true` or the UI toggle).
 5. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
 
@@ -111,6 +111,9 @@ curl -s http://127.0.0.1:8317/v1/messages \
 curl -s http://127.0.0.1:8317/v1/images/generations \
   -H 'Content-Type: application/json' \
   -d '{"model":"dall-e-3","prompt":"a pea pod icon"}'
+curl -s http://127.0.0.1:8317/v1/embeddings \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"text-embedding-3-small","input":"hello pea"}'
 peaproxy clients show cursor
 peaproxy clients show opencode   # includes /v1
 peaproxy clients show claude-code  # does NOT include /v1
@@ -146,6 +149,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `POST /v1/responses` | Codex / OpenAI Responses: native tools pass-through for Codex OAuth (minus `stream_options`); other adapters round-trip function tools via chat |
 | `POST /v1/images/generations` | OpenAI Images API for models tagged `image_out`; refused (no chat fake) otherwise |
+| `POST /v1/embeddings` | OpenAI Embeddings API for models tagged `embeddings`; refused (no chat fake) otherwise |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
 | `GET /admin/health` | Bind, **adapter health**, **account cooldowns** with remaining time (token required off loopback) |

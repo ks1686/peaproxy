@@ -100,6 +100,7 @@ These are accepted 0.2.x / 1.0 residuals — [V1.md](V1.md), [PLAN.md](PLAN.md).
 - Codex chat from OpenAI-compat clients is still translated internally into Responses (now including tools / `tool_calls` / `tool` messages). Native Codex **`POST /v1/responses`** is a first-class PeaProxy route: `openai_oauth` passes through `tools`, `tool_choice`, and input items after dropping `stream_options`. Other adapters round-trip function tools one level via chat completions; they do not execute tools or fake a full Responses tool event stream. `image_gen` is not a generations proxy.
 - Antigravity chat is Cloud Code `generateContent`, translated to OpenAI chat locally. No uTLS / HTTP/2 fingerprint matching vs the native Antigravity binary.
 - Image-out is proxied for **API-key** OpenAI-compat adapters (`POST /v1/images/generations`). Subscription OAuth does not invent an image path ([PROVIDERS.md](PROVIDERS.md)).
+- Embeddings are proxied for **API-key** OpenAI-compat adapters (`POST /v1/embeddings`). Subscription OAuth does not invent vectors.
 - No menu-bar / tray app ([PLAN.md](PLAN.md) locked decision).
 
 ## Manual smoke

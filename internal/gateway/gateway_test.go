@@ -829,3 +829,104 @@ func TestGenerateImageRefusesChatOnlyModelWithoutUpstream(t *testing.T) {
 		t.Fatal("must not call upstream /images/generations for a chat-only model")
 	}
 }
+
+func TestCreateEmbeddingsProxiesTaggedModel(t *testing.T) {
+	var embedHits int
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/v1/models":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+			case "/v1/embeddings":
+				embedHits++
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"object": "list",
+					"model":  "text-embedding-3-small",
+					"data": []map[string]any{{
+						"object":    "embedding",
+						"index":     0,
+						"embedding": []float64{0.25, 0.5},
+					}},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+				return
+			}
+			t.Fatal("must not call second account")
+		},
+	)
+	resp, account, err := gw.CreateEmbeddings(context.Background(), []byte(`{"model":"text-embedding-3-small","input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "acct-a" {
+		t.Fatalf("account %s", account)
+	}
+	if embedHits != 1 {
+		t.Fatalf("hits %d", embedHits)
+	}
+	if resp.Count != 1 || resp.Dimensions != 2 {
+		t.Fatalf("resp %#v", resp)
+	}
+}
+
+func TestCreateEmbeddingsRefusesChatOnlyModelWithoutUpstream(t *testing.T) {
+	var embedHits int
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+				return
+			}
+			if r.URL.Path == "/v1/embeddings" {
+				embedHits++
+			}
+			http.NotFound(w, r)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+				return
+			}
+			if r.URL.Path == "/v1/embeddings" {
+				embedHits++
+			}
+			http.NotFound(w, r)
+		},
+	)
+	_, _, err := gw.CreateEmbeddings(context.Background(), []byte(`{"model":"llama3.2","input":"hello"}`))
+	if !errors.Is(err, adapter.ErrModelNotEmbeddings) {
+		t.Fatalf("want ErrModelNotEmbeddings, got %v", err)
+	}
+	if embedHits != 0 {
+		t.Fatal("must not call upstream /embeddings for a chat-only model")
+	}
+}
+
+func TestCreateEmbeddingsRequiresModel(t *testing.T) {
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+				return
+			}
+			t.Fatal("must not call upstream without a model")
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+				return
+			}
+			t.Fatal("must not call upstream without a model")
+		},
+	)
+	_, _, err := gw.CreateEmbeddings(context.Background(), []byte(`{"input":"hello"}`))
+	if !errors.Is(err, adapter.ErrEmbeddingModelRequired) {
+		t.Fatalf("want ErrEmbeddingModelRequired, got %v", err)
+	}
+}
