@@ -99,7 +99,7 @@ These are accepted 0.2.x / 1.0 residuals — [V1.md](V1.md), [PLAN.md](PLAN.md).
 - **Claude Cloudflare 403:** `platform.claude.com/v1/oauth/token` sits behind Cloudflare. Token requests now send Claude Code’s control-plane `User-Agent` (`axios/1.15.2`). PeaProxy does **not** add uTLS / TLS fingerprint spoofing (heavy dependency; CPA does this with a Firefox hello). Stock Go `crypto/tls` may still get **HTTP 403** on AuthComplete or refresh. If that happens, the error tells you to use an official API key (`adapter: anthropic`, [console keys](https://console.anthropic.com/settings/keys)) or retry from a typical desktop network (home/office, not some datacenter IPs). Chat against `api.anthropic.com` with a key is the supported path.
 - Codex chat from OpenAI-compat clients is still translated internally. Native Codex **`POST /v1/responses`** is a first-class PeaProxy route: `openai_oauth` passes through; other adapters are translated via chat completions (text in / text out; not a full tools surface).
 - Antigravity chat is Cloud Code `generateContent`, translated to OpenAI chat locally. No uTLS / HTTP/2 fingerprint matching vs the native Antigravity binary.
-- Image-out is catalogued and Showcase-gated; there is no image-generations proxy ([PROVIDERS.md](PROVIDERS.md)).
+- Image-out is proxied for **API-key** OpenAI-compat adapters (`POST /v1/images/generations`). Subscription OAuth does not invent an image path ([PROVIDERS.md](PROVIDERS.md)).
 - No menu-bar / tray app ([PLAN.md](PLAN.md) locked decision).
 
 ## Manual smoke

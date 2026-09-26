@@ -63,6 +63,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("POST /v1/messages", s.handleClaudeMessages)
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
+	mux.HandleFunc("POST /v1/images/generations", s.handleImageGenerations)
 	admin := func(h http.HandlerFunc) http.HandlerFunc { return s.requireAdmin(h) }
 	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
 	mux.HandleFunc("GET /admin/presets", admin(s.handlePresets))
@@ -213,6 +214,33 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
+}
+
+func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	raw, err := readBody(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	peek := jsonx.PeekBody(raw)
+	resp, account, err := s.gw.GenerateImage(r.Context(), raw)
+	if err != nil {
+		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		writeErr(w, err)
+		return
+	}
+	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started)
+	if len(resp.Raw) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(resp.Raw)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"created": resp.Created,
+		"data":    imageDataJSON(resp),
+	})
 }
 
 func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
@@ -453,7 +481,7 @@ func (s *Server) handleAdminCatalog(w http.ResponseWriter, r *http.Request) {
 		"filter":          filter,
 		"models":          s.gw.Annotated(filter),
 		"note":            "hide affects listing only; models stay routable by id",
-		"imageGeneration": "not_yet",
+		"imageGeneration": "proxy",
 	})
 }
 
@@ -513,10 +541,32 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.GenerateImage {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{
-			"error":    "image generation not yet",
-			"notYet":   true,
-			"imageOut": false,
+		if body.Prompt == "" {
+			body.Prompt = "a simple icon"
+		}
+		raw, err := json.Marshal(struct {
+			Model  string `json:"model"`
+			Prompt string `json:"prompt"`
+		}{Model: body.Model, Prompt: body.Prompt})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, errJSON(err))
+			return
+		}
+		resp, account, err := s.gw.GenerateImage(r.Context(), raw)
+		if err != nil {
+			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+			writeErr(w, err)
+			return
+		}
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"account":  account,
+			"model":    body.Model,
+			"urls":     resp.URLs,
+			"b64":      resp.B64,
+			"raw":      json.RawMessage(resp.Raw),
+			"redacted": true,
+			"imageOut": true,
 		})
 		return
 	}
@@ -762,6 +812,9 @@ func statusOf(err error) int {
 	if errors.Is(err, router.ErrNoAccount) {
 		return http.StatusNotFound
 	}
+	if errors.Is(err, adapter.ErrModelNotImageOut) || errors.Is(err, adapter.ErrImageOutUnsupported) || errors.Is(err, adapter.ErrImageModelRequired) {
+		return http.StatusBadRequest
+	}
 	var he adapter.HTTPError
 	if errors.As(err, &he) && he.Status >= 400 {
 		return he.Status
@@ -787,6 +840,27 @@ func completionJSON(model, content string) map[string]any {
 		"model":   model,
 		"choices": []map[string]any{{"index": 0, "message": map[string]string{"role": "assistant", "content": content}, "finish_reason": "stop"}},
 	}
+}
+
+func imagePreview(resp adapter.ImageResponse) string {
+	if len(resp.URLs) > 0 {
+		return strings.Join(resp.URLs, " ")
+	}
+	if len(resp.B64) > 0 {
+		return fmt.Sprintf("%d b64 image(s)", len(resp.B64))
+	}
+	return ""
+}
+
+func imageDataJSON(resp adapter.ImageResponse) []map[string]string {
+	out := make([]map[string]string, 0, len(resp.URLs)+len(resp.B64))
+	for _, u := range resp.URLs {
+		out = append(out, map[string]string{"url": u})
+	}
+	for _, b := range resp.B64 {
+		out = append(out, map[string]string{"b64_json": b})
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

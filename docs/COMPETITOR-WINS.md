@@ -41,11 +41,11 @@ Menu bar never appears / TCC entitlements (#528), Gatekeeper (#398), dashboard m
 
 **PeaProxy:** CLI + localhost UI only; **no tray** (locked decision, not a gap). Management API on for the local UI; health/status live. 1.0 will not add a tray.
 
-### 6. Multimodal / images — vision-in shipped; image-out gated
+### 6. Multimodal / images — vision-in + image-out shipped
 
 Image generation support lagging bundled binary (#343); GPT image requests (#2940 upstream).
 
-**PeaProxy:** vision-in Showcase; `image_out` tagged from live catalog then **gated** (no `/v1/images/generations`, no fake chat drawing). Optional for 1.0 — [V1.md](V1.md).
+**PeaProxy:** vision-in Showcase; `image_out` tagged from live catalog; `POST /v1/images/generations` proxied for API-key OpenAI-compat adapters; Showcase one-click generates. Subscription OAuth does not invent an image path (no fake chat drawing).
 
 ### 7. Account / credential reliability — shipped (keychain)
 
@@ -72,7 +72,7 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 3. Loopback-secure by default — **yes**
 4. Harness quick-setup (OpenCode, Pi, Cursor, Claude Code, Codex, Continue, Cline, Amp) — **yes** (Droid no)
 5. Reliable multi-account failover with visible cooldowns — **yes** (`round-robin` / `fill-first` / `sticky`)
-6. Per-provider usage showcase (text + vision-in; image-out gated) — **yes / gated**
+6. Per-provider usage showcase (text + vision-in + image-out) — **yes**
 7. Cross-platform CLI + localhost UI (no tray) — **yes, by design**
 8. Protocol profiles that don't break thinking/tools/cloak for non-official clients — **defaults off**; not a full translator golden-test suite
 
@@ -80,5 +80,5 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 
 - Usage statistics persistence — **shipped** (`usage.json`)
 - Embeddings endpoint — not shipped
-- Image generations API — gated / not proxied
+- Image generations API — **shipped** (`POST /v1/images/generations` for keyed OpenAI-compat + `image_out` models)
 - Quota remaining API when provider exposes it — not shipped

@@ -80,6 +80,10 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	return a.inner.ChatStream(ctx, req, w)
 }
 
+func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	return adapter.GenerateImageFrom(a.inner, ctx, req)
+}
+
 func looksFree(id string) bool {
 	lower := strings.ToLower(id)
 	if strings.HasSuffix(lower, "-free") || strings.Contains(lower, "-free-") || strings.Contains(lower, " free") {

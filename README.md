@@ -56,7 +56,7 @@ Screenshots are from an earlier UI build; Settings, Request log, and first-run A
 | `POST /v1/messages` true Anthropic SSE | Shipped |
 | `POST /v1/responses` (Codex native or translated) | Shipped |
 | Vision-in Showcase (URL / upload) | Shipped |
-| Image-out / `POST /v1/images/generations` | **Gated.** Catalogued only; no proxy; no fake chat drawing |
+| Image-out / `POST /v1/images/generations` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse) | Shipped, **ToS/ban risk** |
@@ -77,7 +77,7 @@ Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PL
 
 1. **Accounts** — pick a preset. Official **API key** and **local** presets first. OAuth presets show a ban-risk warning. Workers AI needs an account id (`CLOUDFLARE_ACCOUNT_ID`). Presets show the env var **name** they expect and whether it is set (never the value).
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename. Filters persist in the UI.
-3. **Showcase** — try a prompt; `image_in` models accept an image URL or upload. `image_out` shows **not yet**.
+3. **Showcase** — try a prompt; `image_in` models accept an image URL or upload. `image_out` one-click generates via `/v1/images/generations` when the account can proxy it.
 4. **Request log** — opt-in redacted inspector (`requestLog: true` or the UI toggle).
 5. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
 
@@ -89,6 +89,9 @@ curl -s http://127.0.0.1:8317/v1/chat/completions \
 curl -s http://127.0.0.1:8317/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{"model":"llama3.2","max_tokens":32,"stream":true,"messages":[{"role":"user","content":"hi"}]}'
+curl -s http://127.0.0.1:8317/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"dall-e-3","prompt":"a pea pod icon"}'
 peaproxy clients show cursor
 peaproxy clients show opencode   # includes /v1
 peaproxy clients show claude-code  # does NOT include /v1
@@ -123,6 +126,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `POST /v1/chat/completions` | Stream + non-stream; failover on retryable status/bodies; cooled accounts are not re-hit (503 + Retry-After) |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `POST /v1/responses` | Codex / OpenAI Responses: native pass-through for Codex OAuth, otherwise translated via chat completions |
+| `POST /v1/images/generations` | OpenAI Images API for models tagged `image_out`; refused (no chat fake) otherwise |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
 | `GET /admin/health` | Bind, **adapter health**, **account cooldowns** with remaining time (token required off loopback) |

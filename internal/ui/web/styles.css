@@ -111,3 +111,4 @@ details summary { cursor: pointer; color: var(--muted); }
   box-shadow: 0 8px 24px #0006;
 }
 .toast.ok { border-color: var(--accent); background: #1c2614; }
+.showcase-image { max-width: min(32rem, 100%); border-radius: 8px; margin: 0.5rem 0; display: block; }
