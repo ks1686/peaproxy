@@ -1,6 +1,6 @@
 # PeaProxy — approved plan (2026-09-26)
 
-Status: **APPROVED**. This document is the product plan the v0 scaffold implements as types, CLI stubs, and empty adapters. **OAuth is not implemented in this tree.**
+Status: **APPROVED**. Native API-key adapters shipped. **Subscription OAuth shipped 2026-09-26** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) under an explicit owner ToS/ban-risk override ([OAUTH.md](OAUTH.md)). Qwen consumer OAuth is stubbed not-yet.
 
 Overnight scope that produced this repo: research → incorporate free providers → scaffold. No pea-pod marketing page until a real release exists.
 
@@ -99,7 +99,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 4. OAuth maximize + more free adapters
 5. Releases + pea-pod.me/peaproxy page
 
-**This tree implements native API-key adapters (Anthropic, OpenAI, OpenRouter, Zen), Claude SSE, vision Showcase, failover + persisted usage, and release scaffolding. OAuth remains a stub.**
+**This tree implements native API-key adapters (Anthropic, OpenAI, OpenRouter, Zen), Claude SSE, vision Showcase, failover + persisted usage, release scaffolding, and subscription OAuth for Claude, Codex, Gemini/Antigravity, xAI, Kimi, and Meta Muse (ToS risk documented).**
 
 ## 11. Security
 

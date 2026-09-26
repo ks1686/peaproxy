@@ -17,6 +17,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/oauth"
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/translate"
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -76,13 +77,21 @@ func (g *Gateway) rebuild() error {
 		if p.Disabled {
 			continue
 		}
-		adp, err := g.reg.Open(p.Adapter, adapter.Options{
+		opts := adapter.Options{
 			ID:        p.ID,
 			BaseURL:   p.BaseURL,
 			APIKey:    p.ResolveKey(),
 			SessionID: p.SessionID,
 			Tier:      catalog.Tier(p.Tier),
-		})
+		}
+		if p.OAuth != nil {
+			opts.OAuth = p.OAuth.Runtime()
+		}
+		id := p.ID
+		opts.PersistOAuth = func(tok oauth.Token) error {
+			return g.SaveOAuth(id, tok)
+		}
+		adp, err := g.reg.Open(p.Adapter, opts)
 		if err != nil {
 			if first == nil {
 				first = fmt.Errorf("%s: %w", p.ID, err)
@@ -131,9 +140,10 @@ func (g *Gateway) queryLocked() catalog.Query {
 // Refresh pulls live ListModels from every adapter.
 func (g *Gateway) Refresh(ctx context.Context) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	inst := append([]instance(nil), g.inst...)
+	g.mu.Unlock()
 	var all []catalog.Model
-	for _, inst := range g.inst {
+	for _, inst := range inst {
 		models, err := inst.Adapter.ListModels(ctx)
 		if err != nil {
 			all = append(all, catalog.Model{
@@ -149,7 +159,9 @@ func (g *Gateway) Refresh(ctx context.Context) {
 		}
 		all = append(all, models...)
 	}
+	g.mu.Lock()
 	g.models = all
+	g.mu.Unlock()
 }
 
 // Models is the last refreshed full catalog (including hidden).
@@ -616,6 +628,45 @@ func (g *Gateway) Instances() []config.Provider {
 		if g.cfg.Providers[i].APIKey != "" || g.cfg.Providers[i].APIKeyEnv != "" {
 			out[i].APIKey = "configured"
 		}
+		if out[i].OAuth != nil {
+			email := out[i].OAuth.Email
+			has := out[i].OAuth.AccessToken != ""
+			out[i].OAuth = &config.OAuthToken{Email: email}
+			if has {
+				out[i].OAuth.AccessToken = "configured"
+			}
+		}
 	}
 	return out
+}
+
+// AdapterByID returns a live adapter instance.
+func (g *Gateway) AdapterByID(id string) (adapter.Adapter, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, inst := range g.inst {
+		if inst.Provider.ID == id {
+			return inst.Adapter, true
+		}
+	}
+	return nil, false
+}
+
+// SaveOAuth persists refreshed subscription tokens (0600 YAML).
+func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
+	ct := config.OAuthFromRuntime(tok)
+	g.mu.Lock()
+	for i := range g.cfg.Providers {
+		if g.cfg.Providers[i].ID == id {
+			g.cfg.Providers[i].OAuth = &ct
+			break
+		}
+	}
+	path := g.path
+	cfg := g.cfg
+	g.mu.Unlock()
+	if path != "" {
+		return config.Save(path, cfg)
+	}
+	return nil
 }

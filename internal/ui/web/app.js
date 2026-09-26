@@ -101,7 +101,7 @@ function accountsPage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Add account</h2>
-      <p class="muted">Presets for local servers, API keys, and OpenAI-compat hosts. Gemini uses Google AI Studio’s official OpenAI-compat endpoint — not generateContent. Subscription OAuth is still a stub.</p>
+      <p class="muted">Presets for local servers, API keys, subscription OAuth, and OpenAI-compat hosts. Gemini API keys use Google AI Studio’s official OpenAI-compat endpoint; Gemini/Antigravity subscription OAuth is a separate Cloud Code path. Subscription OAuth may violate provider ToS and can ban the account; PeaProxy authors are not liable. Prefer API keys.</p>
       <div class="row">
         <label>Preset
           <select id="preset"></select>
@@ -174,15 +174,20 @@ function accountsPage(root) {
         return;
       }
       const rows = accounts
-        .map(
-          (a) => `<tr>
+        .map((a) => {
+          const oauth = isOAuthAdapter(a.adapter);
+          const login = oauth
+            ? `<button class="btn" data-oauth="${escapeHtml(a.id)}">OAuth login</button>
+               <button class="btn" data-cli="${escapeHtml(a.adapter)}">Copy CLI</button>`
+            : "";
+          return `<tr>
         <td>${escapeHtml(a.id)}</td><td>${escapeHtml(a.adapter)}</td>
         <td><span class="pill">${escapeHtml(a.tier || "")}</span></td>
         <td>${escapeHtml(a.baseURL || "")}</td>
         <td>${escapeHtml(a.status || "")}</td>
-        <td><button class="btn danger" data-del="${escapeHtml(a.id)}">Remove</button></td>
-      </tr>`
-        )
+        <td>${login}<button class="btn danger" data-del="${escapeHtml(a.id)}">Remove</button></td>
+      </tr>`;
+        })
         .join("");
       host.innerHTML = `<table>
       <thead><tr><th>ID</th><th>Adapter</th><th>Tier</th><th>Base URL</th><th>Status</th><th></th></tr></thead>
@@ -193,6 +198,44 @@ function accountsPage(root) {
             await sendJSON("/admin/accounts/" + encodeURIComponent(btn.dataset.del), "DELETE");
             toast("Account removed", "ok");
             loadAccounts();
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-cli]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const cmd = "peaproxy auth login --provider " + oauthCLIProvider(btn.dataset.cli);
+          try {
+            await navigator.clipboard.writeText(cmd);
+            toast("Copied " + cmd, "ok");
+          } catch (err) {
+            toast(cmd);
+          }
+        });
+      });
+      document.querySelectorAll("[data-oauth]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            const started = await sendJSON("/admin/oauth/start", "POST", { id: btn.dataset.oauth });
+            if (started.warning) toast(started.warning.slice(0, 180));
+            if (started.loginURL) window.open(started.loginURL, "_blank", "noopener");
+            toast("Complete login in the browser, or run: " + (started.cli || "peaproxy auth login"), "ok");
+            const id = btn.dataset.oauth;
+            const poll = async () => {
+              const st = await getJSON("/admin/oauth/status?id=" + encodeURIComponent(id));
+              if (st.status === "complete") {
+                toast("OAuth login saved", "ok");
+                loadAccounts();
+                return;
+              }
+              if (st.status === "error") {
+                toast(st.error || "OAuth failed");
+                return;
+              }
+              setTimeout(poll, 2000);
+            };
+            setTimeout(poll, 2000);
           } catch (err) {
             toast(err.message);
           }
@@ -512,6 +555,34 @@ function fileToDataURL(file) {
     reader.onerror = () => reject(reader.error || new Error("read failed"));
     reader.readAsDataURL(file);
   });
+}
+
+function isOAuthAdapter(adapter) {
+  return adapter === "antigravity" || String(adapter || "").endsWith("_oauth");
+}
+
+function oauthCLIProvider(adapter) {
+  switch (adapter) {
+    case "openai_oauth":
+      return "openai";
+    case "anthropic_oauth":
+      return "anthropic";
+    case "antigravity":
+    case "gemini_oauth":
+      return "gemini";
+    case "xai_oauth":
+      return "xai";
+    case "kimi_oauth":
+      return "kimi";
+    case "kimi_ai_oauth":
+      return "kimi-ai";
+    case "meta_oauth":
+      return "meta";
+    case "qwen_oauth":
+      return "qwen";
+    default:
+      return adapter;
+  }
 }
 
 function escapeHtml(s) {

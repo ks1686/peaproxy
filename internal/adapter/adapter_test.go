@@ -26,7 +26,7 @@ import (
 
 func TestDefaultRegistryHasStubAndLiveFactories(t *testing.T) {
 	r := adapters.DefaultRegistry()
-	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "anthropic_oauth", "openai_oauth", "lmstudio", "groq", "cerebras", "google", "gemini", "xai", "huggingface"} {
+	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "anthropic_oauth", "openai_oauth", "lmstudio", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "antigravity", "gemini_oauth", "xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth"} {
 		if _, err := r.Open(name, adapter.Options{ID: name, BaseURL: "http://127.0.0.1:9/v1"}); err != nil {
 			t.Fatalf("open %s: %v", name, err)
 		}
@@ -65,28 +65,34 @@ func TestOpenAICompatRequiresBaseURL(t *testing.T) {
 	}
 }
 
-func TestOAuthStubsAreNotImplemented(t *testing.T) {
+func TestOAuthAdaptersImplementAuthenticator(t *testing.T) {
 	ctx := context.Background()
 	anth, err := anthropic_oauth.New(adapter.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := anth.ListModels(ctx); !errors.Is(err, adapter.ErrNotImplemented) {
-		t.Fatalf("anthropic_oauth: %v", err)
+	if _, err := anth.ListModels(ctx); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("anthropic_oauth without token: %v", err)
 	}
 	oa, err := openai_oauth.New(adapter.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := oa.Chat(ctx, adapter.ChatRequest{}); !errors.Is(err, adapter.ErrNotImplemented) {
-		t.Fatalf("openai_oauth: %v", err)
+	if _, err := oa.Chat(ctx, adapter.ChatRequest{}); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("openai_oauth without token: %v", err)
 	}
-	auth, ok := anth.(adapter.Authenticator)
-	if !ok {
-		t.Fatal("anthropic_oauth must implement Authenticator")
+	ag, err := adapters.DefaultRegistry().Open("antigravity", adapter.Options{ID: "ag", SkipLoopback: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := auth.AuthStart(ctx); !errors.Is(err, adapter.ErrNotImplemented) {
-		t.Fatalf("AuthStart: %v", err)
+	if _, err := ag.ListModels(ctx); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("antigravity without token: %v", err)
+	}
+	if _, ok := ag.(adapter.Authenticator); !ok {
+		t.Fatal("antigravity must implement Authenticator")
+	}
+	if !anth.Capabilities().OAuth || !oa.Capabilities().OAuth || !ag.Capabilities().OAuth {
+		t.Fatal("OAuth capability should be advertised")
 	}
 }
 

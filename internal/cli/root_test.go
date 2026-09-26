@@ -97,11 +97,40 @@ func TestClientsShowPiBothWires(t *testing.T) {
 
 func TestAuthLoginPrintsOfficialKeyDocs(t *testing.T) {
 	out := &bytes.Buffer{}
-	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "anthropic"}, out); err != nil {
+	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "anthropic", "--print-url"}, out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "console.anthropic.com") {
-		t.Fatalf("%s", out)
+	got := out.String()
+	if !strings.Contains(got, "console.anthropic.com") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "not liable") || !strings.Contains(got, "claude.ai/oauth/authorize") {
+		t.Fatalf("expected liability warning and login URL:\n%s", got)
+	}
+}
+
+func TestAuthLoginGeminiPrintURL(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "gemini", "--print-url", "--no-browser"}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "accounts.google.com") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, "not liable") || !strings.Contains(got, "aistudio.google.com") {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestAuthLoginQwenNotYet(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := ExecuteWithArgs([]string{"auth", "login", "--provider", "qwen", "--print-url"}, out)
+	if err == nil || !strings.Contains(err.Error(), "not yet") {
+		t.Fatalf("want not yet, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "not liable") {
+		t.Fatalf("warning should print before not-yet: %s", out)
 	}
 }
 

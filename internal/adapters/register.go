@@ -6,13 +6,18 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/antigravity"
 	"github.com/ks1686/peaproxy/internal/adapter/hosted"
+	"github.com/ks1686/peaproxy/internal/adapter/kimi_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/meta_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/ollama"
 	"github.com/ks1686/peaproxy/internal/adapter/openai"
 	"github.com/ks1686/peaproxy/internal/adapter/openai_compat"
 	"github.com/ks1686/peaproxy/internal/adapter/openai_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/opencodezen"
 	"github.com/ks1686/peaproxy/internal/adapter/openrouter"
+	"github.com/ks1686/peaproxy/internal/adapter/qwen_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/xai_oauth"
 )
 
 // DefaultRegistry registers built-in adapter factories for the server and CLI.
@@ -37,6 +42,13 @@ func DefaultRegistry() *adapter.Registry {
 	}))
 	r.Register(anthropic_oauth.Name, anthropic_oauth.New)
 	r.Register(openai_oauth.Name, openai_oauth.New)
+	r.Register(antigravity.Name, antigravity.New)
+	r.Register(antigravity.AliasGemini, antigravity.New)
+	r.Register(xai_oauth.Name, xai_oauth.New)
+	r.Register(kimi_oauth.Name, kimi_oauth.New)
+	r.Register(kimi_oauth.NameAI, kimi_oauth.NewAI)
+	r.Register(meta_oauth.Name, meta_oauth.New)
+	r.Register(qwen_oauth.Name, qwen_oauth.New)
 	return r
 }
 

@@ -26,6 +26,8 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 
 Provider keys stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML.
 
+Subscription OAuth tokens are stored under `providers[].oauth` (access/refresh, expiry, email, optional extra). File mode `0600`. Never commit that file. `peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|meta` writes them. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability.
+
 ## LAN bind
 
 Loopback (`127.0.0.1`, `localhost`, `::1`) needs no extra flags.

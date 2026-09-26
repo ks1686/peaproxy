@@ -91,10 +91,32 @@ providers:
   #   baseURL: https://opencode.ai/zen/v1
   #   apiKeyEnv: OPENCODE_API_KEY
 
-  # OAuth stubs — not implemented. Prefer official API keys (docs/OAUTH.md).
+  # Claude Pro/Max subscription OAuth. ToS/ban risk — docs/OAUTH.md.
+  # peaproxy auth login --provider anthropic
   # - id: anthropic-oauth
   #   adapter: anthropic_oauth
   #   tier: paid
+  #   oauth:
+  #     accessToken: (written by auth login)
+  #     refreshToken: (written by auth login)
+
+  # ChatGPT/Codex subscription OAuth. ToS/ban risk — docs/OAUTH.md.
+  # peaproxy auth login --provider openai
   # - id: openai-oauth
   #   adapter: openai_oauth
   #   tier: paid
+
+  # Gemini / Antigravity consumer OAuth (distinct from AI Studio keys). ToS/ban risk.
+  # peaproxy auth login --provider gemini
+  # - id: antigravity
+  #   adapter: antigravity
+  #   tier: paid
+
+  # xAI Grok subscription device OAuth. ToS/ban risk. Prefer adapter xai + XAI_API_KEY.
+  # peaproxy auth login --provider xai
+  # - id: xai-oauth
+  #   adapter: xai_oauth
+  #   tier: paid
+
+  # Kimi / Meta Muse: peaproxy auth login --provider kimi|kimi-ai|meta (ToS/ban risk).
+  # Qwen consumer OAuth is not yet (no CPA flow); use openai_compat + a Qwen key.
