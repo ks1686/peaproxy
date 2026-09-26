@@ -430,6 +430,9 @@ func (g *Gateway) Cooldowns() []Cooldown {
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
+	if out == nil {
+		out = []Cooldown{}
+	}
 	return out
 }
 

@@ -24,6 +24,11 @@ go run ./cmd/peaproxy serve   # from a clone
 
 Open http://127.0.0.1:8317/
 
+![Accounts](docs/screenshots/accounts.png)
+![Catalog](docs/screenshots/catalog.png)
+![Showcase](docs/screenshots/showcase.png)
+![Health](docs/screenshots/health.png)
+
 ## Quick start
 
 1. **Accounts** — pick a preset (Ollama, Anthropic API key, OpenAI API key, OpenRouter, OpenCode Zen, or custom OpenAI-compat).
