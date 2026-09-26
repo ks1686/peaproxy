@@ -134,7 +134,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | Command | Purpose |
 |---|---|
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
-| `--version` | Build version (`dev` unless a release ldflag) |
+| `--version` / `-v` | Release tag (`go install …@vX.Y.Z` or GoReleaser). Dirty local trees print `dev` |
 | `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta\|copilot`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen and Factory are **not yet**. OpenCode Go is an API key (`--provider opencode-go` explains). |
 | `accounts` | Configured provider accounts (`list` / `add <preset>`) |
 | `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |

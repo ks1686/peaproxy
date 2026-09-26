@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/version"
 )
 
 func TestRootHelpListsPlanCommands(t *testing.T) {
@@ -117,12 +118,17 @@ providers:
 }
 
 func TestVersionFlag(t *testing.T) {
-	out := &bytes.Buffer{}
-	if err := ExecuteWithArgs([]string{"--version"}, out); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "peaproxy") {
-		t.Fatalf("%s", out)
+	orig := version.Version
+	version.Version = "v1.6.0"
+	t.Cleanup(func() { version.Version = orig })
+	for _, args := range [][]string{{"--version"}, {"-v"}} {
+		out := &bytes.Buffer{}
+		if err := ExecuteWithArgs(args, out); err != nil {
+			t.Fatal(err)
+		}
+		if got := out.String(); got != "peaproxy v1.6.0\n" {
+			t.Fatalf("%v: got %q", args, got)
+		}
 	}
 }
 
