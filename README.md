@@ -62,7 +62,7 @@ Screenshots are from an earlier UI build; Settings, Request log, and first-run A
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse) | Shipped, **ToS/ban risk** |
 | Qwen consumer OAuth | **Not yet** — use an API key |
 | OS keychain / `secrets.enc` | Shipped |
-| 429/401 failover + cooldown skip + Health | Shipped (round-robin) |
+| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`) |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp) |
 | Settings, onboarding CTAs, `config validate` | Shipped |
 | CLI `catalog` / `health` / `requests` / `accounts add` | Shipped (v0.2.8) |
@@ -120,7 +120,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `GET /v1/models` | Live list; hide/expose affect **listing only** |
 | `GET /v0/catalog` | Rich catalog (tier, modalities, privacy, hidden/routable) |
-| `POST /v1/chat/completions` | Stream + non-stream; failover on 429/401; cooled accounts are not re-hit (503 + Retry-After) |
+| `POST /v1/chat/completions` | Stream + non-stream; failover on retryable status/bodies; cooled accounts are not re-hit (503 + Retry-After) |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `POST /v1/responses` | Codex / OpenAI Responses: native pass-through for Codex OAuth, otherwise translated via chat completions |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |

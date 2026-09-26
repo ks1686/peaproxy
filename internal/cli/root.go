@@ -331,8 +331,8 @@ func configCmd(configPath *string) *cobra.Command {
 			if store != nil {
 				backend = string(store.Backend())
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nloopback: %v\nrequestLog: %v\nproviders: %d\ncatalog.pin: %d\ncatalog.rename: %d\nhide.blockRouting: %v\nsecrets: %s\n",
-				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Providers), len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), cfg.Hide.BlockRouting, backend)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nloopback: %v\nrequestLog: %v\nproviders: %d\ncatalog.pin: %d\ncatalog.rename: %d\nhide.blockRouting: %v\nfailover.policy: %s\nsecrets: %s\n",
+				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Providers), len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), cfg.Hide.BlockRouting, cfg.FailoverPolicy(), backend)
 			return nil
 		},
 	})
@@ -356,8 +356,8 @@ func configCmd(configPath *string) *cobra.Command {
 			if store != nil {
 				backend = string(store.Backend())
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ok\npath: %s\nbind: %s\nloopback: %v\nrequestLog: %v\ncatalog.pin: %d\ncatalog.rename: %d\nproviders: %d\nsecrets: %s\n",
-				path, cfg.Addr(), config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), len(cfg.Providers), backend)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ok\npath: %s\nbind: %s\nloopback: %v\nrequestLog: %v\ncatalog.pin: %d\ncatalog.rename: %d\nfailover.policy: %s\nproviders: %d\nsecrets: %s\n",
+				path, cfg.Addr(), config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), cfg.FailoverPolicy(), len(cfg.Providers), backend)
 			return nil
 		},
 	})

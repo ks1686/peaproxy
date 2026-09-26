@@ -37,7 +37,7 @@ Local multi-provider AI gateway in Go: subscription OAuth (**at your own risk**)
 Must beat them on (see [COMPETITOR-WINS.md](COMPETITOR-WINS.md) for shipped vs residual):
 
 1. **Auto model discovery** — shipped (live `ListModels`, no allowlist).
-2. **Failover that works** — shipped as round-robin + 30s cooldown skip on 429/401 (no re-hit storm). `fill-first` / `sticky` policy names exist; runtime does not switch on them yet.
+2. **Failover that works** — shipped: `round-robin` (default), `fill-first`, and `sticky` via `failover.policy`; 30s cooldown skip on retryable status **and** rate-limit / overloaded / auth-expired error bodies (no re-hit storm).
 3. **Harness fidelity** — shipped presets + `clients verify [--chat]` for Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp. Cloak defaults off. Amp WebSocket is out of scope.
 4. **Secure localhost default** — shipped (`127.0.0.1:8317`; LAN needs `--allow-lan` + admin token).
 5. **UI without macOS tray** — shipped **by design** (CLI + browser only).
@@ -90,7 +90,7 @@ See [HARNESS.md](HARNESS.md). Copy-ready configs for Cursor, Claude Code, OpenCo
 
 ## 9. Architecture
 
-Clients → Local HTTP (OpenAI + Claude + Responses) → Gateway (model → account, round-robin failover, cooldowns) → Adapters (oauth | apikey | openai_compat | local) → upstream.
+Clients → Local HTTP (OpenAI + Claude + Responses) → Gateway (model → account, failover.policy, cooldowns) → Adapters (oauth | apikey | openai_compat | local) → upstream.
 
 Adapter contract: `ListModels`, `Chat` (stream/non-stream), `Auth*` / `Validate`, `Capabilities`. Optional `NativeMessages` / `NativeResponses`.
 
@@ -105,7 +105,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 4. OAuth maximize + remaining free/local hosted presets ✅ (v0.2.0 OAuth; v0.2.2–v0.2.5 presets). **Qwen consumer OAuth still stubbed.**
 5. Releases — **v0.2.0 through v0.2.8 tagged** (GoReleaser linux/darwin/windows amd64+arm64). **v1.0.0** is the next cut ([V1.md](V1.md)); site/marketing is not this repo.
 
-**Shipped in this tree:** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, image-out gating, cooldown-storm failover, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add` (v0.2.8), subscription OAuth (ToS documented), OS keychain / encrypted-file secrets.
+**Shipped in this tree:** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, image-out gating, failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add` (v0.2.8), subscription OAuth (ToS documented), OS keychain / encrypted-file secrets.
 
 ## 11. Security
 

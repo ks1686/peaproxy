@@ -90,6 +90,26 @@ func TestChatFailsoverOn401HTTPError(t *testing.T) {
 	}
 }
 
+func TestChatFailsoverOnRateLimitErrorBody(t *testing.T) {
+	calls := 0
+	r := &Router{
+		Candidates: []Candidate{
+			{AccountID: "a", Adapter: stubAdapter{id: "a", chat: func(context.Context, adapter.ChatRequest) (adapter.ChatResponse, error) {
+				calls++
+				return adapter.ChatResponse{}, adapter.HTTPError{Status: 400, Body: `{"error":{"type":"rate_limit_error"}}`}
+			}}},
+			{AccountID: "b", Adapter: stubAdapter{id: "b", chat: func(context.Context, adapter.ChatRequest) (adapter.ChatResponse, error) {
+				calls++
+				return adapter.ChatResponse{Content: "ok"}, nil
+			}}},
+		},
+	}
+	resp, err := r.Chat(context.Background(), adapter.ChatRequest{Model: "m"})
+	if err != nil || resp.Content != "ok" || calls != 2 {
+		t.Fatalf("resp=%#v err=%v calls=%d", resp, err, calls)
+	}
+}
+
 func TestNonRetryableStopsFailover(t *testing.T) {
 	r := &Router{
 		Candidates: []Candidate{

@@ -262,6 +262,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"requestLog":         cfg.RequestLog,
 		"models":             len(s.gw.Models()),
 		"adapters":           adapters.Names(),
+		"failoverPolicy":     cfg.FailoverPolicy(),
 		"adapterHealth":      s.gw.AdapterHealth(),
 		"cooldowns":          s.gw.Cooldowns(),
 		"cooldownTtlMs":      gateway.CooldownTTL.Milliseconds(),

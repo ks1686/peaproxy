@@ -723,12 +723,12 @@ function clientsPage(root) {
 
 function healthPage(root) {
   root.innerHTML = `<section class="card"><h2>Adapter health</h2>
-      <p class="muted">Last live <code>ListModels</code> (or <code>Validate</code> after Probe). Cooldown overlays 429/401 skip windows without disabling the account.</p>
+      <p class="muted">Last live <code>ListModels</code> (or <code>Validate</code> after Probe). Cooldown overlays skip windows without disabling the account.</p>
       <button class="btn" id="probe">Probe adapters</button>
       <div id="ah">loading…</div>
     </section>
     <section class="card"><h2>Account cooldowns</h2>
-      <p class="muted">After HTTP 429 or 401 the account is skipped for 30s. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Round-robin tries the next hot key for the same model.</p>
+      <p class="muted">After a rate-limit, overload, or auth-expired failure the account is skipped for 30s. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Routing follows <code>failover.policy</code> (round-robin default, or fill-first / sticky).</p>
       <div id="cd">loading…</div>
     </section>
     <section class="card"><h2>Gateway</h2><pre id="h">loading…</pre></section>
@@ -769,7 +769,7 @@ function healthPage(root) {
       ? `<table>
       <thead><tr><th>Account</th><th>Reason</th><th>Remaining</th><th>Until</th></tr></thead>
       <tbody>${rows}</tbody></table>`
-      : emptyState("No accounts in cooldown", "429/401 failover will show a skip window here.");
+      : emptyState("No accounts in cooldown", "Retryable failover (429/401, rate-limit / overloaded / auth-expired bodies) will show a skip window here.");
   };
   loadHealth().catch((err) => {
     document.getElementById("h").textContent = err.message;

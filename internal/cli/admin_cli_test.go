@@ -191,6 +191,7 @@ func TestHealthMatchesAdminHealthFields(t *testing.T) {
 		"adapters:",
 		"adapterHealth:",
 		"cooldowns:",
+		"failoverPolicy: round-robin",
 		"cooldownTtlMs: 30000",
 		"allowNonLoopback: false",
 		"lan: false",

@@ -655,6 +655,9 @@ func TestHealthIncludesAdapterHealthAndProbe(t *testing.T) {
 	if !strings.Contains(got, `"adapterHealth"`) || !strings.Contains(got, `"cooldownTtlMs"`) {
 		t.Fatalf("%s", got)
 	}
+	if !strings.Contains(got, `"failoverPolicy":"round-robin"`) {
+		t.Fatalf("missing failover policy: %s", got)
+	}
 	if !strings.Contains(got, `"accountId":"local"`) {
 		t.Fatalf("adapter health missing account: %s", got)
 	}

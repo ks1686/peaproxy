@@ -25,16 +25,17 @@ const (
 
 // Config is the on-disk schema. schemaVersion must be bumped on breaking changes.
 type Config struct {
-	SchemaVersion    int          `yaml:"schemaVersion"`
-	Bind             string       `yaml:"bind"`
-	Port             int          `yaml:"port"`
-	AdminToken       string       `yaml:"adminToken,omitempty"`
-	AllowNonLoopback bool         `yaml:"allowNonLoopback,omitempty"`
-	RequestLog       bool         `yaml:"requestLog,omitempty"`
-	Hide             HideList     `yaml:"hide"`
-	Expose           ExposeList   `yaml:"expose"`
-	Catalog          CatalogPrefs `yaml:"catalog,omitempty"`
-	Providers        []Provider   `yaml:"providers"`
+	SchemaVersion    int           `yaml:"schemaVersion"`
+	Bind             string        `yaml:"bind"`
+	Port             int           `yaml:"port"`
+	AdminToken       string        `yaml:"adminToken,omitempty"`
+	AllowNonLoopback bool          `yaml:"allowNonLoopback,omitempty"`
+	RequestLog       bool          `yaml:"requestLog,omitempty"`
+	Hide             HideList      `yaml:"hide"`
+	Expose           ExposeList    `yaml:"expose"`
+	Catalog          CatalogPrefs  `yaml:"catalog,omitempty"`
+	Failover         FailoverPrefs `yaml:"failover,omitempty"`
+	Providers        []Provider    `yaml:"providers"`
 }
 
 // HideList drops providers or model IDs from /v1/models and UI pickers.
@@ -55,6 +56,23 @@ type ExposeList struct {
 type CatalogPrefs struct {
 	Pin    []string          `yaml:"pin,omitempty" json:"pin,omitempty"`
 	Rename map[string]string `yaml:"rename,omitempty" json:"rename,omitempty"`
+}
+
+// FailoverPrefs selects how matching accounts are ordered. Empty policy is round-robin.
+type FailoverPrefs struct {
+	Policy string `yaml:"policy,omitempty" json:"policy,omitempty"`
+}
+
+// FailoverPolicy returns the effective routing policy (round-robin by default).
+func (c Config) FailoverPolicy() string {
+	switch strings.ToLower(strings.TrimSpace(c.Failover.Policy)) {
+	case "fill-first":
+		return "fill-first"
+	case "sticky":
+		return "sticky"
+	default:
+		return "round-robin"
+	}
 }
 
 // Provider is one adapter instance (Ollama, a key, or an OAuth account stub).
@@ -235,6 +253,9 @@ func ApplyEnv(c *Config) {
 	if v := os.Getenv("PEAPROXY_REQUEST_LOG"); envTruthy(v) {
 		c.RequestLog = true
 	}
+	if v := os.Getenv("PEAPROXY_FAILOVER_POLICY"); v != "" {
+		c.Failover.Policy = v
+	}
 }
 
 func envTruthy(v string) bool {
@@ -350,6 +371,11 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("catalog.rename %q has an empty display name", id)
 		}
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Failover.Policy)) {
+	case "", "round-robin", "fill-first", "sticky":
+	default:
+		return fmt.Errorf("invalid failover.policy %q (want round-robin|fill-first|sticky)", c.Failover.Policy)
 	}
 	return nil
 }

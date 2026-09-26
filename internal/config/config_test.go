@@ -156,6 +156,9 @@ func TestExampleYAMLLoads(t *testing.T) {
 	if cfg.Bind != "127.0.0.1" || cfg.Port != 8317 {
 		t.Fatalf("example defaults: bind=%s port=%d", cfg.Bind, cfg.Port)
 	}
+	if cfg.FailoverPolicy() != "round-robin" {
+		t.Fatalf("example failover.policy %q", cfg.FailoverPolicy())
+	}
 	if len(cfg.Providers) != 1 || cfg.Providers[0].Adapter != "ollama" {
 		t.Fatalf("example providers: %#v", cfg.Providers)
 	}
@@ -283,6 +286,56 @@ func TestIsLoopback(t *testing.T) {
 	}
 	if config.IsLoopback("0.0.0.0") || config.IsLoopback("192.168.1.5") {
 		t.Fatal("non-loopback reported as loopback")
+	}
+}
+
+func TestFailoverPolicyLoadAndDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	src := []byte(`schemaVersion: 1
+bind: 127.0.0.1
+port: 8317
+failover:
+  policy: fill-first
+providers:
+  - id: ollama-local
+    adapter: ollama
+    tier: local
+`)
+	if err := os.WriteFile(path, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FailoverPolicy() != "fill-first" {
+		t.Fatalf("policy %q", cfg.FailoverPolicy())
+	}
+	empty := config.Default()
+	if empty.FailoverPolicy() != "round-robin" {
+		t.Fatalf("default policy %q", empty.FailoverPolicy())
+	}
+}
+
+func TestValidateRejectsUnknownFailoverPolicy(t *testing.T) {
+	cfg := config.Default()
+	cfg.Failover.Policy = "least-used"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "failover.policy") {
+		t.Fatalf("unknown policy: %v", err)
+	}
+	cfg.Failover.Policy = "sticky"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyEnvFailoverPolicy(t *testing.T) {
+	cfg := config.Default()
+	t.Setenv("PEAPROXY_FAILOVER_POLICY", "sticky")
+	config.ApplyEnv(&cfg)
+	if cfg.FailoverPolicy() != "sticky" {
+		t.Fatalf("%q", cfg.FailoverPolicy())
 	}
 }
 
