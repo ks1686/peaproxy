@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/oauth"
@@ -137,6 +138,9 @@ type Options struct {
 	OAuthFlow string
 	// SkipLoopback builds the login URL without binding a callback port (CLI --print-url).
 	SkipLoopback bool
+	// ObserveHeaders is invoked with a clone of each upstream response header map
+	// (chat, embeddings, images, ListModels, …). It must return quickly.
+	ObserveHeaders func(http.Header)
 }
 
 // ImageRequest is a provider-neutral images.generations call.

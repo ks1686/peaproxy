@@ -78,7 +78,8 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |
 | Image-out / `POST /v1/images/generations` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
-| Embeddings / `POST /v1/embeddings` | **Shipped** for API-key OpenAI-compat when the catalog tags `embeddings`. Showcase can try. OAuth / Messages-only adapters refuse clearly (no fake vectors). Quota-remaining is later |
+| Embeddings / `POST /v1/embeddings` | **Shipped** for API-key OpenAI-compat when the catalog tags `embeddings`. Showcase can try. OAuth / Messages-only adapters refuse clearly (no fake vectors) |
+| Quota remaining | **Shipped** when the provider reports it (rate-limit headers; OpenRouter `GET /key`). Unknown remaining is omitted, never invented as 0 or unlimited |
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk** |
@@ -139,7 +140,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |
 | `catalog` | Listing overlays (`pin` / `rename` / `hide`) matching the Catalog UI |
 | `requests` | Opt-in inspector (`tail` when `requestLog` is on) |
-| `health` | Adapter health / cooldowns matching `GET /admin/health` |
+| `health` | Adapter health / quota remaining / cooldowns matching `GET /admin/health` |
 | `status` | Bind / config path / version |
 | `config` | `path` / `show` / `validate` / `init` |
 | `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |
@@ -157,8 +158,9 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `POST /v1/embeddings` | OpenAI Embeddings API for models tagged `embeddings`; refused (no chat fake) otherwise |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
-| `GET /admin/health` | Bind, **adapter health**, **account cooldowns** with remaining time (token required off loopback) |
-| `POST /admin/health/probe` | Re-run `Validate` on each adapter |
+| `GET /admin/health` | Bind, **adapter health**, **quota remaining** (null/omitted when unknown), **account cooldowns** with remaining time (token required off loopback) |
+| `GET /admin/quota` | Per-account quota remaining plus the provider honesty matrix |
+| `POST /admin/health/probe` | Re-run `Validate` on each adapter and documented quota probes |
 | `GET /admin/presets` | Account dropdown templates (env var **names** and whether they are set; never values) |
 | `GET /admin/usage` | Persisted usage (`usage.json`) |
 | `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |

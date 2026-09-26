@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/quota"
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/translate"
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -42,6 +44,7 @@ type Gateway struct {
 	rr     uint64
 	sticky map[string]string
 	health []AdapterHealth
+	quota  *quota.Store
 }
 
 // Cooldown is a temporary skip of an account after a retryable failure.
@@ -74,7 +77,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}}
+	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, quota: quota.NewStore()}
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -102,6 +105,14 @@ func (g *Gateway) rebuild() error {
 			APIKey:    p.ResolveKey(),
 			SessionID: p.SessionID,
 			Tier:      catalog.Tier(p.Tier),
+		}
+		accountID := p.ID
+		adapterName := p.Adapter
+		store := g.quota
+		if store != nil {
+			opts.ObserveHeaders = func(h http.Header) {
+				store.Observe(accountID, adapterName, h)
+			}
 		}
 		if p.OAuth != nil {
 			opts.OAuth = p.OAuth.Runtime()
@@ -199,6 +210,7 @@ func (g *Gateway) Refresh(ctx context.Context) {
 	g.models = all
 	g.health = health
 	g.mu.Unlock()
+	g.probeQuota(ctx, inst)
 }
 
 // Models is the last refreshed full catalog (including hidden).
@@ -858,7 +870,41 @@ func (g *Gateway) Probe(ctx context.Context) []AdapterHealth {
 	g.mu.Lock()
 	g.health = health
 	g.mu.Unlock()
+	g.probeQuota(ctx, inst)
 	return g.AdapterHealth()
+}
+
+// Quota is one remaining snapshot per account. Unknown remaining is omitted.
+func (g *Gateway) Quota() []quota.Snapshot {
+	g.mu.RLock()
+	inst := append([]instance(nil), g.inst...)
+	g.mu.RUnlock()
+	accts := make([]quota.Account, 0, len(inst))
+	for _, inst := range inst {
+		accts = append(accts, quota.Account{ID: inst.Provider.ID, Adapter: inst.Provider.Adapter})
+	}
+	if g.quota == nil {
+		return quota.NewStore().Views(accts)
+	}
+	return g.quota.Views(accts)
+}
+
+func (g *Gateway) probeQuota(ctx context.Context, inst []instance) {
+	if g.quota == nil {
+		return
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	for _, inst := range inst {
+		keyURL, ok := quota.ProbeURL(inst.Provider.Adapter, inst.Provider.BaseURL)
+		if !ok {
+			continue
+		}
+		snap, err := quota.ProbeOpenRouter(ctx, client, inst.Provider.ID, inst.Provider.ResolveKey(), keyURL)
+		if err != nil {
+			continue
+		}
+		g.quota.ApplyProbe(snap)
+	}
 }
 
 func (g *Gateway) candidates(model string) ([]instance, time.Duration) {

@@ -24,6 +24,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/gateway"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/quota"
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/ui"
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -67,6 +68,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 	admin := func(h http.HandlerFunc) http.HandlerFunc { return s.requireAdmin(h) }
 	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
+	mux.HandleFunc("GET /admin/quota", admin(s.handleQuota))
 	mux.HandleFunc("GET /admin/presets", admin(s.handlePresets))
 	mux.HandleFunc("GET /admin/accounts", admin(s.handleAccounts))
 	mux.HandleFunc("POST /admin/accounts", admin(s.handleAddAccount))
@@ -321,11 +323,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"adapters":           adapters.Names(),
 		"failoverPolicy":     cfg.FailoverPolicy(),
 		"adapterHealth":      s.gw.AdapterHealth(),
+		"quota":              s.gw.Quota(),
 		"cooldowns":          s.gw.Cooldowns(),
 		"cooldownTtlMs":      gateway.CooldownTTL.Milliseconds(),
 		"allowNonLoopback":   cfg.AllowNonLoopback,
 		"lan":                cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
 		"adminTokenRequired": s.adminRequired(),
+	})
+}
+
+func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	writeJSON(w, http.StatusOK, map[string]any{
+		"quota":    s.gw.Quota(),
+		"families": quota.Families(),
+		"honesty":  "unknown remaining is omitted (null). 0 is only shown when the provider returned 0. unlimited is only shown when the provider documented null remaining as unlimited (OpenRouter GET /key).",
 	})
 }
 
@@ -335,6 +347,7 @@ func (s *Server) handleHealthProbe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":        "ok",
 		"adapterHealth": s.gw.Probe(ctx),
+		"quota":         s.gw.Quota(),
 		"cooldowns":     s.gw.Cooldowns(),
 		"cooldownTtlMs": gateway.CooldownTTL.Milliseconds(),
 	})

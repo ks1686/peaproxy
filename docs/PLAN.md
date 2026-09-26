@@ -7,7 +7,8 @@ Residuals (documented, not unmarked phase work):
 - **Qwen consumer OAuth:** stubbed **not yet** (no working CPA flow). Use `openai_compat` + a Qwen API key. Do not reverse-engineer a new flow unless a public one exists.
 - **Factory/Droid upstream:** stubbed **not yet** (no public consumer chat OAuth). Use Droid as a PeaProxy **client**.
 - **Image-out:** **Shipped (1.x).** `POST /v1/images/generations` is proxied for API-key OpenAI-compat adapters when the live catalog tags `image_out`. Showcase one-click generates; subscription OAuth does not invent an image path.
-- **Embeddings:** **Shipped (1.x).** `POST /v1/embeddings` is proxied for API-key OpenAI-compat adapters when the live catalog tags `embeddings`. Subscription OAuth does not invent vectors. Quota-remaining remains later.
+- **Embeddings:** **Shipped (1.x).** `POST /v1/embeddings` is proxied for API-key OpenAI-compat adapters when the live catalog tags `embeddings`. Subscription OAuth does not invent vectors.
+- **Quota remaining:** **Shipped (1.x).** Latest remaining from documented upstream rate-limit headers and OpenRouter `GET /api/v1/key` (Health refresh / probe only). Unknown remaining is omitted — never invented as 0, unlimited, or scraped HTML.
 - **Claude Cloudflare 403:** token exchange uses stock Go `crypto/tls` (no uTLS). Prefer the official Anthropic API-key adapter. Details: [OAUTH.md](OAUTH.md).
 - **No tray:** CLI + localhost UI only. That is a locked decision, not a missing feature.
 
@@ -79,7 +80,7 @@ Each free adapter still uses **live ListModels** — new local pulls appear with
 
 - Binary: `peaproxy`
 - CLI: `serve | auth | accounts | models | catalog | requests | health | status | config | clients` (v0.2.8: `catalog pin|rename|hide`, `requests tail`, `health`, `accounts add`)
-- Localhost UI: Accounts (onboarding CTAs), Catalog (filters/hide/pin/rename), Showcase, Clients (harness presets + verify copy), Health (adapter probe + cooldowns), Request log (opt-in), Settings (bind/LAN/secret backend)
+- Localhost UI: Accounts (onboarding CTAs), Catalog (filters/hide/pin/rename), Showcase, Clients (harness presets + verify copy), Health (adapter probe + quota remaining + cooldowns), Request log (opt-in), Settings (bind/LAN/secret backend)
 - HTTP: OpenAI `/v1/chat/completions`, `/v1/models`, `/v1/images/generations`, `/v1/embeddings`; Claude `/v1/messages`; Codex `/v1/responses`; admin loopback routes
 
 ## 7. Showcase
@@ -107,7 +108,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 4. OAuth maximize + remaining free/local hosted presets ✅ (v0.2.0 OAuth; v0.2.2–v0.2.5 presets). **Qwen consumer OAuth still stubbed.**
 5. Releases — **v0.2.0 through v0.2.8 tagged** (GoReleaser linux/darwin/windows amd64+arm64). **v1.0.0** is the next cut ([V1.md](V1.md)); site/marketing is not this repo.
 
-**Shipped in this tree:** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, **image-out proxy** (`POST /v1/images/generations`), **embeddings proxy** (`POST /v1/embeddings`), failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add` (v0.2.8), subscription OAuth (ToS documented), OS keychain / encrypted-file secrets.
+**Shipped in this tree:** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, **image-out proxy** (`POST /v1/images/generations`), **embeddings proxy** (`POST /v1/embeddings`), **quota remaining** (documented headers + OpenRouter `GET /key`), failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add` (v0.2.8), subscription OAuth (ToS documented), OS keychain / encrypted-file secrets.
 
 ## 11. Security
 

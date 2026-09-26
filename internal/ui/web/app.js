@@ -795,6 +795,10 @@ function healthPage(root) {
       <button class="btn" id="probe">Probe adapters</button>
       <div id="ah">loading…</div>
     </section>
+    <section class="card"><h2>Quota remaining</h2>
+      <p class="muted">Only remaining the provider actually returned (rate-limit headers on chat/embeddings/images, or OpenRouter <code>GET /key</code> on Health refresh). Also <code>GET /admin/quota</code>. Missing remaining is unknown — never shown as 0 or unlimited.</p>
+      <div id="quota">loading…</div>
+    </section>
     <section class="card"><h2>Account cooldowns</h2>
       <p class="muted">After a rate-limit, overload, or auth-expired failure the account is skipped for 30s. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Routing follows <code>failover.policy</code> (round-robin default, or fill-first / sticky).</p>
       <div id="cd">loading…</div>
@@ -806,6 +810,20 @@ function healthPage(root) {
     if (n <= 0) return "expired";
     const sec = Math.ceil(n / 1000);
     return sec + "s left";
+  };
+  const formatQuotaRemaining = (q) => {
+    if (!q) return "";
+    const parts = [];
+    const add = (label, v) => {
+      if (v !== null && v !== undefined) parts.push(label + ": " + v);
+    };
+    add("requests", q.remainingRequests);
+    add("tokens", q.remainingTokens);
+    add("requests/day", q.remainingRequestsDay);
+    add("tokens/min", q.remainingTokensMinute);
+    add("credits", q.remainingCredits);
+    if (q.creditsUnlimited) parts.push("credits: unlimited (provider)");
+    return parts.join(" · ");
   };
   const loadHealth = async () => {
     const d = await getJSON("/admin/health");
@@ -827,6 +845,25 @@ function healthPage(root) {
         )
         .join("")}</tbody></table>`
       : emptyState("No adapters probed yet", "Add an account, then refresh the catalog or click Probe.");
+    const quotaRows = (d.quota || [])
+      .map((q) => {
+        const remaining = formatQuotaRemaining(q);
+        const shown = remaining
+          ? escapeHtml(remaining)
+          : `<span class="muted">not reported by provider</span>`;
+        return `<tr>
+        <td>${escapeHtml(q.accountId || "")}</td>
+        <td>${escapeHtml(q.adapter || "")}</td>
+        <td>${shown}</td>
+        <td class="muted">${escapeHtml(q.source || "none")}</td>
+      </tr>`;
+      })
+      .join("");
+    document.getElementById("quota").innerHTML = quotaRows
+      ? `<table>
+      <thead><tr><th>Account</th><th>Adapter</th><th>Remaining</th><th>Source</th></tr></thead>
+      <tbody>${quotaRows}</tbody></table>`
+      : emptyState("No accounts", "Add an account to see quota remaining when a provider reports it.");
     const rows = (d.cooldowns || [])
       .map(
         (c) =>
@@ -842,6 +879,7 @@ function healthPage(root) {
   loadHealth().catch((err) => {
     document.getElementById("h").textContent = err.message;
     document.getElementById("ah").innerHTML = emptyState("Health unavailable", err.message);
+    document.getElementById("quota").innerHTML = emptyState("Health unavailable", err.message);
     document.getElementById("cd").innerHTML = emptyState("Health unavailable", err.message);
     toast(err.message);
   });

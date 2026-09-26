@@ -45,7 +45,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		id:      id,
 		baseURL: base,
 		apiKey:  opts.APIKey,
-		client:  &http.Client{Timeout: 0},
+		client:  adapter.HTTPClient(0, opts.ObserveHeaders),
 	}, nil
 }
 

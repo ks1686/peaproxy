@@ -103,7 +103,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		userInfoURL:  UserInfoURL,
 		apiBase:      base,
 		dailyAPI:     DailyAPI,
-		httpClient:   &http.Client{},
+		httpClient:   adapter.HTTPClient(0, opts.ObserveHeaders),
 		persist:      opts.PersistOAuth,
 		token:        opts.OAuth,
 		skipLoopback: opts.SkipLoopback,

@@ -81,7 +81,7 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 - Usage statistics persistence — **shipped** (`usage.json`)
 - Embeddings endpoint — **shipped** (`POST /v1/embeddings` for keyed OpenAI-compat + `embeddings` models)
 - Image generations API — **shipped** (`POST /v1/images/generations` for keyed OpenAI-compat + `image_out` models)
-- Quota remaining API when provider exposes it — not shipped
+- Quota remaining API when provider exposes it — **shipped** (rate-limit headers + OpenRouter `GET /key`; unknown omitted)
 - GitHub Copilot subscription OAuth — **shipped** (`copilot_oauth`; Copilot chat, not GitHub Models)
 - OpenCode Go subscription — **shipped** as official API key (`opencode_go` at `/zen/go/v1`)
 - Factory/Droid as a chat-model **upstream** — **not yet** (no public consumer chat OAuth). Droid **client** preset shipped.

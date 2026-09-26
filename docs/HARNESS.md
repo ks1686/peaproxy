@@ -6,7 +6,7 @@ Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). A
 
 `peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp/Droid, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
 
-Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log tail, and richer health also live on the CLI (`peaproxy catalog pin|rename|hide`, `peaproxy requests tail`, `peaproxy health` matching `GET /admin/health`; `peaproxy accounts add <preset>` for Jan/GPT4All/SambaNova/Workers AI).
+Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log tail, and richer health also live on the CLI (`peaproxy catalog pin|rename|hide`, `peaproxy requests tail`, `peaproxy health` matching `GET /admin/health` including quota remaining; `peaproxy accounts add <preset>` for Jan/GPT4All/SambaNova/Workers AI).
 
 **PeaProxy cloak defaults are off.** Unlike CLIProxyAPI (#6120), PeaProxy never injects Claude-Code cloak headers or `clear_thinking`. Claude Code may enable cloak itself (`cloak: opt-in` on that preset only).
 

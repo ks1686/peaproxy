@@ -16,9 +16,10 @@ import (
 func healthCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "health",
-		Short: "Adapter health, cooldowns, and bind flags matching GET /admin/health",
+		Short: "Adapter health, quota remaining, cooldowns, and bind flags matching GET /admin/health",
 		Long: `Prints the same fields as GET /admin/health (no admin token on loopback).
-Refreshes live ListModels so adapterHealth and models match a running serve.
+Refreshes live ListModels so adapterHealth, quota, and models match a running serve.
+Quota remaining is omitted when the provider does not report it (never invented as 0).
 
 Examples:
   peaproxy health
@@ -57,6 +58,15 @@ Examples:
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\tadapter=%s\tstatus=%s\tmodels=%d\tlatencyMs=%d%s%s\n",
 					h.AccountID, h.Adapter, h.Status, h.Models, h.LatencyMS, checked, errBit)
+			}
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "quota:")
+			qs := gw.Quota()
+			if len(qs) == 0 {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  (none)")
+			}
+			for _, q := range qs {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\tadapter=%s\tsource=%s\t%s\n",
+					q.AccountID, q.Adapter, q.Source, q.Format())
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "cooldowns:")
 			cds := gw.Cooldowns()
