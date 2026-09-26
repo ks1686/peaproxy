@@ -188,15 +188,42 @@ func TestResponsesDropsStreamOptionsForCodexOAuth(t *testing.T) {
 	t.Cleanup(srv.Close)
 	a := testAdapter(t, srv.URL)
 	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
-	raw := []byte(`{"model":"gpt-5","input":"codex ping","stream_options":{"include_usage":true}}`)
-	if _, err := a.Responses(context.Background(), raw); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name string
+		raw  string
+		keep []string
+	}{
+		{
+			name: "top-level stream_options dropped",
+			raw:  `{"model":"gpt-5","input":"codex ping","stream_options":{"include_usage":true}}`,
+			keep: []string{`"input":"codex ping"`},
+		},
+		{
+			name: "quoted stream_options in input kept",
+			raw:  `{"model":"gpt-5","input":"mention stream_options please","stream_options":{"include_usage":true},"max_output_tokens":16}`,
+			keep: []string{`"input":"mention stream_options please"`, `"max_output_tokens":16`},
+		},
+		{
+			name: "nested stream_options in tools kept",
+			raw:  `{"model":"gpt-5","tools":[{"type":"function","name":"lookup","parameters":{"stream_options":true}}],"input":"x","stream_options":{"include_usage":true}}`,
+			keep: []string{`"parameters":{"stream_options":true}`, `"name":"lookup"`},
+		},
 	}
-	if bytes.Contains(gotBody, []byte("stream_options")) {
-		t.Fatalf("Codex OAuth must drop stream_options: %s", gotBody)
-	}
-	if !bytes.Contains(gotBody, []byte(`"input":"codex ping"`)) {
-		t.Fatalf("must keep input bytes: %s", gotBody)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotBody = nil
+			if _, err := a.Responses(context.Background(), []byte(tc.raw)); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(gotBody, []byte(`"stream_options":{"include_usage":true}`)) {
+				t.Fatalf("Codex OAuth must drop top-level stream_options: %s", gotBody)
+			}
+			for _, k := range tc.keep {
+				if !bytes.Contains(gotBody, []byte(k)) {
+					t.Fatalf("must keep %s: %s", k, gotBody)
+				}
+			}
+		})
 	}
 }
 
