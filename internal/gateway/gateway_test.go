@@ -252,6 +252,70 @@ func TestResponsesTranslatesToChatCompletions(t *testing.T) {
 	}
 }
 
+func TestResponsesToolsRoundTripViaChat(t *testing.T) {
+	var chatBody []byte
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/v1/models":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+			case r.URL.Path == "/v1/chat/completions":
+				chatBody, _ = io.ReadAll(r.Body)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id":    "chatcmpl-tools",
+					"model": "llama3.2",
+					"choices": []map[string]any{{
+						"message": map[string]any{
+							"role":    "assistant",
+							"content": nil,
+							"tool_calls": []map[string]any{{
+								"id":   "call_1",
+								"type": "function",
+								"function": map[string]string{
+									"name":      "lookup",
+									"arguments": `{"q":"x"}`,
+								},
+							}},
+						},
+						"finish_reason": "tool_calls",
+					}},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "other"}}})
+				return
+			}
+			http.Error(w, "unused", http.StatusInternalServerError)
+		},
+	)
+	raw := []byte(`{
+		"model":"llama3.2",
+		"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"look"}]},
+			{"type":"function_call","call_id":"call_prev","name":"lookup","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_prev","output":"old"}
+		]
+	}`)
+	out, _, err := gw.Responses(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(chatBody), `"tools"`) || !strings.Contains(string(chatBody), `"tool_calls"`) {
+		t.Fatalf("chat upstream missing tools round-trip: %s", chatBody)
+	}
+	if !strings.Contains(string(chatBody), `"role":"tool"`) {
+		t.Fatalf("function_call_output must become tool message: %s", chatBody)
+	}
+	if !strings.Contains(string(out), `"type":"function_call"`) || !strings.Contains(string(out), `"call_id":"call_1"`) {
+		t.Fatalf("responses output missing function_call: %s", out)
+	}
+}
+
 func TestChatAll429DoesNotStormCooledAccounts(t *testing.T) {
 	hitsA, hitsB := 0, 0
 	gw := twoAccountGateway(t,

@@ -172,6 +172,66 @@ func TestResponsesTranslatesViaChat(t *testing.T) {
 	}
 }
 
+func TestResponsesToolsRoundTripHTTP(t *testing.T) {
+	var chatBody []byte
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+		case "/v1/chat/completions":
+			chatBody, _ = io.ReadAll(r.Body)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":    "chatcmpl-tools",
+				"model": "llama3.2",
+				"choices": []map[string]any{{
+					"message": map[string]any{
+						"role": "assistant",
+						"tool_calls": []map[string]any{{
+							"id":   "call_1",
+							"type": "function",
+							"function": map[string]string{
+								"name":      "lookup",
+								"arguments": `{"q":"x"}`,
+							},
+						}},
+					},
+					"finish_reason": "tool_calls",
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{{
+			ID: "local", Adapter: "openai_compat", Tier: "local", BaseURL: up.URL + "/v1",
+		}},
+	}
+	gw, err := gateway.New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	s := New(Options{Gateway: gw})
+	body := `{"model":"llama3.2","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"role":"user","content":[{"type":"input_text","text":"look"}]},{"type":"function_call_output","call_id":"call_prev","output":"old"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(string(chatBody), `"tools"`) || !strings.Contains(string(chatBody), `"role":"tool"`) {
+		t.Fatalf("chat upstream %s", chatBody)
+	}
+	if !strings.Contains(rr.Body.String(), `"type":"function_call"`) || !strings.Contains(rr.Body.String(), `"call_id":"call_1"`) {
+		t.Fatalf("responses %s", rr.Body)
+	}
+}
+
 func TestShowcaseAndUsage(t *testing.T) {
 	s, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/admin/showcase", bytes.NewReader([]byte(`{"model":"llama3.2","prompt":"hi"}`)))

@@ -200,6 +200,187 @@ func TestResponsesDropsStreamOptionsForCodexOAuth(t *testing.T) {
 	}
 }
 
+func TestResponsesForwardsToolsAndFunctionCallOutput(t *testing.T) {
+	var gotPath, gotAuth, gotAcct, gotAccept string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAcct = r.Header.Get("Chatgpt-Account-Id")
+		gotAccept = r.Header.Get("Accept")
+		gotBody, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_tools",
+			"object": "response",
+			"output": []map[string]any{{
+				"type":      "function_call",
+				"call_id":   "call_lookup",
+				"name":      "lookup",
+				"arguments": `{"q":"x"}`,
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	raw := []byte(`{
+		"model":"gpt-5",
+		"tools":[{"type":"function","name":"lookup","description":"find things","parameters":{"type":"object"}}],
+		"tool_choice":"auto",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"look this up"}]},
+			{"type":"function_call","call_id":"call_prev","name":"lookup","arguments":"{\"q\":\"old\"}"},
+			{"type":"function_call_output","call_id":"call_prev","output":"cached"},
+			{"type":"reasoning","summary":[{"type":"summary_text","text":"think"}]}
+		],
+		"stream_options":{"include_usage":true}
+	}`)
+	out, err := a.Responses(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(gotPath, "/responses") {
+		t.Fatalf("path %s", gotPath)
+	}
+	if gotAuth != "Bearer tok" || gotAcct != "acct_99" {
+		t.Fatalf("auth=%q acct=%q", gotAuth, gotAcct)
+	}
+	if gotAccept != "application/json" {
+		t.Fatalf("accept %s", gotAccept)
+	}
+	if bytes.Contains(gotBody, []byte("stream_options")) {
+		t.Fatalf("must drop stream_options: %s", gotBody)
+	}
+	for _, key := range []string{`"tools"`, `"tool_choice"`, `"function_call_output"`, `"function_call"`, `"reasoning"`, `"lookup"`} {
+		if !bytes.Contains(gotBody, []byte(key)) {
+			t.Fatalf("forwarded body missing %s: %s", key, gotBody)
+		}
+	}
+	if !bytes.Contains(out, []byte(`"function_call"`)) {
+		t.Fatalf("native response %s", out)
+	}
+}
+
+func TestResponsesStreamForwardsTools(t *testing.T) {
+	var gotBody []byte
+	var gotAccept string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		gotAccept = r.Header.Get("Accept")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\"}\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	raw := []byte(`{"model":"gpt-5","tools":[{"type":"function","name":"lookup"}],"input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}],"stream_options":{"include_usage":true}}`)
+	var out bytes.Buffer
+	if err := a.ResponsesStream(context.Background(), raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if gotAccept != "text/event-stream" {
+		t.Fatalf("accept %s", gotAccept)
+	}
+	if bytes.Contains(gotBody, []byte("stream_options")) {
+		t.Fatalf("must drop stream_options: %s", gotBody)
+	}
+	if !bytes.Contains(gotBody, []byte(`"tools"`)) || !bytes.Contains(gotBody, []byte(`"function_call_output"`)) {
+		t.Fatalf("stream body %s", gotBody)
+	}
+	if !strings.Contains(out.String(), "response.created") {
+		t.Fatalf("sse %s", out.String())
+	}
+}
+
+func TestChatToResponsesMapsToolsAndToolMessages(t *testing.T) {
+	in := []byte(`{
+		"model":"gpt-5",
+		"tools":[{"type":"function","function":{"name":"lookup","description":"find things","parameters":{"type":"object"}}}],
+		"tool_choice":{"type":"function","function":{"name":"lookup"}},
+		"messages":[
+			{"role":"user","content":"look this up"},
+			{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]},
+			{"role":"tool","tool_call_id":"call_1","content":"found it"}
+		]
+	}`)
+	out, err := chatToResponses(in, "gpt-5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte(`"messages"`)) {
+		t.Fatalf("leaked chat messages: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"tools"`)) || !bytes.Contains(out, []byte(`"tool_choice"`)) {
+		t.Fatalf("missing tools/tool_choice: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"type":"function_call"`)) || !bytes.Contains(out, []byte(`"call_id":"call_1"`)) {
+		t.Fatalf("missing function_call item: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"type":"function_call_output"`)) || !bytes.Contains(out, []byte(`"output":"found it"`)) {
+		t.Fatalf("missing function_call_output: %s", out)
+	}
+	var parsed struct {
+		Tools []struct {
+			Type     string `json:"type"`
+			Name     string `json:"name"`
+			Function *struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Tools) != 1 || parsed.Tools[0].Name != "lookup" || parsed.Tools[0].Function != nil {
+		t.Fatalf("tools must be Responses-shaped, got %s", out)
+	}
+}
+
+func TestChatMapsFunctionCallOutputToToolCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":    "resp_fc",
+			"model": "gpt-5",
+			"output": []map[string]any{
+				{
+					"type":      "function_call",
+					"call_id":   "call_lookup",
+					"name":      "lookup",
+					"arguments": `{"q":"x"}`,
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gpt-5",
+		Raw:   []byte(`{"model":"gpt-5","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"look"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(resp.Raw, []byte(`"tool_calls"`)) || !bytes.Contains(resp.Raw, []byte(`"lookup"`)) {
+		t.Fatalf("chat response missing tool_calls: %s", resp.Raw)
+	}
+	if !bytes.Contains(resp.Raw, []byte(`"finish_reason":"tool_calls"`)) {
+		t.Fatalf("finish_reason: %s", resp.Raw)
+	}
+}
+
 func TestChatToResponsesPreservesModelAndUserText(t *testing.T) {
 	out, err := chatToResponses([]byte(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`), "gpt-5", false)
 	if err != nil {
@@ -210,6 +391,27 @@ func TestChatToResponsesPreservesModelAndUserText(t *testing.T) {
 	}
 	if bytes.Contains(out, []byte(`"messages"`)) {
 		t.Fatalf("leaked chat messages: %s", out)
+	}
+}
+
+func TestChatStreamMapsFunctionCallEvents(t *testing.T) {
+	in := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":""}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"call_1","delta":"{\"q\":\"x\"}"}`,
+		``,
+		``,
+	}, "\n")
+	var out bytes.Buffer
+	if err := responsesSSEToOpenAI(strings.NewReader(in), &out, "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"tool_calls"`) || !strings.Contains(got, `"lookup"`) {
+		t.Fatalf("chat stream missing tool_calls: %s", got)
+	}
+	if !strings.Contains(got, `[DONE]`) {
+		t.Fatalf("%s", got)
 	}
 }
 

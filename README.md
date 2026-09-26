@@ -73,7 +73,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped |
 | `POST /v1/chat/completions` stream + non-stream | Shipped |
 | `POST /v1/messages` true Anthropic SSE | Shipped |
-| `POST /v1/responses` (Codex native or translated) | Shipped |
+| `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |
 | Image-out / `POST /v1/images/generations` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
 | API keys + custom OpenAI-compat | Shipped |
@@ -144,7 +144,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `GET /v0/catalog` | Rich catalog (tier, modalities, privacy, hidden/routable) |
 | `POST /v1/chat/completions` | Stream + non-stream; failover on retryable status/bodies; cooled accounts are not re-hit (503 + Retry-After) |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
-| `POST /v1/responses` | Codex / OpenAI Responses: native pass-through for Codex OAuth, otherwise translated via chat completions |
+| `POST /v1/responses` | Codex / OpenAI Responses: native tools pass-through for Codex OAuth (minus `stream_options`); other adapters round-trip function tools via chat |
 | `POST /v1/images/generations` | OpenAI Images API for models tagged `image_out`; refused (no chat fake) otherwise |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |

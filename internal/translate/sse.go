@@ -167,6 +167,9 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 }
 
 // OpenAISSEToResponses converts chat.completion.chunk SSE into Responses API SSE.
+// Text deltas become response.output_text.delta. Chat tool_calls are mapped to
+// function_call output items on response.completed (plus argument deltas when
+// present). This does not execute tools or invent tool results.
 func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	started := false
 	id := "resp_peaproxy"
@@ -177,6 +180,12 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		return err
 	}
 	var text strings.Builder
+	type pendingCall struct {
+		ID, Name, Arguments string
+		Started             bool
+	}
+	calls := map[int]*pendingCall{}
+	var order []int
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -191,7 +200,16 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
-					Content string `json:"content"`
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
 				} `json:"delta"`
 			} `json:"choices"`
 		}
@@ -227,13 +245,16 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				return err
 			}
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			delta := chunk.Choices[0].Delta.Content
-			text.WriteString(delta)
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta
+		if delta.Content != "" {
+			text.WriteString(delta.Content)
 			ev := struct {
 				Type  string `json:"type"`
 				Delta string `json:"delta"`
-			}{Type: "response.output_text.delta", Delta: delta}
+			}{Type: "response.output_text.delta", Delta: delta.Content}
 			raw, err := json.Marshal(ev)
 			if err != nil {
 				return err
@@ -242,9 +263,82 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				return err
 			}
 		}
+		for _, tc := range delta.ToolCalls {
+			pc, ok := calls[tc.Index]
+			if !ok {
+				pc = &pendingCall{}
+				calls[tc.Index] = pc
+				order = append(order, tc.Index)
+			}
+			if tc.ID != "" {
+				pc.ID = tc.ID
+			}
+			if tc.Function.Name != "" {
+				pc.Name = tc.Function.Name
+			}
+			if tc.Function.Arguments != "" {
+				pc.Arguments += tc.Function.Arguments
+				ev := struct {
+					Type  string `json:"type"`
+					Delta string `json:"delta"`
+				}{Type: "response.function_call_arguments.delta", Delta: tc.Function.Arguments}
+				raw, err := json.Marshal(ev)
+				if err != nil {
+					return err
+				}
+				if err := writeEvent("response.function_call_arguments.delta", string(raw)); err != nil {
+					return err
+				}
+			}
+			if !pc.Started && (pc.ID != "" || pc.Name != "") {
+				pc.Started = true
+				item := struct {
+					Type      string `json:"type"`
+					CallID    string `json:"call_id"`
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{Type: "function_call", CallID: pc.ID, Name: pc.Name, Arguments: pc.Arguments}
+				added := struct {
+					Type string `json:"type"`
+					Item struct {
+						Type      string `json:"type"`
+						CallID    string `json:"call_id"`
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"item"`
+				}{Type: "response.output_item.added", Item: item}
+				raw, err := json.Marshal(added)
+				if err != nil {
+					return err
+				}
+				if err := writeEvent("response.output_item.added", string(raw)); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	if !started {
 		return sc.Err()
+	}
+	var output []responsesOutMsg
+	for _, idx := range order {
+		pc := calls[idx]
+		output = append(output, responsesOutMsg{
+			Type:      "function_call",
+			CallID:    pc.ID,
+			Name:      pc.Name,
+			Arguments: pc.Arguments,
+		})
+	}
+	if text.Len() > 0 || len(output) == 0 {
+		output = append(output, responsesOutMsg{
+			Type: "message",
+			Role: "assistant",
+			Content: []responsesOutPart{{
+				Type: "output_text",
+				Text: text.String(),
+			}},
+		})
 	}
 	completed := struct {
 		Type     string          `json:"type"`
@@ -252,18 +346,11 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	}{
 		Type: "response.completed",
 		Response: responsesOutput{
-			ID:     id,
-			Object: "response",
-			Status: "completed",
-			Model:  model,
-			Output: []responsesOutMsg{{
-				Type: "message",
-				Role: "assistant",
-				Content: []responsesOutPart{{
-					Type: "output_text",
-					Text: text.String(),
-				}},
-			}},
+			ID:         id,
+			Object:     "response",
+			Status:     "completed",
+			Model:      model,
+			Output:     output,
 			OutputText: text.String(),
 		},
 	}
