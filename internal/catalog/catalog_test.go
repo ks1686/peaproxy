@@ -142,3 +142,33 @@ func TestOpenAIModelsShapeUsesIDOnly(t *testing.T) {
 		t.Fatalf("owned_by should be peaproxy, not upstream provider; got %q", out.Data[0].OwnedBy)
 	}
 }
+
+func TestInferModalitiesVision(t *testing.T) {
+	if got := InferModalities("llama3.2"); len(got) != 1 || got[0] != "text" {
+		t.Fatalf("%v", got)
+	}
+	got := InferModalities("claude-sonnet-4-20250514")
+	if len(got) != 2 || got[1] != "image_in" {
+		t.Fatalf("%v", got)
+	}
+	got = InferModalities("gpt-4o-mini")
+	if len(got) != 2 || got[1] != "image_in" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestAccountsForModelIncludesHidden(t *testing.T) {
+	models := []Model{
+		{ID: "gpt-4o", Provider: "openai", AccountID: "a", Tier: TierPaid},
+		{ID: "gpt-4o", Provider: "openai", AccountID: "b", Tier: TierPaid},
+	}
+	q := Query{HideModels: []string{"gpt-4o"}}
+	got := AccountsForModel(models, q, "gpt-4o")
+	if len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+	q.BlockRouting = true
+	if got := AccountsForModel(models, q, "gpt-4o"); len(got) != 0 {
+		t.Fatalf("blockRouting: %v", got)
+	}
+}

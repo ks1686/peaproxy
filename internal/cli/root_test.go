@@ -57,3 +57,13 @@ func TestConfigValidateOK(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestVersionFlag(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"--version"}, out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "peaproxy") {
+		t.Fatalf("%s", out)
+	}
+}

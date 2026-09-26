@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
+	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/clients"
 	"github.com/ks1686/peaproxy/internal/config"
@@ -21,6 +22,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/ui"
 	"github.com/ks1686/peaproxy/internal/usage"
+	"github.com/ks1686/peaproxy/internal/version"
 )
 
 const maxBody = 8 << 20
@@ -57,6 +59,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("GET /admin/usage", s.handleUsage)
 	mux.HandleFunc("GET /admin/clients", s.handleClients)
 	mux.HandleFunc("GET /admin/settings", s.handleSettings)
+	mux.HandleFunc("POST /admin/settings", s.handleSettingsPost)
 	uiFS, err := fs.Sub(ui.FS, "web")
 	if err != nil {
 		log.Printf("ui embed: %v", err)
@@ -136,15 +139,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	peek := jsonx.PeekBody(raw)
 	if peek.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		account, err := s.gw.ChatStream(r.Context(), raw, w)
+		sw := &sseWriter{ResponseWriter: w}
+		account, err := s.gw.ChatStream(r.Context(), raw, sw)
 		s.record(account, peek.Model, "openai", true, http.StatusOK, err, "")
-		if err != nil {
+		if err != nil && !sw.started {
 			writeJSON(w, statusOf(err), errJSON(err))
-		}
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
 		}
 		return
 	}
@@ -171,20 +170,22 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	peek := jsonx.PeekBody(raw)
+	if peek.Stream {
+		sw := &sseWriter{ResponseWriter: w}
+		account, err := s.gw.ClaudeChatStream(r.Context(), raw, sw)
+		s.record(account, peek.Model, "claude", true, http.StatusOK, err, "")
+		if err != nil && !sw.started {
+			writeJSON(w, statusOf(err), errJSON(err))
+		}
+		return
+	}
 	out, account, err := s.gw.ClaudeChat(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "claude", peek.Stream, statusOf(err), err, "")
+		s.record(account, peek.Model, "claude", false, statusOf(err), err, "")
 		writeJSON(w, statusOf(err), errJSON(err))
 		return
 	}
-	s.record(account, peek.Model, "claude", peek.Stream, http.StatusOK, nil, "")
-	if peek.Stream {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = io.WriteString(w, "event: message\ndata: "+string(out)+"\n\n")
-		_, _ = io.WriteString(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
-		return
-	}
+	s.record(account, peek.Model, "claude", false, http.StatusOK, nil, "")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -193,15 +194,22 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	_ = r
 	cfg := s.gw.Config()
+	usagePath := ""
+	if s.gw.Usage != nil {
+		usagePath = s.gw.Usage.Path()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"bind":     cfg.Bind,
-		"port":     cfg.Port,
-		"phase":    "v0.1",
-		"oauth":    "not implemented",
-		"config":   s.gw.ConfigPath(),
-		"models":   len(s.gw.Models()),
-		"adapters": []string{"ollama", "openai_compat", "opencode_zen", "anthropic_oauth", "openai_oauth"},
+		"status":     "ok",
+		"version":    version.Version,
+		"bind":       cfg.Bind,
+		"port":       cfg.Port,
+		"oauth":      "not implemented",
+		"config":     s.gw.ConfigPath(),
+		"usageFile":  usagePath,
+		"requestLog": cfg.RequestLog,
+		"models":     len(s.gw.Models()),
+		"adapters":   adapters.Names(),
+		"cooldowns":  s.gw.Cooldowns(),
 	})
 }
 
@@ -289,26 +297,18 @@ func (s *Server) handleHide(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model  string `json:"model"`
-		Prompt string `json:"prompt"`
+		Model    string `json:"model"`
+		Prompt   string `json:"prompt"`
+		ImageURL string `json:"imageUrl"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
 		return
 	}
 	if body.Prompt == "" {
 		body.Prompt = "Say hello in one short sentence."
 	}
-	req := struct {
-		Model    string            `json:"model"`
-		Messages []adapter.Message `json:"messages"`
-		Stream   bool              `json:"stream"`
-	}{
-		Model:    body.Model,
-		Messages: []adapter.Message{{Role: "user", Content: body.Prompt}},
-		Stream:   false,
-	}
-	raw, err := json.Marshal(req)
+	raw, err := showcaseBody(body.Model, body.Prompt, body.ImageURL)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errJSON(err))
 		return
@@ -326,15 +326,21 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		"content":  resp.Content,
 		"raw":      json.RawMessage(resp.Raw),
 		"redacted": true,
+		"vision":   body.ImageURL != "",
 	})
 }
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	_ = r
+	path := ""
+	if s.gw.Usage != nil {
+		path = s.gw.Usage.Path()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"recent":     s.gw.Usage.Recent(),
 		"byAccount":  s.gw.Usage.ByAccount(),
-		"disclaimer": "In-memory only; not persisted. Built-in usage is a PeaProxy win vs CPA v6.10+.",
+		"path":       path,
+		"disclaimer": "Persisted to usage.json next to the config file. Opt-in requestLog writes redacted JSONL to requests.log.",
 	})
 }
 
@@ -366,7 +372,25 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"expose":           cfg.Expose,
 		"configPath":       s.gw.ConfigPath(),
 		"listingOnlyHide":  !cfg.Hide.BlockRouting,
+		"requestLog":       cfg.RequestLog,
 	})
+}
+
+func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RequestLog *bool `json:"requestLog"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	if body.RequestLog != nil {
+		if err := s.gw.SetRequestLog(*body.RequestLog); err != nil {
+			writeJSON(w, http.StatusBadRequest, errJSON(err))
+			return
+		}
+	}
+	s.handleSettings(w, r)
 }
 
 func (s *Server) record(account, model, proto string, stream bool, status int, err error, preview string) {
@@ -422,4 +446,63 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+type sseWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (s *sseWriter) Write(p []byte) (int, error) {
+	if !s.started {
+		s.Header().Set("Content-Type", "text/event-stream")
+		s.Header().Set("Cache-Control", "no-cache")
+		s.started = true
+	}
+	n, err := s.ResponseWriter.Write(p)
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+	return n, err
+}
+
+type showcasePart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
+func showcaseBody(model, prompt, imageURL string) ([]byte, error) {
+	type msg struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	type req struct {
+		Model    string `json:"model"`
+		Messages []msg  `json:"messages"`
+		Stream   bool   `json:"stream"`
+	}
+	content, err := json.Marshal(prompt)
+	if err != nil {
+		return nil, err
+	}
+	if imageURL != "" {
+		parts := []showcasePart{
+			{Type: "text", Text: prompt},
+			{Type: "image_url", ImageURL: &struct {
+				URL string `json:"url"`
+			}{URL: imageURL}},
+		}
+		content, err = json.Marshal(parts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(req{
+		Model:    model,
+		Messages: []msg{{Role: "user", Content: content}},
+		Stream:   false,
+	})
 }

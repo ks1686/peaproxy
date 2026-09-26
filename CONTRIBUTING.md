@@ -4,7 +4,7 @@ Public repo: https://github.com/ks1686/peaproxy
 
 ## Scope right now
 
-This tree is a **usable v0.1 core**. OAuth adapters (`anthropic_oauth`, `openai_oauth`) are stubs. Do not land reverse-engineered login flows or harvested client secrets.
+Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters, live catalog, Claude SSE, vision Showcase, multi-account failover, persisted usage. OAuth adapters (`anthropic_oauth`, `openai_oauth`) remain stubs. Do not land reverse-engineered login flows or harvested client secrets.
 
 ## Dev loop
 
@@ -12,9 +12,12 @@ This tree is a **usable v0.1 core**. OAuth adapters (`anthropic_oauth`, `openai_
 go test ./...
 go build ./...
 go run ./cmd/peaproxy --help
+go run ./cmd/peaproxy --version
 ```
 
 Default listen address is `127.0.0.1:8317`. Non-loopback bind requires `allowNonLoopback: true` and a non-empty `adminToken`.
+
+Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows, amd64+arm64) and stamps `internal/version.Version` into `--version`.
 
 ## Conventions
 
@@ -22,10 +25,4 @@ Default listen address is `127.0.0.1:8317`. Non-loopback bind requires `allowNon
 - No AI authorship trailers on commits or PRs.
 - Live `ListModels` per adapter — never a hand-maintained model allowlist as source of truth.
 - Secrets stay in the OS keychain (encrypted file fallback). Never log tokens.
-
-## Spike next (not this PR)
-
-1. One real OAuth adapter + one API-key adapter + Ollama.
-2. Chat + vision-in; live `/v1/models`.
-3. Failover on 429/quota.
-4. Harness verify for Cursor + one other client.
+- Prompt-cache-safe JSON: structs + `jsonx.SetStream`, never `map[string]any` for Anthropic bodies.

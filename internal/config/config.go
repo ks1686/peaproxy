@@ -24,6 +24,7 @@ type Config struct {
 	Port             int        `yaml:"port"`
 	AdminToken       string     `yaml:"adminToken,omitempty"`
 	AllowNonLoopback bool       `yaml:"allowNonLoopback,omitempty"`
+	RequestLog       bool       `yaml:"requestLog,omitempty"`
 	Hide             HideList   `yaml:"hide"`
 	Expose           ExposeList `yaml:"expose"`
 	Providers        []Provider `yaml:"providers"`

@@ -99,7 +99,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 4. OAuth maximize + more free adapters
 5. Releases + pea-pod.me/peaproxy page
 
-**This tree implements the phase-1 core (live catalog, ollama/openai_compat/zen, UI, listing-only hide). OAuth remains a stub.**
+**This tree implements native API-key adapters (Anthropic, OpenAI, OpenRouter, Zen), Claude SSE, vision Showcase, failover + persisted usage, and release scaffolding. OAuth remains a stub.**
 
 ## 11. Security
 

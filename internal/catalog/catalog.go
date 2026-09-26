@@ -3,7 +3,10 @@
 // allowlist of model IDs.
 package catalog
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // Tier is a pricing/origin tag used for catalog filters.
 type Tier string
@@ -105,6 +108,27 @@ func FindRoutable(models []Model, q Query, id string) (Model, bool) {
 	return Model{}, false
 }
 
+// AccountsForModel returns account IDs that can serve id, including hidden-but-routable.
+func AccountsForModel(models []Model, q Query, id string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, m := range models {
+		if m.ID != id {
+			continue
+		}
+		ann := annotate(m, q)
+		if !ann.Routable {
+			continue
+		}
+		if _, ok := seen[ann.AccountID]; ok {
+			continue
+		}
+		seen[ann.AccountID] = struct{}{}
+		out = append(out, ann.AccountID)
+	}
+	return out
+}
+
 func annotate(m Model, q Query) Model {
 	hidden := slices.Contains(q.HideProviders, m.Provider) || slices.Contains(q.HideModels, m.ID)
 	exposed := !hidden
@@ -165,4 +189,22 @@ func ToOpenAIList(models []Model) OpenAIModelList {
 		})
 	}
 	return OpenAIModelList{Object: "list", Data: data}
+}
+
+// InferModalities tags text and optional image_in from well-known model id patterns.
+// This is enrichment only — live ListModels remains the source of IDs.
+func InferModalities(id string) []string {
+	lower := strings.ToLower(id)
+	out := []string{"text"}
+	for _, h := range []string{
+		"gpt-4o", "gpt-4.1", "gpt-5", "gpt-4-turbo", "o1", "o3", "o4",
+		"claude-3", "claude-sonnet", "claude-opus", "claude-haiku",
+		"gemini", "llava", "vision", "pixtral", "qwen2-vl", "qwen2.5-vl",
+		"qwen-vl", "llama-4", "grok-2-vision",
+	} {
+		if strings.Contains(lower, h) {
+			return []string{"text", "image_in"}
+		}
+	}
+	return out
 }
