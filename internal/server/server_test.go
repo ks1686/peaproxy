@@ -319,10 +319,49 @@ func TestHealthzPublicAndPresets(t *testing.T) {
 	if prr.Code != http.StatusOK {
 		t.Fatalf("presets %d %s", prr.Code, prr.Body)
 	}
-	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth"} {
+	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth"} {
 		if !strings.Contains(prr.Body.String(), name) {
 			t.Fatalf("missing %s in %s", name, prr.Body)
 		}
+	}
+}
+
+func TestAddWorkersAIFillsAccountIDFromEnv(t *testing.T) {
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "cf_acct_from_env")
+	s, _ := testServer(t)
+	body := `{"id":"workers-ai","adapter":"workers_ai","tier":"freemium","baseURL":"https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/accounts", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("add %d %s", rr.Code, rr.Body)
+	}
+	list := httptest.NewRequest(http.MethodGet, "/admin/accounts", nil)
+	lrr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(lrr, list)
+	if !strings.Contains(lrr.Body.String(), "cf_acct_from_env") {
+		t.Fatalf("expected filled account id in %s", lrr.Body)
+	}
+	if strings.Contains(lrr.Body.String(), "YOUR_ACCOUNT_ID") {
+		t.Fatal("placeholder should be gone after add")
+	}
+}
+
+func TestPresetsJSONDoesNotLeakEnvValues(t *testing.T) {
+	t.Setenv("GROQ_API_KEY", "leak-me-please")
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/presets", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if strings.Contains(rr.Body.String(), "leak-me-please") {
+		t.Fatal("preset JSON leaked an env value")
+	}
+	if !strings.Contains(rr.Body.String(), `"envKey":"GROQ_API_KEY"`) || !strings.Contains(rr.Body.String(), `"envKeySet":true`) {
+		t.Fatalf("expected env-key discovery flags: %s", rr.Body)
 	}
 }
 
@@ -382,7 +421,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet", "/admin/requests", "data-pin", "displayName"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}

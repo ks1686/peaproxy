@@ -47,6 +47,16 @@ providers:
   #   adapter: llamacpp
   #   tier: local
 
+  # Jan desktop Local API Server (default http://127.0.0.1:1337/v1).
+  # - id: jan-local
+  #   adapter: jan
+  #   tier: local
+
+  # GPT4All desktop local API (default http://127.0.0.1:4891/v1).
+  # - id: gpt4all-local
+  #   adapter: gpt4all
+  #   tier: local
+
   # Local vLLM OpenAI-compat server (default http://127.0.0.1:8000/v1).
   # - id: vllm-local
   #   adapter: vllm
@@ -90,12 +100,19 @@ providers:
   #   tier: freemium
   #   apiKeyEnv: NVIDIA_API_KEY
 
-  # Cloudflare Workers AI OpenAI-compat. Replace YOUR_ACCOUNT_ID (wrangler whoami).
+  # Cloudflare Workers AI OpenAI-compat. Paste the account id, or set
+  # CLOUDFLARE_ACCOUNT_ID so YOUR_ACCOUNT_ID is replaced at add/runtime.
   # - id: workers-ai
   #   adapter: workers_ai
   #   tier: freemium
   #   baseURL: https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1
   #   apiKeyEnv: CLOUDFLARE_API_TOKEN
+
+  # SambaNova Cloud OpenAI-compat (https://api.sambanova.ai/v1).
+  # - id: sambanova-key
+  #   adapter: sambanova
+  #   tier: freemium
+  #   apiKeyEnv: SAMBANOVA_API_KEY
 
   # Ollama Cloud (hosted OpenAI-compat at ollama.com/v1 — not local :11434).
   # - id: ollama-cloud

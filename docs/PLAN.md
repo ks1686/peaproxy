@@ -120,8 +120,8 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 
 ## 13. Free-provider expansion
 
-Local (no key): Ollama (`:11434/v1`), LM Studio (`:1234/v1`), llama.cpp (`:8080/v1`), vLLM (`:8000/v1`).
+Local (no key): Ollama (`:11434/v1`), LM Studio (`:1234/v1`), llama.cpp (`:8080/v1`), vLLM (`:8000/v1`), Jan (`:1337/v1`), GPT4All (`:4891/v1`).
 
-Hosted free / freemium (API key, live `/models`): OpenRouter `:free` models, OpenCode Zen free, Hugging Face router, Groq, Cerebras, Google AI Studio free quota, NVIDIA NIM free, Ollama Cloud free plan, Cloudflare Workers AI where applicable. **GitHub Models retired 2026-07-30 — do not list.**
+Hosted free / freemium (API key, live `/models`): OpenRouter `:free` models, OpenCode Zen free, Hugging Face router, Groq, Cerebras, Google AI Studio free quota, NVIDIA NIM free, Ollama Cloud free plan, Cloudflare Workers AI (account id required), SambaNova Cloud. **GitHub Models retired 2026-07-30 — do not list.** Together AI is documented OpenAI-compat but pay-per-token — skip as a free preset.
 
 Generic `openai_compat` adapter covers most with `base_url` + key + tier tag inferred from provider metadata or user label.

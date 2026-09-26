@@ -31,7 +31,7 @@ Open http://127.0.0.1:8317/
 
 ## Quick start
 
-1. **Accounts** — pick a preset (Ollama local or **Cloud**, LM Studio, **llama.cpp**, **vLLM**, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, **NVIDIA NIM**, **Cloudflare Workers AI**, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
+1. **Accounts** — pick a preset (Ollama local or **Cloud**, LM Studio, **llama.cpp**, **vLLM**, **Jan**, **GPT4All**, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, **NVIDIA NIM**, **Cloudflare Workers AI** (account id field or `CLOUDFLARE_ACCOUNT_ID`), **SambaNova**, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). Presets show the env var **name** they expect and whether it is set (never the value). OAuth presets show a ban-risk warning; prefer keys.
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename overlays. Free/Paid/Local filter is remembered in the UI.
 3. **Showcase** — try a prompt; vision models (`image_in`) accept an image URL or upload. Models tagged `image_out` show a gated **not yet** (no fake image-gen chat).
 4. **Request log** — opt-in redacted inspector (`requestLog: true` or the UI toggle).
@@ -83,7 +83,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
 | `GET /admin/health` | Bind, **adapter health**, **account cooldowns** with remaining time (token required off loopback) |
 | `POST /admin/health/probe` | Re-run `Validate` on each adapter |
-| `GET /admin/presets` | Account dropdown templates |
+| `GET /admin/presets` | Account dropdown templates (includes env var **names** and whether they are set; never values) |
 | `GET /admin/usage` | Persisted usage (`usage.json`) |
 | `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |
 | `POST /admin/catalog/overlay` | Pin / rename a live model id (listing overlay only) |

@@ -109,6 +109,9 @@ function accountsPage(root) {
         </label>
         <label>ID <input id="acc-id" placeholder="ollama-local" /></label>
         <label>Base URL <input id="acc-url" size="36" /></label>
+        <label id="acc-account-wrap" hidden>Account ID
+          <input id="acc-account-id" autocomplete="off" placeholder="CLOUDFLARE_ACCOUNT_ID" />
+        </label>
         <label>API key <input id="acc-key" type="password" autocomplete="off" /></label>
         <label>Tier
           <select id="acc-tier">
@@ -120,6 +123,7 @@ function accountsPage(root) {
         </label>
         <button class="btn primary" id="acc-add">Add</button>
       </div>
+      <p class="muted" id="preset-env" hidden></p>
       <p class="warn" id="zen-warn" hidden></p>
       <p class="muted" id="preset-note" hidden></p>
     </section>
@@ -135,6 +139,21 @@ function accountsPage(root) {
     document.getElementById("acc-id").value = p.id;
     document.getElementById("acc-url").value = p.baseURL || "";
     document.getElementById("acc-tier").value = p.tier || "paid";
+    const accountWrap = document.getElementById("acc-account-wrap");
+    const accountInput = document.getElementById("acc-account-id");
+    accountWrap.hidden = !p.accountIDEnv && !p.urlPlaceholder;
+    accountInput.value = "";
+    accountInput.placeholder = p.accountIDEnv || "account id";
+    const envHint = document.getElementById("preset-env");
+    const envBits = [];
+    if (p.envKey) {
+      envBits.push("API key env `" + p.envKey + "` " + (p.envKeySet ? "(set in this process)" : "(not set — paste a key or export the var)"));
+    }
+    if (p.accountIDEnv) {
+      envBits.push("Account ID env `" + p.accountIDEnv + "` " + (p.accountIDEnvSet ? "(set in this process — Add will fill the URL)" : "(not set — paste the id into Account ID)"));
+    }
+    envHint.hidden = envBits.length === 0;
+    envHint.textContent = envBits.join(". ");
     const warn = document.getElementById("zen-warn");
     warn.hidden = !p.warn;
     warn.textContent = p.warn || "";
@@ -142,7 +161,18 @@ function accountsPage(root) {
     note.hidden = !p.note;
     note.textContent = p.note || "";
   };
+  const fillAccountID = () => {
+    const p = presets.find((x) => x.id === sel.value);
+    const placeholder = p?.urlPlaceholder;
+    if (!placeholder) return;
+    const id = document.getElementById("acc-account-id").value.trim();
+    let url = document.getElementById("acc-url").value || p.baseURL || "";
+    if (!url.includes(placeholder) && p.baseURL) url = p.baseURL;
+    if (id) url = url.split(placeholder).join(id);
+    document.getElementById("acc-url").value = url;
+  };
   document.getElementById("preset").addEventListener("change", applyPreset);
+  document.getElementById("acc-account-id").addEventListener("input", fillAccountID);
   document.getElementById("acc-add").addEventListener("click", async () => {
     const p = presets.find((x) => x.id === sel.value);
     if (!p) {
@@ -150,10 +180,16 @@ function accountsPage(root) {
       return;
     }
     try {
+      fillAccountID();
+      const url = document.getElementById("acc-url").value;
+      if (p.urlPlaceholder && url.includes(p.urlPlaceholder) && !p.accountIDEnvSet) {
+        toast("This preset needs an account id. Paste it into Account ID, or export " + (p.accountIDEnv || "the documented env var") + " (value is never shown here).");
+        return;
+      }
       const body = {
         id: document.getElementById("acc-id").value,
         adapter: p.adapter,
-        baseURL: document.getElementById("acc-url").value,
+        baseURL: url,
         apiKey: document.getElementById("acc-key").value,
         tier: document.getElementById("acc-tier").value,
       };
@@ -171,7 +207,7 @@ function accountsPage(root) {
       const data = await getJSON("/admin/accounts");
       const accounts = data.accounts || [];
       if (!accounts.length) {
-        host.innerHTML = emptyState("No accounts yet", "Add Ollama, LM Studio, llama.cpp, vLLM, Ollama Cloud, or an API key using a preset above.");
+        host.innerHTML = emptyState("No accounts yet", "Add Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Ollama Cloud, or an API key using a preset above.");
         return;
       }
       const rows = accounts

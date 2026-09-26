@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
+	"github.com/ks1686/peaproxy/internal/adapter/hosted"
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/clients"
@@ -338,6 +339,9 @@ func (s *Server) handleAddAccount(w http.ResponseWriter, r *http.Request) {
 	if p.ID == "" || p.Adapter == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id and adapter are required"})
 		return
+	}
+	if spec, ok := hosted.Lookup(p.Adapter); ok {
+		p.BaseURL = spec.FillBaseURL(p.BaseURL)
 	}
 	if err := s.gw.AddProvider(r.Context(), p); err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
