@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -160,14 +161,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		account, err := s.gw.ChatStream(r.Context(), raw, sw)
 		s.record(account, peek.Model, "openai", true, http.StatusOK, err, "")
 		if err != nil && !sw.started {
-			writeJSON(w, statusOf(err), errJSON(err))
+			writeErr(w, err)
 		}
 		return
 	}
 	resp, account, err := s.gw.Chat(r.Context(), raw)
 	if err != nil {
 		s.record(account, peek.Model, "openai", false, statusOf(err), err, "")
-		writeJSON(w, statusOf(err), errJSON(err))
+		writeErr(w, err)
 		return
 	}
 	s.record(account, peek.Model, "openai", false, http.StatusOK, nil, resp.Content)
@@ -192,14 +193,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		account, err := s.gw.ResponsesStream(r.Context(), raw, sw)
 		s.record(account, peek.Model, "responses", true, http.StatusOK, err, "")
 		if err != nil && !sw.started {
-			writeJSON(w, statusOf(err), errJSON(err))
+			writeErr(w, err)
 		}
 		return
 	}
 	out, account, err := s.gw.Responses(r.Context(), raw)
 	if err != nil {
 		s.record(account, peek.Model, "responses", false, statusOf(err), err, "")
-		writeJSON(w, statusOf(err), errJSON(err))
+		writeErr(w, err)
 		return
 	}
 	s.record(account, peek.Model, "responses", false, http.StatusOK, nil, "")
@@ -220,14 +221,14 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		account, err := s.gw.ClaudeChatStream(r.Context(), raw, sw)
 		s.record(account, peek.Model, "claude", true, http.StatusOK, err, "")
 		if err != nil && !sw.started {
-			writeJSON(w, statusOf(err), errJSON(err))
+			writeErr(w, err)
 		}
 		return
 	}
 	out, account, err := s.gw.ClaudeChat(r.Context(), raw)
 	if err != nil {
 		s.record(account, peek.Model, "claude", false, statusOf(err), err, "")
-		writeJSON(w, statusOf(err), errJSON(err))
+		writeErr(w, err)
 		return
 	}
 	s.record(account, peek.Model, "claude", false, http.StatusOK, nil, "")
@@ -425,9 +426,10 @@ func (s *Server) cliProviderFor(id string) string {
 func (s *Server) handleAdminCatalog(w http.ResponseWriter, r *http.Request) {
 	filter := catalog.Filter(r.URL.Query().Get("filter"))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"filter": filter,
-		"models": s.gw.Annotated(filter),
-		"note":   "hide affects listing only; models stay routable by id",
+		"filter":          filter,
+		"models":          s.gw.Annotated(filter),
+		"note":            "hide affects listing only; models stay routable by id",
+		"imageGeneration": "not_yet",
 	})
 }
 
@@ -455,12 +457,21 @@ func (s *Server) handleHide(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Model    string `json:"model"`
-		Prompt   string `json:"prompt"`
-		ImageURL string `json:"imageUrl"`
+		Model         string `json:"model"`
+		Prompt        string `json:"prompt"`
+		ImageURL      string `json:"imageUrl"`
+		GenerateImage bool   `json:"generateImage"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, maxBody)).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	if body.GenerateImage {
+		writeJSON(w, http.StatusNotImplemented, map[string]any{
+			"error":    "image generation not yet",
+			"notYet":   true,
+			"imageOut": false,
+		})
 		return
 	}
 	if body.Prompt == "" {
@@ -474,7 +485,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	resp, account, err := s.gw.Chat(r.Context(), raw)
 	if err != nil {
 		s.record(account, body.Model, "showcase", false, statusOf(err), err, "")
-		writeJSON(w, statusOf(err), errJSON(err))
+		writeErr(w, err)
 		return
 	}
 	s.record(account, body.Model, "showcase", false, http.StatusOK, nil, resp.Content)
@@ -507,13 +518,14 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	type item struct {
 		Name    string `json:"name"`
 		BaseURL string `json:"baseURL"`
+		Cloak   string `json:"cloak"`
 		Notes   string `json:"notes"`
 		Snippet string `json:"snippet"`
 	}
 	var out []item
 	for _, n := range clients.List() {
 		p, _ := clients.Get(n)
-		out = append(out, item{Name: p.Name, BaseURL: p.BaseURL, Notes: p.Notes, Snippet: p.Snippet})
+		out = append(out, item{Name: p.Name, BaseURL: p.BaseURL, Cloak: p.Cloak, Notes: p.Notes, Snippet: p.Snippet})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"clients": out})
 }
@@ -608,6 +620,10 @@ func readBody(r *http.Request) ([]byte, error) {
 }
 
 func statusOf(err error) int {
+	var ce router.CooldownError
+	if errors.As(err, &ce) {
+		return http.StatusServiceUnavailable
+	}
 	if errors.Is(err, router.ErrNoAccount) {
 		return http.StatusNotFound
 	}
@@ -616,6 +632,13 @@ func statusOf(err error) int {
 		return he.Status
 	}
 	return http.StatusBadGateway
+}
+
+func writeErr(w http.ResponseWriter, err error) {
+	if sec := router.RetryAfterSeconds(err); sec > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(sec))
+	}
+	writeJSON(w, statusOf(err), errJSON(err))
 }
 
 func errJSON(err error) map[string]string {

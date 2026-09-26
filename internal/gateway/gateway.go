@@ -23,7 +23,10 @@ import (
 	"github.com/ks1686/peaproxy/internal/usage"
 )
 
-const cooldownTTL = 30 * time.Second
+const defaultCooldownTTL = 30 * time.Second
+
+// cooldownTTL is the skip window after 429/401. Tests may shorten it.
+var cooldownTTL = defaultCooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
@@ -195,9 +198,9 @@ func (g *Gateway) Annotated(filter catalog.Filter) []catalog.Model {
 // Chat proxies a non-stream OpenAI chat.completions body with round-robin + 429/401 failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, string, error) {
 	peek := jsonx.PeekBody(raw)
-	cands := g.candidates(peek.Model)
-	if len(cands) == 0 {
-		return adapter.ChatResponse{}, "", router.ErrNoAccount
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return adapter.ChatResponse{}, "", err
 	}
 	req := adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: false}
 	var last error
@@ -215,15 +218,15 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 		}
 		return adapter.ChatResponse{}, lastAccount, err
 	}
-	return adapter.ChatResponse{}, lastAccount, last
+	return adapter.ChatResponse{}, lastAccount, cooldownErr(last)
 }
 
 // ChatStream proxies SSE with failover before any bytes are written.
 func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
 	peek := jsonx.PeekBody(raw)
-	cands := g.candidates(peek.Model)
-	if len(cands) == 0 {
-		return "", router.ErrNoAccount
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return "", err
 	}
 	cw := &countWriter{w: w}
 	req := adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: true}
@@ -245,15 +248,15 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		}
 		return lastAccount, err
 	}
-	return lastAccount, last
+	return lastAccount, cooldownErr(last)
 }
 
 // Responses uses native Responses when available, otherwise OpenAI chat translation.
 func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, error) {
 	peek := jsonx.PeekBody(raw)
-	cands := g.candidates(peek.Model)
-	if len(cands) == 0 {
-		return nil, "", router.ErrNoAccount
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return nil, "", err
 	}
 	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
 	if xerr == nil {
@@ -304,15 +307,18 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 	if last == nil {
 		last = router.ErrNoAccount
 	}
+	if retryable(last) {
+		return nil, lastAccount, cooldownErr(last)
+	}
 	return nil, lastAccount, last
 }
 
 // ResponsesStream writes Responses SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
 	peek := jsonx.PeekBody(raw)
-	cands := g.candidates(peek.Model)
-	if len(cands) == 0 {
-		return "", router.ErrNoAccount
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return "", err
 	}
 	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
 	if xerr == nil {
@@ -371,15 +377,18 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if last == nil {
 		last = router.ErrNoAccount
 	}
+	if retryable(last) {
+		return lastAccount, cooldownErr(last)
+	}
 	return lastAccount, last
 }
 
 // ClaudeChat uses native Messages when available, otherwise OpenAI translation.
 func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, error) {
 	peek := jsonx.PeekBody(raw)
-	cands := g.candidates(peek.Model)
-	if len(cands) == 0 {
-		return nil, "", router.ErrNoAccount
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return nil, "", err
 	}
 	oaBody, oaReq, xerr := translate.ToOpenAI(raw)
 	if xerr == nil {
@@ -438,15 +447,18 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	if last == nil {
 		last = router.ErrNoAccount
 	}
+	if retryable(last) {
+		return nil, lastAccount, cooldownErr(last)
+	}
 	return nil, lastAccount, last
 }
 
 // ClaudeChatStream writes true Anthropic SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
 	peek := jsonx.PeekBody(raw)
-	cands := g.candidates(peek.Model)
-	if len(cands) == 0 {
-		return "", router.ErrNoAccount
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return "", err
 	}
 	oaBody, oaReq, xerr := translate.ToOpenAI(raw)
 	if xerr == nil {
@@ -505,6 +517,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	if last == nil {
 		last = router.ErrNoAccount
 	}
+	if retryable(last) {
+		return lastAccount, cooldownErr(last)
+	}
 	return lastAccount, last
 }
 
@@ -538,9 +553,26 @@ func (c *countWriter) Write(p []byte) (int, error) {
 func retryable(err error) bool {
 	var he adapter.HTTPError
 	if errors.As(err, &he) {
-		return he.Status == http.StatusTooManyRequests || he.Status == http.StatusUnauthorized
+		return he.Status == http.StatusTooManyRequests ||
+			he.Status == http.StatusUnauthorized ||
+			he.Status == http.StatusServiceUnavailable
 	}
 	return false
+}
+
+func cooldownErr(last error) error {
+	return router.CooldownError{RetryAfter: cooldownTTL, Err: last}
+}
+
+func (g *Gateway) route(model string) ([]instance, error) {
+	cands, retry := g.candidates(model)
+	if len(cands) == 0 {
+		if retry > 0 {
+			return nil, router.CooldownError{RetryAfter: retry}
+		}
+		return nil, router.ErrNoAccount
+	}
+	return cands, nil
 }
 
 func (g *Gateway) markCooldown(id string, err error) {
@@ -574,7 +606,7 @@ func (g *Gateway) Cooldowns() []Cooldown {
 	return out
 }
 
-func (g *Gateway) candidates(model string) []instance {
+func (g *Gateway) candidates(model string) ([]instance, time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
@@ -601,27 +633,28 @@ func (g *Gateway) candidates(model string) []instance {
 		matched = append(matched, g.inst...)
 	}
 	hot := make([]instance, 0, len(matched))
-	cool := make([]instance, 0)
+	var until time.Time
 	for _, inst := range matched {
 		if c, ok := g.cool[inst.Provider.ID]; ok && now.Before(c.Until) {
-			cool = append(cool, inst)
+			if until.IsZero() || c.Until.Before(until) {
+				until = c.Until
+			}
 			continue
 		}
 		hot = append(hot, inst)
 	}
-	pool := hot
-	if len(pool) == 0 {
-		pool = cool
+	if len(hot) == 0 {
+		if until.IsZero() {
+			return nil, 0
+		}
+		return nil, time.Until(until)
 	}
-	if len(pool) == 0 {
-		return nil
-	}
-	start := int(g.rr % uint64(len(pool)))
+	start := int(g.rr % uint64(len(hot)))
 	g.rr++
-	out := make([]instance, 0, len(pool))
-	out = append(out, pool[start:]...)
-	out = append(out, pool[:start]...)
-	return out
+	out := make([]instance, 0, len(hot))
+	out = append(out, hot[start:]...)
+	out = append(out, hot[:start]...)
+	return out, 0
 }
 
 // SetRequestLog toggles the opt-in redacted JSONL log and persists config.

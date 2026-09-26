@@ -80,7 +80,7 @@ Per connected provider: one-click text example; if `image_in`, multimodal exampl
 
 ## 8. Harness quick-setup
 
-See [HARNESS.md](HARNESS.md). Copy-ready configs for Cursor, Claude Code, OpenCode, Pi, Codex, Continue. Each preset: base URL, auth header, sample snippet, `peaproxy clients verify <name>` smoke (**verify is a stub**).
+See [HARNESS.md](HARNESS.md). Copy-ready configs for Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp. Each preset: base URL, auth header, cloak default, sample snippet, `peaproxy clients verify <name> [--chat]` smoke.
 
 ## 9. Architecture
 

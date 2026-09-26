@@ -33,8 +33,8 @@ Open http://127.0.0.1:8317/
 
 1. **Accounts** — pick a preset (Ollama local or **Cloud**, LM Studio, **llama.cpp**, **vLLM**, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, **NVIDIA NIM**, **Cloudflare Workers AI**, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Free/Paid/Local filter is remembered in the UI.
-3. **Showcase** — try a prompt; vision models accept an image URL or upload.
-4. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline at the local base URL (`peaproxy clients show …`).
+3. **Showcase** — try a prompt; vision models (`image_in`) accept an image URL or upload. Models tagged `image_out` show a gated **not yet** (no fake image-gen chat).
+4. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
 
 ```bash
 curl -s http://127.0.0.1:8317/v1/models
@@ -47,10 +47,12 @@ curl -s http://127.0.0.1:8317/v1/messages \
 peaproxy clients show cursor
 peaproxy clients show opencode   # includes /v1
 peaproxy clients show claude-code  # does NOT include /v1
-peaproxy clients show pi         # both wires
+peaproxy clients show pi         # both wires; cloak off
 peaproxy clients show codex      # Responses API (wire_api = responses)
+peaproxy clients show amp        # Custom URL, not amp.url
 peaproxy clients verify cursor --chat
 peaproxy clients verify pi --chat
+peaproxy clients verify amp --chat
 peaproxy clients verify codex --chat
 ```
 
@@ -73,7 +75,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `GET /v1/models` | Live list; hide/expose affect **listing only** |
 | `GET /v0/catalog` | Rich catalog (tier, modalities, privacy, hidden/routable) |
-| `POST /v1/chat/completions` | Stream + non-stream; failover on 429/401 |
+| `POST /v1/chat/completions` | Stream + non-stream; failover on 429/401; cooled accounts are not re-hit (503 + Retry-After) |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `POST /v1/responses` | Codex / OpenAI Responses: native pass-through for Codex OAuth, otherwise translated via chat completions |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Settings |
@@ -92,7 +94,7 @@ Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generati
 - [x] Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters
 - [x] Hosted presets: LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face
 - [x] Multi-account 429/401 failover + persisted usage
-- [x] Clients: Cursor, Claude Code, OpenCode, Pi (both wires), Codex, Continue, Cline + `clients verify`
+- [x] Clients: Cursor, Claude Code, OpenCode, Pi (both wires, cloak off), Codex, Continue, Cline, Amp + `clients verify`
 - [x] First-run default config on `serve`; example YAML; `PEAPROXY_*` env overlays
 - [x] Refuse `0.0.0.0` without `--allow-lan` + admin token; UI LAN warning
 - [x] Subscription OAuth: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse (ToS/ban risk documented; API keys remain official) — [OAUTH.md](docs/OAUTH.md)
@@ -108,7 +110,7 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 
 1. **Auto model discovery** — stop the “add model X” treadmill.
 2. **Failover that works** — quota/429 → next credential without hand-disabling accounts.
-3. **Harness fidelity** — Pi cloak defaults, thinking injection, Cursor tools, Codex quirks.
+3. **Harness fidelity** — Pi cloak defaults off, thinking injection, Cursor tools, Amp/Codex `stream_options`, Continue YAML / Cline `/v1`.
 4. **Secure localhost default** — `127.0.0.1:8317`, not `*:8317`.
 5. **UI without a macOS tray** — CLI + browser only.
 6. **Catalog hide ≠ routing** — listing-only exclusion (CPA #5995 still open).

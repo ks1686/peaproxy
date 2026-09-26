@@ -354,7 +354,7 @@ function showcasePage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Showcase</h2>
-      <p class="muted">Try a live chat. Usage is persisted next to the config file. Models with <code>image_in</code> accept an image URL or upload (OpenAI content parts).</p>
+      <p class="muted">Try a live chat. Usage is persisted next to the config file. Models with <code>image_in</code> accept an image URL or upload (OpenAI content parts). Models tagged <code>image_out</code> from the live catalog show a gated notice — PeaProxy does not proxy <code>/v1/images/generations</code> and will not fake a drawing as chat.</p>
       <div class="row">
         <label>Model
           <select id="show-model"></select>
@@ -368,6 +368,9 @@ function showcasePage(root) {
           <label>Upload <input id="show-file" type="file" accept="image/*" /></label>
         </div>
       </div>
+      <div id="show-image-out" class="warn" hidden>
+        <p><strong>Image generation not yet.</strong> This model is tagged <code>image_out</code> from live capabilities. There is no generation button on purpose — sending chat would fake it.</p>
+      </div>
       <pre id="show-out">Pick a model and send.</pre>
     </section>
     <section class="card">
@@ -378,8 +381,11 @@ function showcasePage(root) {
   const sel = document.getElementById("show-model");
   const toggleVision = () => {
     const m = models.find((x) => x.id === sel.value);
-    const has = (m?.modalities || []).includes("image_in");
-    document.getElementById("show-vision").hidden = !has;
+    const mods = m?.modalities || [];
+    const hasIn = mods.includes("image_in");
+    const hasOut = mods.includes("image_out");
+    document.getElementById("show-vision").hidden = !hasIn;
+    document.getElementById("show-image-out").hidden = !hasOut;
   };
   (async () => {
     try {
@@ -438,12 +444,12 @@ function showcasePage(root) {
 }
 
 function clientsPage(root) {
-  root.innerHTML = `<section class="card"><h2>Clients</h2><p class="muted">OpenCode and Claude Code use <strong>different</strong> Anthropic base URLs. Pi documents both wires. Codex uses <code>/v1/responses</code>. Use <code>peaproxy clients verify &lt;name&gt; --chat</code> against a running serve.</p><div id="cli-list">loading…</div></section>`;
+  root.innerHTML = `<section class="card"><h2>Clients</h2><p class="muted">OpenCode and Claude Code use <strong>different</strong> Anthropic base URLs. Pi cloak defaults are <strong>off</strong>. Codex uses <code>/v1/responses</code>. Amp uses a Custom URL (not <code>amp.url</code>). Use <code>peaproxy clients verify &lt;name&gt; --chat</code> against a running serve.</p><div id="cli-list">loading…</div></section>`;
   getJSON("/admin/clients")
     .then((data) => {
       const list = data.clients || [];
       if (!list.length) {
-        document.getElementById("cli-list").innerHTML = emptyState("No client presets", "This build should ship Cursor, Claude Code, OpenCode, Pi, Codex, Continue, and Cline.");
+        document.getElementById("cli-list").innerHTML = emptyState("No client presets", "This build should ship Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, and Amp.");
         return;
       }
       document.getElementById("cli-list").innerHTML = list
@@ -451,7 +457,7 @@ function clientsPage(root) {
           (c) => `<div class="card snippet">
         <h2>${escapeHtml(c.name)}</h2>
         <p class="muted">${escapeHtml(c.notes)}</p>
-        <p><code>${escapeHtml(c.baseURL)}</code></p>
+        <p><code>${escapeHtml(c.baseURL)}</code> · cloak ${escapeHtml(c.cloak || "off")}</p>
         <button class="btn" data-copy>Copy</button>
         <pre>${escapeHtml(c.snippet)}</pre>
       </div>`
@@ -479,7 +485,7 @@ function clientsPage(root) {
 function healthPage(root) {
   root.innerHTML = `<section class="card"><h2>Health</h2><pre id="h">loading…</pre></section>
     <section class="card"><h2>Account cooldowns</h2>
-      <p class="muted">After HTTP 429 or 401 the account is skipped for 30s while round-robin tries the next key for the same model.</p>
+      <p class="muted">After HTTP 429 or 401 the account is skipped for 30s. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Round-robin tries the next hot key for the same model.</p>
       <div id="cd">loading…</div>
     </section>
     <section class="card"><h2>Usage</h2><pre id="u">loading…</pre></section>`;

@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/router"
 )
 
 func twoAccountGateway(t *testing.T, handlerA, handlerB http.HandlerFunc) *Gateway {
@@ -72,6 +74,18 @@ func TestChatFailsover429ToNextAccount(t *testing.T) {
 	cds := gw.Cooldowns()
 	if len(cds) != 1 || cds[0].AccountID != "acct-a" {
 		t.Fatalf("cooldown: %#v", cds)
+	}
+	// Cooled account must not be re-hit (cooldown storm).
+	aBefore, bBefore := hitsA, hitsB
+	resp2, _, err := gw.Chat(context.Background(), []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil || resp2.Content != "from-b" {
+		t.Fatalf("second chat %v %#v", err, resp2)
+	}
+	if hitsA != aBefore {
+		t.Fatalf("cooldown storm: acct-a hit again a=%d→%d", aBefore, hitsA)
+	}
+	if hitsB <= bBefore {
+		t.Fatalf("expected hot account retry, b=%d→%d", bBefore, hitsB)
 	}
 }
 
@@ -208,5 +222,138 @@ func TestResponsesTranslatesToChatCompletions(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"object":"response"`) || !strings.Contains(string(out), `"output_text":"pong"`) {
 		t.Fatalf("responses wrap: %s", out)
+	}
+}
+
+func TestChatAll429DoesNotStormCooledAccounts(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"quota-a"}`)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"quota-b"}`)
+		},
+	)
+	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
+	if err == nil {
+		t.Fatal("expected cooldown error")
+	}
+	var ce router.CooldownError
+	if !errors.As(err, &ce) {
+		t.Fatalf("want CooldownError, got %T %v", err, err)
+	}
+	if hitsA == 0 || hitsB == 0 {
+		t.Fatalf("first pass a=%d b=%d", hitsA, hitsB)
+	}
+	a1, b1 := hitsA, hitsB
+	_, _, err = gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
+	if !errors.As(err, &ce) {
+		t.Fatalf("second: %v", err)
+	}
+	if hitsA != a1 || hitsB != b1 {
+		t.Fatalf("cooldown storm a %d→%d b %d→%d", a1, hitsA, b1, hitsB)
+	}
+}
+
+func TestChatFailsover401Then429ThenSucceeds(t *testing.T) {
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, "bad key")
+	}))
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, "quota")
+	}))
+	c := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "from-c"}}},
+		})
+	}))
+	t.Cleanup(a.Close)
+	t.Cleanup(b.Close)
+	t.Cleanup(c.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{
+			{ID: "acct-a", Adapter: "openai_compat", Tier: "paid", BaseURL: a.URL + "/v1"},
+			{ID: "acct-b", Adapter: "openai_compat", Tier: "paid", BaseURL: b.URL + "/v1"},
+			{ID: "acct-c", Adapter: "openai_compat", Tier: "paid", BaseURL: c.URL + "/v1"},
+		},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
+	if err != nil || resp.Content != "from-c" {
+		t.Fatalf("%v %#v account=%s", err, resp, account)
+	}
+	ids := map[string]bool{}
+	for _, cd := range gw.Cooldowns() {
+		ids[cd.AccountID] = true
+	}
+	if !ids["acct-a"] || !ids["acct-b"] {
+		t.Fatalf("expected 401 and 429 cooldowns: %#v", gw.Cooldowns())
+	}
+}
+
+func TestResponsesFailsover429(t *testing.T) {
+	hitsA := 0
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+			})
+		},
+	)
+	out, _, err := gw.Responses(context.Background(), []byte(`{"model":"llama3.2","input":"ping"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hitsA == 0 {
+		t.Fatal("expected first account 429")
+	}
+	if !strings.Contains(string(out), `"output_text":"ok"`) {
+		t.Fatalf("%s", out)
 	}
 }

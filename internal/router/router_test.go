@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
@@ -104,5 +105,15 @@ func TestNonRetryableStopsFailover(t *testing.T) {
 	_, err := r.Chat(context.Background(), adapter.ChatRequest{Model: "m"})
 	if err == nil || errors.Is(err, ErrNoAccount) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCooldownErrorRetryAfter(t *testing.T) {
+	err := CooldownError{RetryAfter: 30 * time.Second, Err: errors.New("HTTP 429")}
+	if RetryAfterSeconds(err) != 30 {
+		t.Fatalf("Retry-After %d", RetryAfterSeconds(err))
+	}
+	if !errors.Is(err, err.Err) {
+		t.Fatal("unwrap inner")
 	}
 }

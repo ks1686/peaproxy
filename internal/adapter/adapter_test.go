@@ -199,6 +199,37 @@ func TestOpenAIDefaultsBaseURL(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatUsesLiveArchitectureModalities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id": "vendor/draw-model",
+					"architecture": map[string]any{
+						"input_modalities":  []string{"text"},
+						"output_modalities": []string{"text", "image"},
+					},
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a, err := openai_compat.New(adapter.Options{ID: "x", BaseURL: srv.URL + "/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := a.ListModels(context.Background())
+	if err != nil || len(models) != 1 {
+		t.Fatalf("%v %#v", err, models)
+	}
+	if !containsStr(models[0].Modalities, "image_out") {
+		t.Fatalf("live image_out: %#v", models[0].Modalities)
+	}
+	if a.Capabilities().ImageOut {
+		t.Fatal("do not advertise a fake image-generation endpoint")
+	}
+}
+
 func TestOpenRouterTagsFreeModelsAndHeaders(t *testing.T) {
 	var gotRef, gotTitle, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -243,6 +243,28 @@ func TestShowcaseVisionPassesImageURL(t *testing.T) {
 	}
 }
 
+func TestShowcaseImageOutIsNotYet(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/admin/showcase", strings.NewReader(`{"model":"dall-e-3","prompt":"a cat","generateImage":true}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"notYet":true`) {
+		t.Fatalf("%s", rr.Body)
+	}
+	if strings.Contains(rr.Body.String(), "hello from") {
+		t.Fatal("must not fake image-out as chat")
+	}
+	cat := httptest.NewRequest(http.MethodGet, "/admin/catalog?filter=all", nil)
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, cat)
+	if !strings.Contains(crr.Body.String(), `"imageGeneration":"not_yet"`) {
+		t.Fatalf("catalog: %s", crr.Body)
+	}
+}
+
 func TestHealthListsNativeAdaptersAndCooldowns(t *testing.T) {
 	s, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
@@ -359,7 +381,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
@@ -371,7 +393,7 @@ func TestClientsVerifyAgainstLocalAdapter(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	for _, name := range []string{"cursor", "opencode", "claude-code", "pi"} {
+	for _, name := range []string{"cursor", "opencode", "claude-code", "pi", "amp", "continue", "cline"} {
 		res, err := clients.Verify(ctx, name, srv.URL, true)
 		if err != nil {
 			t.Fatalf("%s: %v detail=%s", name, err, res.Detail)
@@ -393,5 +415,13 @@ func TestClientsVerifyAgainstLocalAdapter(t *testing.T) {
 	}
 	if len(codex.Wires) != 1 || codex.Wires[0].Wire != clients.WireResponses || !codex.ChatOK {
 		t.Fatalf("codex %#v", codex)
+	}
+	cli := httptest.NewRequest(http.MethodGet, "/admin/clients", nil)
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, cli)
+	for _, name := range []string{"amp", "continue", "cline", "pi", "codex"} {
+		if !strings.Contains(crr.Body.String(), `"name":"`+name+`"`) {
+			t.Fatalf("admin clients missing %s: %s", name, crr.Body)
+		}
 	}
 }
