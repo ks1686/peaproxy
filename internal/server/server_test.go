@@ -481,6 +481,9 @@ func TestAdminSettingsReportsPathBackendAndRequestLogWithoutSecrets(t *testing.T
 	if !strings.HasSuffix(logPath, "requests.log") {
 		t.Fatalf("requestLogPath: %#v", after["requestLogPath"])
 	}
+	if _, ok := after["catalog"].(map[string]any)["Pin"]; ok {
+		t.Fatalf("catalog JSON should use yaml-aligned lowercase keys: %#v", after["catalog"])
+	}
 }
 
 func TestAdminClientsIncludeVerifyCommand(t *testing.T) {

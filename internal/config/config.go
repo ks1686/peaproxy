@@ -40,21 +40,21 @@ type Config struct {
 // HideList drops providers or model IDs from /v1/models and UI pickers.
 // Routing is unchanged unless BlockRouting is true (CPA #5995).
 type HideList struct {
-	Providers    []string `yaml:"providers"`
-	Models       []string `yaml:"models"`
-	BlockRouting bool     `yaml:"blockRouting,omitempty"`
+	Providers    []string `yaml:"providers" json:"providers"`
+	Models       []string `yaml:"models" json:"models"`
+	BlockRouting bool     `yaml:"blockRouting,omitempty" json:"blockRouting,omitempty"`
 }
 
 // ExposeList is the optional subset coding tools see. Empty = all non-hidden.
 type ExposeList struct {
-	Models []string `yaml:"models"`
+	Models []string `yaml:"models" json:"models"`
 }
 
 // CatalogPrefs are optional UI overlays. Live ListModels remains the source of IDs.
 // Rename/pin never affect routing unless hide.blockRouting is set.
 type CatalogPrefs struct {
-	Pin    []string          `yaml:"pin,omitempty"`
-	Rename map[string]string `yaml:"rename,omitempty"`
+	Pin    []string          `yaml:"pin,omitempty" json:"pin,omitempty"`
+	Rename map[string]string `yaml:"rename,omitempty" json:"rename,omitempty"`
 }
 
 // Provider is one adapter instance (Ollama, a key, or an OAuth account stub).
