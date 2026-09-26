@@ -170,7 +170,7 @@ function accountsPage(root) {
       const data = await getJSON("/admin/accounts");
       const accounts = data.accounts || [];
       if (!accounts.length) {
-        host.innerHTML = emptyState("No accounts yet", "Add Ollama, LM Studio, or an API key using a preset above.");
+        host.innerHTML = emptyState("No accounts yet", "Add Ollama, LM Studio, llama.cpp, vLLM, Ollama Cloud, or an API key using a preset above.");
         return;
       }
       const rows = accounts
@@ -290,7 +290,7 @@ function catalogPage(root) {
       const data = await getJSON("/admin/catalog?filter=" + encodeURIComponent(filter));
       const models = data.models || [];
       if (!models.length) {
-        host.innerHTML = emptyState("No models in this filter", "Add an account on Accounts, or pick All / Local after Ollama or LM Studio is running.");
+        host.innerHTML = emptyState("No models in this filter", "Add an account on Accounts, or pick All / Local after Ollama, LM Studio, llama.cpp, or vLLM is running.");
         return;
       }
       const rows = models
@@ -438,7 +438,7 @@ function showcasePage(root) {
 }
 
 function clientsPage(root) {
-  root.innerHTML = `<section class="card"><h2>Clients</h2><p class="muted">OpenCode and Claude Code use <strong>different</strong> Anthropic base URLs. Pi documents both wires. Use <code>peaproxy clients verify &lt;name&gt;</code> against a running serve.</p><div id="cli-list">loading…</div></section>`;
+  root.innerHTML = `<section class="card"><h2>Clients</h2><p class="muted">OpenCode and Claude Code use <strong>different</strong> Anthropic base URLs. Pi documents both wires. Codex uses <code>/v1/responses</code>. Use <code>peaproxy clients verify &lt;name&gt; --chat</code> against a running serve.</p><div id="cli-list">loading…</div></section>`;
   getJSON("/admin/clients")
     .then((data) => {
       const list = data.clients || [];

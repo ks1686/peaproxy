@@ -27,6 +27,9 @@ func AccountPresets() []AccountPreset {
 	out := []AccountPreset{
 		{ID: "ollama-local", Adapter: ollama.Name, Label: "Ollama (local)", BaseURL: ollama.DefaultBaseURL, Tier: string(catalog.TierLocal)},
 		{ID: "lmstudio-local", Adapter: hosted.LMStudio.Name, Label: "LM Studio (local)", BaseURL: hosted.LMStudio.DefaultBaseURL, Tier: string(catalog.TierLocal)},
+		{ID: "llamacpp-local", Adapter: hosted.LlamaCpp.Name, Label: "llama.cpp (local)", BaseURL: hosted.LlamaCpp.DefaultBaseURL, Tier: string(catalog.TierLocal), Note: hosted.LlamaCpp.Notes},
+		{ID: "vllm-local", Adapter: hosted.VLLM.Name, Label: "vLLM (local)", BaseURL: hosted.VLLM.DefaultBaseURL, Tier: string(catalog.TierLocal), Note: hosted.VLLM.Notes},
+		{ID: "ollama-cloud", Adapter: hosted.OllamaCloud.Name, Label: "Ollama Cloud", BaseURL: hosted.OllamaCloud.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.OllamaCloud.EnvKey, Note: hosted.OllamaCloud.Notes},
 		{ID: "anthropic-key", Adapter: anthropic.Name, Label: "Anthropic API key (official)", BaseURL: anthropic.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "ANTHROPIC_API_KEY", Note: "Official Messages API. Safer than subscription OAuth."},
 		{ID: "openai-key", Adapter: openai.Name, Label: "OpenAI API key (official)", BaseURL: openai.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENAI_API_KEY", Note: "Official Platform API. Safer than ChatGPT/Codex subscription OAuth."},
 		{ID: "anthropic-oauth", Adapter: "anthropic_oauth", Label: "Claude Pro/Max (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Anthropic ToS and can ban the account. PeaProxy authors are not liable. Prefer the Anthropic API key preset. Run: peaproxy auth login --provider anthropic"},
@@ -42,6 +45,8 @@ func AccountPresets() []AccountPreset {
 		{ID: "meta-oauth", Adapter: "meta_oauth", Label: "Meta Muse (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Meta ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider meta"},
 		{ID: "qwen-oauth", Adapter: "qwen_oauth", Label: "Qwen consumer OAuth (not yet)", Tier: string(catalog.TierPaid), Warn: "Not yet: CLIProxyAPI has no working Qwen consumer OAuth flow. Use a Qwen API key with the custom OpenAI-compat preset. PeaProxy authors are not liable for any future Qwen OAuth path either."},
 		{ID: "huggingface", Adapter: hosted.HuggingFace.Name, Label: "Hugging Face router", BaseURL: hosted.HuggingFace.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.HuggingFace.EnvKey, Note: hosted.HuggingFace.Notes},
+		{ID: "nim-key", Adapter: hosted.NIM.Name, Label: "NVIDIA NIM (API catalog)", BaseURL: hosted.NIM.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.NIM.EnvKey, Note: hosted.NIM.Notes},
+		{ID: "workers-ai", Adapter: hosted.WorkersAI.Name, Label: "Cloudflare Workers AI", BaseURL: hosted.WorkersAI.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: hosted.WorkersAI.EnvKey, Note: hosted.WorkersAI.Notes},
 		{ID: "openrouter", Adapter: openrouter.Name, Label: "OpenRouter", BaseURL: openrouter.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: "OPENROUTER_API_KEY", Note: "Model ids ending :free are tagged free automatically."},
 		{ID: "opencode-zen", Adapter: opencodezen.Name, Label: "OpenCode Zen", BaseURL: opencodezen.DefaultBaseURL, Tier: string(catalog.TierFree), EnvKey: "OPENCODE_API_KEY", Warn: "OpenCode Zen free models may train on prompts (Nemotron, Big Pickle, MiMo, Muse). Prefer an official API key from opencode.ai."},
 		{ID: "custom", Adapter: "openai_compat", Label: "Custom OpenAI-compat", BaseURL: "https://api.example.com/v1", Tier: string(catalog.TierPaid)},

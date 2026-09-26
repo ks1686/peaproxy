@@ -95,7 +95,7 @@ Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it canno
 - Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Use `openai_compat` + a Qwen API key.
 - Devin and Vertex are intentionally omitted (not generic consumer chat OAuth).
 - **Claude Cloudflare 403:** `platform.claude.com/v1/oauth/token` sits behind Cloudflare. Token requests now send Claude Code’s control-plane `User-Agent` (`axios/1.15.2`). PeaProxy does **not** add uTLS / TLS fingerprint spoofing (heavy dependency; CPA does this with a Firefox hello). Stock Go `crypto/tls` may still get **HTTP 403** on AuthComplete or refresh. If that happens, the error tells you to use an official API key (`adapter: anthropic`, [console keys](https://console.anthropic.com/settings/keys)) or retry from a typical desktop network (home/office, not some datacenter IPs). Chat against `api.anthropic.com` with a key is the supported path.
-- Codex chat is the **Responses** API, translated to OpenAI chat/completions locally. Native Codex `/responses` passthrough from clients is not a first-class PeaProxy route (OpenAI + Claude wires still are).
+- Codex chat from OpenAI-compat clients is still translated internally. Native Codex **`POST /v1/responses`** is a first-class PeaProxy route: `openai_oauth` passes through; other adapters are translated via chat completions.
 - Antigravity chat is Cloud Code `generateContent`, translated to OpenAI chat locally. No uTLS / HTTP/2 fingerprint matching vs the native Antigravity binary.
 
 ## Manual smoke

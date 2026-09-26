@@ -141,6 +141,36 @@ func TestChatPostsResponsesWithBearerAndAccountHeader(t *testing.T) {
 	}
 }
 
+func TestResponsesPassthroughKeepsInput(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          "resp_native",
+			"object":      "response",
+			"output_text": "native",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	raw := []byte(`{"model":"gpt-5","input":"codex ping"}`)
+	out, err := a.Responses(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(gotBody, []byte(`"input"`)) || bytes.Contains(gotBody, []byte(`"messages"`)) {
+		t.Fatalf("passthrough body %s", gotBody)
+	}
+	if !bytes.Contains(out, []byte(`"output_text":"native"`)) {
+		t.Fatalf("native response %s", out)
+	}
+}
+
 func TestChatToResponsesPreservesModelAndUserText(t *testing.T) {
 	out, err := chatToResponses([]byte(`{"model":"gpt-5","messages":[{"role":"user","content":"hello"}]}`), "gpt-5", false)
 	if err != nil {

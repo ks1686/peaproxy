@@ -12,6 +12,7 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
+	"github.com/ks1686/peaproxy/internal/clients"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/gateway"
 )
@@ -154,6 +155,22 @@ func TestClaudeMessagesTranslates(t *testing.T) {
 	}
 }
 
+func TestResponsesTranslatesViaChat(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"llama3.2","input":"hi"}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"object":"response"`) {
+		t.Fatalf("want Responses object, got %s", rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), "hello from llama3.2") {
+		t.Fatalf("content: %s", rr.Body)
+	}
+}
+
 func TestShowcaseAndUsage(t *testing.T) {
 	s, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/admin/showcase", bytes.NewReader([]byte(`{"model":"llama3.2","prompt":"hi"}`)))
@@ -232,7 +249,7 @@ func TestHealthListsNativeAdaptersAndCooldowns(t *testing.T) {
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	got := rr.Body.String()
-	for _, name := range []string{"anthropic", "openai", "openrouter", "opencode_zen", "lmstudio", "groq", "cerebras", "google", "gemini", "xai", "huggingface"} {
+	for _, name := range []string{"anthropic", "openai", "openrouter", "opencode_zen", "lmstudio", "llamacpp", "vllm", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "nim", "workers_ai", "ollama_cloud"} {
 		if !strings.Contains(got, name) {
 			t.Fatalf("missing adapter %s in %s", name, got)
 		}
@@ -279,7 +296,7 @@ func TestHealthzPublicAndPresets(t *testing.T) {
 	if prr.Code != http.StatusOK {
 		t.Fatalf("presets %d %s", prr.Code, prr.Body)
 	}
-	for _, name := range []string{"lmstudio", "groq", "google", "huggingface", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth"} {
+	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth"} {
 		if !strings.Contains(prr.Body.String(), name) {
 			t.Fatalf("missing %s in %s", name, prr.Body)
 		}
@@ -346,5 +363,35 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
+	}
+}
+
+func TestClientsVerifyAgainstLocalAdapter(t *testing.T) {
+	s, _ := testServer(t)
+	srv := httptest.NewServer(s.Handler())
+	t.Cleanup(srv.Close)
+	ctx := context.Background()
+	for _, name := range []string{"cursor", "opencode", "claude-code", "pi"} {
+		res, err := clients.Verify(ctx, name, srv.URL, true)
+		if err != nil {
+			t.Fatalf("%s: %v detail=%s", name, err, res.Detail)
+		}
+		if res.ModelsN != 1 || !res.ChatOK {
+			t.Fatalf("%s: %#v", name, res)
+		}
+	}
+	pi, err := clients.Verify(ctx, "pi", srv.URL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pi.Wires) != 2 || pi.Wires[0].Wire != clients.WireChat || pi.Wires[1].Wire != clients.WireMessages {
+		t.Fatalf("pi wires %#v", pi.Wires)
+	}
+	codex, err := clients.Verify(ctx, "codex", srv.URL, true)
+	if err != nil {
+		t.Fatalf("codex: %v %s", err, codex.Detail)
+	}
+	if len(codex.Wires) != 1 || codex.Wires[0].Wire != clients.WireResponses || !codex.ChatOK {
+		t.Fatalf("codex %#v", codex)
 	}
 }

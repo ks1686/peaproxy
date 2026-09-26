@@ -69,3 +69,16 @@ func TestOpenCodeAndClaudeCodeUseDifferentBaseURLs(t *testing.T) {
 		t.Fatalf("opencode must include /v1: %s", oc.Snippet)
 	}
 }
+
+func TestCodexPresetDocumentsResponses(t *testing.T) {
+	p, ok := Get("codex")
+	if !ok {
+		t.Fatal("missing codex")
+	}
+	if !strings.Contains(p.Snippet, "wire_api = \"responses\"") {
+		t.Fatalf("codex snippet must set wire_api responses: %s", p.Snippet)
+	}
+	if strings.Contains(p.Notes, "TODO") {
+		t.Fatalf("codex notes still TODO: %s", p.Notes)
+	}
+}

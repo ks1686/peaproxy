@@ -35,6 +35,16 @@ providers:
   #   adapter: lmstudio
   #   tier: local
 
+  # Local llama.cpp llama-server (default http://127.0.0.1:8080/v1).
+  # - id: llamacpp-local
+  #   adapter: llamacpp
+  #   tier: local
+
+  # Local vLLM OpenAI-compat server (default http://127.0.0.1:8000/v1).
+  # - id: vllm-local
+  #   adapter: vllm
+  #   tier: local
+
   # Groq (OpenAI-compat).
   # - id: groq
   #   adapter: groq
@@ -66,6 +76,25 @@ providers:
   #   adapter: huggingface
   #   tier: freemium
   #   apiKeyEnv: HF_TOKEN
+
+  # NVIDIA API catalog / hosted NIM (OpenAI-compat). Key from build.nvidia.com.
+  # - id: nim-key
+  #   adapter: nim
+  #   tier: freemium
+  #   apiKeyEnv: NVIDIA_API_KEY
+
+  # Cloudflare Workers AI OpenAI-compat. Replace YOUR_ACCOUNT_ID (wrangler whoami).
+  # - id: workers-ai
+  #   adapter: workers_ai
+  #   tier: freemium
+  #   baseURL: https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1
+  #   apiKeyEnv: CLOUDFLARE_API_TOKEN
+
+  # Ollama Cloud (hosted OpenAI-compat at ollama.com/v1 — not local :11434).
+  # - id: ollama-cloud
+  #   adapter: ollama_cloud
+  #   tier: freemium
+  #   apiKeyEnv: OLLAMA_API_KEY
 
   # - id: openrouter
   #   adapter: openrouter
