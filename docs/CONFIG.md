@@ -2,6 +2,8 @@
 
 PeaProxy reads a versioned YAML file, then overlays environment variables, then CLI flags.
 
+Providers and auth paths: [PROVIDERS.md](PROVIDERS.md), [OAUTH.md](OAUTH.md). 1.0 residuals: [V1.md](V1.md).
+
 **Order:** config file &lt; `PEAPROXY_*` env &lt; flags (`--bind`, `--port`, `--allow-lan`, `--admin-token`).
 
 ## Path
