@@ -64,7 +64,10 @@ pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
 pre { overflow: auto; background: #0e110c; padding: 0.75rem; border-radius: 8px; white-space: pre-wrap; }
 .muted { color: var(--muted); }
 .warn { color: var(--danger); font-size: 0.85rem; }
-.pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); font-size: 0.75rem; }
+.pill.accent { border-color: var(--accent); color: var(--accent); }
+.pill.ok { border-color: var(--accent); color: var(--accent); }
+.row.tight { gap: 0.35rem; margin-top: 0.35rem; }
+td.preview { max-width: 28rem; word-break: break-word; font-size: 0.8rem; color: var(--muted); }
 footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); }
 .snippet { position: relative; }
 .snippet .btn { position: absolute; top: 0.4rem; right: 0.4rem; }

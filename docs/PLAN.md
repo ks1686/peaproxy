@@ -65,7 +65,7 @@ Each free adapter still uses **live ListModels** — new local pulls appear with
 - Optional rename/pin; never required for discovery.
 - Tags on each model: `tier` (free\|freemium\|paid\|local), `modalities`, `provider`, `account_id`, `status`.
 
-Implemented in this scaffold: `internal/catalog` (+ tests). Not implemented: rename/pin, live merge from multiple adapters in `serve`.
+Implemented: `internal/catalog` (+ tests) with live merge from adapters in `serve`, listing-only hide, and optional pin/rename overlays.
 
 ## 6. Product surface
 

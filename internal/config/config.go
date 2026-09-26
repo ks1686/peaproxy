@@ -25,15 +25,16 @@ const (
 
 // Config is the on-disk schema. schemaVersion must be bumped on breaking changes.
 type Config struct {
-	SchemaVersion    int        `yaml:"schemaVersion"`
-	Bind             string     `yaml:"bind"`
-	Port             int        `yaml:"port"`
-	AdminToken       string     `yaml:"adminToken,omitempty"`
-	AllowNonLoopback bool       `yaml:"allowNonLoopback,omitempty"`
-	RequestLog       bool       `yaml:"requestLog,omitempty"`
-	Hide             HideList   `yaml:"hide"`
-	Expose           ExposeList `yaml:"expose"`
-	Providers        []Provider `yaml:"providers"`
+	SchemaVersion    int          `yaml:"schemaVersion"`
+	Bind             string       `yaml:"bind"`
+	Port             int          `yaml:"port"`
+	AdminToken       string       `yaml:"adminToken,omitempty"`
+	AllowNonLoopback bool         `yaml:"allowNonLoopback,omitempty"`
+	RequestLog       bool         `yaml:"requestLog,omitempty"`
+	Hide             HideList     `yaml:"hide"`
+	Expose           ExposeList   `yaml:"expose"`
+	Catalog          CatalogPrefs `yaml:"catalog,omitempty"`
+	Providers        []Provider   `yaml:"providers"`
 }
 
 // HideList drops providers or model IDs from /v1/models and UI pickers.
@@ -47,6 +48,13 @@ type HideList struct {
 // ExposeList is the optional subset coding tools see. Empty = all non-hidden.
 type ExposeList struct {
 	Models []string `yaml:"models"`
+}
+
+// CatalogPrefs are optional UI overlays. Live ListModels remains the source of IDs.
+// Rename/pin never affect routing unless hide.blockRouting is set.
+type CatalogPrefs struct {
+	Pin    []string          `yaml:"pin,omitempty"`
+	Rename map[string]string `yaml:"rename,omitempty"`
 }
 
 // Provider is one adapter instance (Ollama, a key, or an OAuth account stub).

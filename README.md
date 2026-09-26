@@ -32,9 +32,10 @@ Open http://127.0.0.1:8317/
 ## Quick start
 
 1. **Accounts** — pick a preset (Ollama local or **Cloud**, LM Studio, **llama.cpp**, **vLLM**, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, **NVIDIA NIM**, **Cloudflare Workers AI**, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
-2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Free/Paid/Local filter is remembered in the UI.
+2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename overlays. Free/Paid/Local filter is remembered in the UI.
 3. **Showcase** — try a prompt; vision models (`image_in`) accept an image URL or upload. Models tagged `image_out` show a gated **not yet** (no fake image-gen chat).
-4. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
+4. **Request log** — opt-in redacted inspector (`requestLog: true` or the UI toggle).
+5. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
 
 ```bash
 curl -s http://127.0.0.1:8317/v1/models
@@ -78,11 +79,14 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `POST /v1/chat/completions` | Stream + non-stream; failover on 429/401; cooled accounts are not re-hit (503 + Retry-After) |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `POST /v1/responses` | Codex / OpenAI Responses: native pass-through for Codex OAuth, otherwise translated via chat completions |
-| `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Settings |
+| `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
-| `GET /admin/health` | Bind, adapters, **account cooldowns** (token required off loopback) |
+| `GET /admin/health` | Bind, **adapter health**, **account cooldowns** with remaining time (token required off loopback) |
+| `POST /admin/health/probe` | Re-run `Validate` on each adapter |
 | `GET /admin/presets` | Account dropdown templates |
 | `GET /admin/usage` | Persisted usage (`usage.json`) |
+| `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |
+| `POST /admin/catalog/overlay` | Pin / rename a live model id (listing overlay only) |
 
 ## Gemini
 
@@ -102,7 +106,7 @@ Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generati
 
 Post-v0.2 polish in this tree: OS keychain / encrypted-file secrets; Claude token 403 errors point at docs and the official API-key path. Qwen OAuth stays **not yet** (no CPA consumer flow).
 
-This branch (not tagged): llama.cpp / vLLM local presets, NVIDIA NIM, Cloudflare Workers AI, Ollama Cloud, and first-class `POST /v1/responses`.
+This branch (not tagged): catalog pin/rename overlays, opt-in request inspector UI, and adapter health / cooldown remaining. Rebased onto harness-fidelity `main` (image-out gating, cooldown-storm failover).
 
 ## Why this exists
 

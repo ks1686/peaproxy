@@ -70,14 +70,17 @@ func New(opts Options) *Server {
 	mux.HandleFunc("DELETE /admin/accounts/{id}", admin(s.handleDeleteAccount))
 	mux.HandleFunc("GET /admin/catalog", admin(s.handleAdminCatalog))
 	mux.HandleFunc("POST /admin/catalog/refresh", admin(s.handleRefresh))
+	mux.HandleFunc("POST /admin/catalog/overlay", admin(s.handleCatalogOverlay))
 	mux.HandleFunc("POST /admin/hide", admin(s.handleHide))
 	mux.HandleFunc("POST /admin/showcase", admin(s.handleShowcase))
 	mux.HandleFunc("GET /admin/usage", admin(s.handleUsage))
+	mux.HandleFunc("GET /admin/requests", admin(s.handleRequests))
 	mux.HandleFunc("GET /admin/clients", admin(s.handleClients))
 	mux.HandleFunc("POST /admin/oauth/start", admin(s.handleOAuthStart))
 	mux.HandleFunc("GET /admin/oauth/status", admin(s.handleOAuthStatus))
 	mux.HandleFunc("GET /admin/settings", admin(s.handleSettings))
 	mux.HandleFunc("POST /admin/settings", admin(s.handleSettingsPost))
+	mux.HandleFunc("POST /admin/health/probe", admin(s.handleHealthProbe))
 	uiFS, err := fs.Sub(ui.FS, "web")
 	if err != nil {
 		log.Printf("ui embed: %v", err)
@@ -150,6 +153,7 @@ func (s *Server) handleCatalogAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	raw, err := readBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
@@ -159,7 +163,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ChatStream(r.Context(), raw, sw)
-		s.record(account, peek.Model, "openai", true, http.StatusOK, err, "")
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
@@ -167,11 +171,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, account, err := s.gw.Chat(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "openai", false, statusOf(err), err, "")
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "openai", false, http.StatusOK, nil, resp.Content)
+	s.record(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -182,6 +186,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	raw, err := readBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
@@ -191,7 +196,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ResponsesStream(r.Context(), raw, sw)
-		s.record(account, peek.Model, "responses", true, http.StatusOK, err, "")
+		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
@@ -199,17 +204,18 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	out, account, err := s.gw.Responses(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "responses", false, statusOf(err), err, "")
+		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "responses", false, http.StatusOK, nil, "")
+	s.record(account, peek.Model, "responses", "/v1/responses", false, http.StatusOK, nil, inspectorPreview(raw, ""), started)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 }
 
 func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	raw, err := readBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
@@ -219,7 +225,7 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ClaudeChatStream(r.Context(), raw, sw)
-		s.record(account, peek.Model, "claude", true, http.StatusOK, err, "")
+		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
@@ -227,11 +233,11 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	out, account, err := s.gw.ClaudeChat(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "claude", false, statusOf(err), err, "")
+		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "claude", false, http.StatusOK, nil, "")
+	s.record(account, peek.Model, "claude", "/v1/messages", false, http.StatusOK, nil, inspectorPreview(raw, ""), started)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -255,10 +261,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"requestLog":         cfg.RequestLog,
 		"models":             len(s.gw.Models()),
 		"adapters":           adapters.Names(),
+		"adapterHealth":      s.gw.AdapterHealth(),
 		"cooldowns":          s.gw.Cooldowns(),
+		"cooldownTtlMs":      gateway.CooldownTTL.Milliseconds(),
 		"allowNonLoopback":   cfg.AllowNonLoopback,
 		"lan":                cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
 		"adminTokenRequired": s.adminRequired(),
+	})
+}
+
+func (s *Server) handleHealthProbe(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":        "ok",
+		"adapterHealth": s.gw.Probe(ctx),
+		"cooldowns":     s.gw.Cooldowns(),
+		"cooldownTtlMs": gateway.CooldownTTL.Milliseconds(),
 	})
 }
 
@@ -438,6 +457,27 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "models": len(s.gw.Models())})
 }
 
+func (s *Server) handleCatalogOverlay(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID          string  `json:"id"`
+		DisplayName *string `json:"displayName"`
+		Pinned      *bool   `json:"pinned"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	if err := s.gw.SetCatalogOverlay(body.ID, body.DisplayName, body.Pinned); err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "ok",
+		"id":      body.ID,
+		"catalog": s.gw.Config().Catalog,
+	})
+}
+
 func (s *Server) handleHide(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Kind   string `json:"kind"`
@@ -456,6 +496,7 @@ func (s *Server) handleHide(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	var body struct {
 		Model         string `json:"model"`
 		Prompt        string `json:"prompt"`
@@ -484,11 +525,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, account, err := s.gw.Chat(r.Context(), raw)
 	if err != nil {
-		s.record(account, body.Model, "showcase", false, statusOf(err), err, "")
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, body.Model, "showcase", false, http.StatusOK, nil, resp.Content)
+	s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account":  account,
 		"model":    body.Model,
@@ -510,6 +551,29 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"byAccount":  s.gw.Usage.ByAccount(),
 		"path":       path,
 		"disclaimer": "Persisted to usage.json next to the config file. Opt-in requestLog writes redacted JSONL to requests.log.",
+	})
+}
+
+func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	cfg := s.gw.Config()
+	path := ""
+	events := []usage.Event{}
+	if s.gw.Usage != nil {
+		path = s.gw.Usage.RequestLogPath()
+		if cfg.RequestLog {
+			events = s.gw.Usage.Tail(100)
+		}
+	}
+	if events == nil {
+		events = []usage.Event{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled":     cfg.RequestLog,
+		"path":        path,
+		"events":      events,
+		"disclaimer":  "Opt-in. Secrets are redacted. File mode 0600. Rotated when the log exceeds 1MiB.",
+		"neverLogged": []string{"Authorization", "x-api-key", "access_token", "refresh_token", "sk-*", "PEM private keys"},
 	})
 }
 
@@ -543,6 +607,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		"configPath":       s.gw.ConfigPath(),
 		"listingOnlyHide":  !cfg.Hide.BlockRouting,
 		"requestLog":       cfg.RequestLog,
+		"catalog":          cfg.Catalog,
 		"lan":              cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
 		"lanWarning":       cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind),
 	})
@@ -594,18 +659,38 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) record(account, model, proto string, stream bool, status int, err error, preview string) {
+func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time) {
 	if s.gw == nil || s.gw.Usage == nil {
 		return
 	}
-	e := usage.Event{AccountID: account, Model: model, Protocol: proto, Stream: stream, Status: status, Preview: preview}
+	e := usage.Event{
+		AccountID:  account,
+		Model:      model,
+		Protocol:   proto,
+		Path:       path,
+		Stream:     stream,
+		Status:     status,
+		Preview:    preview,
+		DurationMS: time.Since(started).Milliseconds(),
+	}
 	if err != nil {
-		e.Error = err.Error()
+		e.Error = usage.Redact(err.Error())
 		if e.Status == 0 {
 			e.Status = statusOf(err)
 		}
 	}
 	s.gw.Usage.Add(e)
+}
+
+func inspectorPreview(raw []byte, response string) string {
+	req := strings.TrimSpace(string(raw))
+	if req == "" && response == "" {
+		return ""
+	}
+	if response == "" {
+		return req
+	}
+	return req + " → " + response
 }
 
 func readBody(r *http.Request) ([]byte, error) {

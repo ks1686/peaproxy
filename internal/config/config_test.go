@@ -36,6 +36,11 @@ hide:
 expose:
   models:
     - llama3.2
+catalog:
+  pin:
+    - llama3.2
+  rename:
+    llama3.2: Llama 3.2 local
 providers:
   - id: ollama-local
     adapter: ollama
@@ -55,6 +60,12 @@ providers:
 	if len(cfg.Providers) != 1 || cfg.Providers[0].Adapter != "ollama" {
 		t.Fatalf("providers: %#v", cfg.Providers)
 	}
+	if len(cfg.Catalog.Pin) != 1 || cfg.Catalog.Pin[0] != "llama3.2" {
+		t.Fatalf("catalog pin: %#v", cfg.Catalog.Pin)
+	}
+	if cfg.Catalog.Rename["llama3.2"] != "Llama 3.2 local" {
+		t.Fatalf("catalog rename: %#v", cfg.Catalog.Rename)
+	}
 	cfg.Providers[0].APIKey = "sk-test-secret-value"
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
@@ -66,12 +77,18 @@ providers:
 	if strings.Contains(string(onDisk), "sk-test-secret-value") {
 		t.Fatalf("apiKey leaked into YAML:\n%s", onDisk)
 	}
+	if !strings.Contains(string(onDisk), "Llama 3.2 local") || !strings.Contains(string(onDisk), "pin:") {
+		t.Fatalf("catalog prefs missing from YAML:\n%s", onDisk)
+	}
 	again, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if again.Providers[0].APIKey != "sk-test-secret-value" {
 		t.Fatalf("save lost apiKey")
+	}
+	if again.Catalog.Rename["llama3.2"] != "Llama 3.2 local" {
+		t.Fatalf("save lost rename: %#v", again.Catalog)
 	}
 }
 

@@ -24,6 +24,13 @@ hide:
 expose:
   models: []
 
+# Optional overlays. Live ListModels remains the source of IDs.
+# catalog:
+#   pin:
+#     - llama3.2
+#   rename:
+#     llama3.2: Llama 3.2 local
+
 providers:
   - id: ollama-local
     adapter: ollama

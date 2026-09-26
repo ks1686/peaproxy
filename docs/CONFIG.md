@@ -41,3 +41,21 @@ Binding `0.0.0.0` (or any non-loopback address) is refused unless **both**:
 2. a non-empty `adminToken` (`--admin-token` / `PEAPROXY_ADMIN_TOKEN` / YAML)
 
 Then `/admin/*` requires `X-Admin-Token` (or `Authorization: Bearer …`). `GET /healthz`, `/v1/*`, and the UI static files stay reachable; the UI shows a LAN warning and stores the token in `localStorage` for admin fetches.
+
+## Catalog overlays
+
+Live `ListModels` remains the source of IDs. Optional pin/rename live next to hide/expose:
+
+```yaml
+catalog:
+  pin:
+    - llama3.2
+  rename:
+    llama3.2: Llama 3.2 local
+```
+
+The UI Catalog page and `POST /admin/catalog/overlay` write the same fields. Hide still affects listing only (CPA #5995). Rename never becomes a routing alias — clients must use the live provider id.
+
+## Request log
+
+`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log / Settings toggle) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` tails the inspector for the UI. Usage counters still go to `usage.json` even when the inspector is off.

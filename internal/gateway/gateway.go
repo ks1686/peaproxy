@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,10 +24,10 @@ import (
 	"github.com/ks1686/peaproxy/internal/usage"
 )
 
-const defaultCooldownTTL = 30 * time.Second
+const CooldownTTL = 30 * time.Second
 
 // cooldownTTL is the skip window after 429/401. Tests may shorten it.
-var cooldownTTL = defaultCooldownTTL
+var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
@@ -39,13 +40,27 @@ type Gateway struct {
 	Usage  *usage.Store
 	cool   map[string]Cooldown
 	rr     uint64
+	health []AdapterHealth
 }
 
 // Cooldown is a temporary skip of an account after 429/401.
 type Cooldown struct {
-	AccountID string    `json:"accountId"`
-	Until     time.Time `json:"until"`
-	Reason    string    `json:"reason"`
+	AccountID   string    `json:"accountId"`
+	Until       time.Time `json:"until"`
+	Reason      string    `json:"reason"`
+	RemainingMs int64     `json:"remainingMs"`
+}
+
+// AdapterHealth is last ListModels/Validate status for the Health UI.
+type AdapterHealth struct {
+	AccountID    string               `json:"accountId"`
+	Adapter      string               `json:"adapter"`
+	Status       string               `json:"status"`
+	Error        string               `json:"error,omitempty"`
+	LatencyMS    int64                `json:"latencyMs"`
+	Models       int                  `json:"models"`
+	CheckedAt    time.Time            `json:"checkedAt"`
+	Capabilities adapter.Capabilities `json:"capabilities"`
 }
 
 type instance struct {
@@ -137,6 +152,8 @@ func (g *Gateway) queryLocked() catalog.Query {
 		ExposeModels:  g.cfg.Expose.Models,
 		ForClients:    true,
 		BlockRouting:  g.cfg.Hide.BlockRouting,
+		Pin:           g.cfg.Catalog.Pin,
+		Rename:        g.cfg.Catalog.Rename,
 	}
 }
 
@@ -146,9 +163,20 @@ func (g *Gateway) Refresh(ctx context.Context) {
 	inst := append([]instance(nil), g.inst...)
 	g.mu.Unlock()
 	var all []catalog.Model
+	health := make([]AdapterHealth, 0, len(inst))
 	for _, inst := range inst {
+		start := time.Now()
 		models, err := inst.Adapter.ListModels(ctx)
+		h := AdapterHealth{
+			AccountID:    inst.Provider.ID,
+			Adapter:      inst.Provider.Adapter,
+			LatencyMS:    time.Since(start).Milliseconds(),
+			CheckedAt:    time.Now().UTC(),
+			Capabilities: inst.Adapter.Capabilities(),
+		}
 		if err != nil {
+			h.Status = "error"
+			h.Error = usage.Redact(err.Error())
 			all = append(all, catalog.Model{
 				ID:        inst.Provider.ID + ":unavailable",
 				Provider:  inst.Provider.Adapter,
@@ -158,12 +186,17 @@ func (g *Gateway) Refresh(ctx context.Context) {
 				Routable:  false,
 				Exposed:   false,
 			})
+			health = append(health, h)
 			continue
 		}
+		h.Status = "ok"
+		h.Models = len(models)
+		health = append(health, h)
 		all = append(all, models...)
 	}
 	g.mu.Lock()
 	g.models = all
+	g.health = health
 	g.mu.Unlock()
 }
 
@@ -597,6 +630,10 @@ func (g *Gateway) Cooldowns() []Cooldown {
 			delete(g.cool, id)
 			continue
 		}
+		c.RemainingMs = c.Until.Sub(now).Milliseconds()
+		if c.RemainingMs < 0 {
+			c.RemainingMs = 0
+		}
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
@@ -604,6 +641,62 @@ func (g *Gateway) Cooldowns() []Cooldown {
 		out = []Cooldown{}
 	}
 	return out
+}
+
+// AdapterHealth returns last probe/ListModels status, overlaying active cooldowns.
+func (g *Gateway) AdapterHealth() []AdapterHealth {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	out := make([]AdapterHealth, len(g.health))
+	copy(out, g.health)
+	for i := range out {
+		if c, ok := g.cool[out[i].AccountID]; ok && now.Before(c.Until) && out[i].Status == "ok" {
+			out[i].Status = "cooldown"
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
+	if out == nil {
+		out = []AdapterHealth{}
+	}
+	return out
+}
+
+// Probe re-runs Validate on each adapter and stores the result for Health.
+func (g *Gateway) Probe(ctx context.Context) []AdapterHealth {
+	g.mu.RLock()
+	inst := append([]instance(nil), g.inst...)
+	prev := make(map[string]AdapterHealth, len(g.health))
+	for _, h := range g.health {
+		prev[h.AccountID] = h
+	}
+	g.mu.RUnlock()
+	health := make([]AdapterHealth, 0, len(inst))
+	for _, inst := range inst {
+		start := time.Now()
+		err := inst.Adapter.Validate(ctx)
+		h := AdapterHealth{
+			AccountID:    inst.Provider.ID,
+			Adapter:      inst.Provider.Adapter,
+			LatencyMS:    time.Since(start).Milliseconds(),
+			CheckedAt:    time.Now().UTC(),
+			Capabilities: inst.Adapter.Capabilities(),
+		}
+		if old, ok := prev[inst.Provider.ID]; ok {
+			h.Models = old.Models
+		}
+		if err != nil {
+			h.Status = "error"
+			h.Error = usage.Redact(err.Error())
+		} else {
+			h.Status = "ok"
+		}
+		health = append(health, h)
+	}
+	g.mu.Lock()
+	g.health = health
+	g.mu.Unlock()
+	return g.AdapterHealth()
 }
 
 func (g *Gateway) candidates(model string) ([]instance, time.Duration) {
@@ -746,6 +839,37 @@ func (g *Gateway) ToggleHide(kind, id string, hidden bool) error {
 		g.cfg.Hide.Models = setHidden(g.cfg.Hide.Models, id, hidden)
 	default:
 		return fmt.Errorf("kind must be provider or model")
+	}
+	if g.path != "" {
+		return config.Save(g.path, g.cfg)
+	}
+	return nil
+}
+
+// SetCatalogOverlay pins and/or renames a live model id. Empty displayName clears the overlay.
+func (g *Gateway) SetCatalogOverlay(id string, displayName *string, pinned *bool) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if pinned != nil {
+		g.cfg.Catalog.Pin = setHidden(g.cfg.Catalog.Pin, id, *pinned)
+	}
+	if displayName != nil {
+		name := strings.TrimSpace(*displayName)
+		if g.cfg.Catalog.Rename == nil {
+			g.cfg.Catalog.Rename = map[string]string{}
+		}
+		if name == "" {
+			delete(g.cfg.Catalog.Rename, id)
+		} else {
+			g.cfg.Catalog.Rename[id] = name
+		}
+		if len(g.cfg.Catalog.Rename) == 0 {
+			g.cfg.Catalog.Rename = nil
+		}
 	}
 	if g.path != "" {
 		return config.Save(g.path, g.cfg)

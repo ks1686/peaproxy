@@ -205,3 +205,74 @@ func TestAccountsForModelIncludesHidden(t *testing.T) {
 		t.Fatalf("blockRouting: %v", got)
 	}
 }
+
+func TestRenameOverlaysDisplayNameWithoutChangingID(t *testing.T) {
+	got := List(sampleModels(), Query{
+		Filter: FilterAll,
+		Rename: map[string]string{"llama3.2": "Llama 3.2 local"},
+	})
+	var llama Model
+	for _, m := range got {
+		if m.ID == "llama3.2" {
+			llama = m
+		}
+	}
+	if llama.DisplayName != "Llama 3.2 local" {
+		t.Fatalf("displayName: %#v", llama)
+	}
+	if _, ok := FindRoutable(sampleModels(), Query{Rename: map[string]string{"llama3.2": "Llama 3.2 local"}}, "llama3.2"); !ok {
+		t.Fatal("rename must not change routing id")
+	}
+	if _, ok := FindRoutable(sampleModels(), Query{Rename: map[string]string{"llama3.2": "Llama 3.2 local"}}, "Llama 3.2 local"); ok {
+		t.Fatal("display name must not become a routing alias")
+	}
+}
+
+func TestPinSortsPinnedModelsFirstInPinOrder(t *testing.T) {
+	got := List(sampleModels(), Query{
+		Filter: FilterAll,
+		Pin:    []string{"gpt-4o", "llama3.2"},
+	})
+	if len(got) < 2 {
+		t.Fatalf("%#v", got)
+	}
+	if got[0].ID != "gpt-4o" || !got[0].Pinned {
+		t.Fatalf("first pinned: %#v", got[0])
+	}
+	if got[1].ID != "llama3.2" || !got[1].Pinned {
+		t.Fatalf("second pinned: %#v", got[1])
+	}
+	for i := 2; i < len(got); i++ {
+		if got[i].Pinned {
+			t.Fatalf("unlisted pin leaked: %#v", got[i])
+		}
+	}
+}
+
+func TestPinAndRenameDoNotChangeHideRouting(t *testing.T) {
+	q := Query{
+		HideModels: []string{"gpt-4o"},
+		Pin:        []string{"gpt-4o"},
+		Rename:     map[string]string{"gpt-4o": "Hidden Omni"},
+	}
+	listed := List(sampleModels(), q)
+	for _, m := range listed {
+		if m.ID == "gpt-4o" {
+			t.Fatal("pinned hidden model must stay off /v1/models")
+		}
+	}
+	m, ok := FindRoutable(sampleModels(), q, "gpt-4o")
+	if !ok || m.AccountID != "oa-key" {
+		t.Fatalf("pin/rename must not block routing: %#v ok=%v", m, ok)
+	}
+	ann := AllAnnotated(sampleModels(), q)
+	var hidden Model
+	for _, row := range ann {
+		if row.ID == "gpt-4o" {
+			hidden = row
+		}
+	}
+	if !hidden.Hidden || !hidden.Pinned || hidden.DisplayName != "Hidden Omni" || !hidden.Routable {
+		t.Fatalf("annotated hidden pin: %#v", hidden)
+	}
+}

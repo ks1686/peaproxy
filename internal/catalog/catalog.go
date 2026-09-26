@@ -5,6 +5,7 @@ package catalog
 
 import (
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -44,6 +45,8 @@ type Model struct {
 	Hidden            bool     `json:"hidden,omitempty"`
 	Exposed           bool     `json:"exposed"`
 	Routable          bool     `json:"routable"`
+	// Pinned is a local overlay; live ListModels remains the source of IDs.
+	Pinned bool `json:"pinned,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.
@@ -58,6 +61,10 @@ type Query struct {
 	ForClients   bool
 	// BlockRouting makes hide/expose also refuse POST routing. Default false.
 	BlockRouting bool
+	// Pin lists model IDs that should sort first (UI and /v1/models order).
+	Pin []string
+	// Rename overlays display names; routing always uses the live provider ID.
+	Rename map[string]string
 }
 
 // Apply is an alias of List for older call sites.
@@ -76,6 +83,7 @@ func List(models []Model, q Query) []Model {
 		}
 		out = append(out, ann)
 	}
+	sortPinned(out, q.Pin)
 	return out
 }
 
@@ -89,6 +97,7 @@ func AllAnnotated(models []Model, q Query) []Model {
 		}
 		out = append(out, ann)
 	}
+	sortPinned(out, q.Pin)
 	return out
 }
 
@@ -136,13 +145,40 @@ func annotate(m Model, q Query) Model {
 		exposed = false
 		hidden = true
 	}
+	if name, ok := q.Rename[m.ID]; ok && strings.TrimSpace(name) != "" {
+		m.DisplayName = strings.TrimSpace(name)
+	}
 	m.Hidden = hidden
 	m.Exposed = exposed
 	m.Routable = true
 	if q.BlockRouting && hidden {
 		m.Routable = false
 	}
+	m.Pinned = slices.Contains(q.Pin, m.ID)
 	return m
+}
+
+func sortPinned(models []Model, pin []string) {
+	if len(pin) == 0 || len(models) < 2 {
+		return
+	}
+	rank := make(map[string]int, len(pin))
+	for i, id := range pin {
+		if _, ok := rank[id]; !ok {
+			rank[id] = i
+		}
+	}
+	sort.SliceStable(models, func(i, j int) bool {
+		ri, iok := rank[models[i].ID]
+		rj, jok := rank[models[j].ID]
+		if iok && jok {
+			return ri < rj
+		}
+		if iok != jok {
+			return iok
+		}
+		return false
+	})
 }
 
 func matchFilter(m Model, f Filter) bool {
