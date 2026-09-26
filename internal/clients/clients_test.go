@@ -113,6 +113,16 @@ func TestOpenCodeAndClaudeCodeUseDifferentBaseURLs(t *testing.T) {
 	}
 }
 
+func TestEveryPresetHasVerifyCommand(t *testing.T) {
+	for _, name := range List() {
+		p, _ := Get(name)
+		want := "peaproxy clients verify " + name
+		if !strings.Contains(p.Verify, want) {
+			t.Fatalf("%s missing verify command, got %q", name, p.Verify)
+		}
+	}
+}
+
 func TestEveryPresetDocumentsCloak(t *testing.T) {
 	for _, name := range List() {
 		p, _ := Get(name)

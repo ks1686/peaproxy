@@ -285,3 +285,83 @@ func TestIsLoopback(t *testing.T) {
 		t.Fatal("non-loopback reported as loopback")
 	}
 }
+
+func TestValidateRejectsEmptyAdapterAndBadTier(t *testing.T) {
+	cfg := config.Default()
+	cfg.Providers[0].Adapter = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "adapter") {
+		t.Fatalf("empty adapter: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Providers[0].Tier = "enterprise"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "tier") {
+		t.Fatalf("bad tier: %v", err)
+	}
+}
+
+func TestValidateCatalogOverlays(t *testing.T) {
+	cfg := config.Default()
+	cfg.Catalog.Pin = []string{"llama3.2", "llama3.2"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "pin") {
+		t.Fatalf("duplicate pin: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Catalog.Pin = []string{"  "}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "pin") {
+		t.Fatalf("empty pin: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Catalog.Rename = map[string]string{"": "Nope"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "rename") {
+		t.Fatalf("empty rename key: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Catalog.Rename = map[string]string{"llama3.2": "   "}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "rename") {
+		t.Fatalf("empty rename value: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Hide.Models = []string{"ok", ""}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "hide.models") {
+		t.Fatalf("empty hide model: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Catalog.Pin = []string{"llama3.2"}
+	cfg.Catalog.Rename = map[string]string{"llama3.2": "Llama 3.2 local"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateKnownAdapters(t *testing.T) {
+	cfg := config.Default()
+	if err := cfg.ValidateKnownAdapters([]string{"ollama", "openai"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers[0].Adapter = "not-a-real-adapter"
+	err := cfg.ValidateKnownAdapters([]string{"ollama", "openai"})
+	if err == nil || !strings.Contains(err.Error(), "unknown adapter") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestNeedsOnboarding(t *testing.T) {
+	if !config.Default().NeedsOnboarding() {
+		t.Fatal("first-run default should show onboarding")
+	}
+	empty := config.Default()
+	empty.Providers = nil
+	if !empty.NeedsOnboarding() {
+		t.Fatal("no accounts should show onboarding")
+	}
+	keyed := config.Default()
+	keyed.Providers[0].APIKeyEnv = "OLLAMA_API_KEY"
+	if keyed.NeedsOnboarding() {
+		t.Fatal("configured local account is past onboarding")
+	}
+	two := config.Default()
+	two.Providers = append(two.Providers, config.Provider{ID: "openai-key", Adapter: "openai", Tier: "paid"})
+	if two.NeedsOnboarding() {
+		t.Fatal("second account ends onboarding")
+	}
+}

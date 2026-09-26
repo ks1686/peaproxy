@@ -17,6 +17,7 @@ type Preset struct {
 	Cloak      string
 	Notes      string
 	Snippet    string
+	Verify     string
 	VerifyTODO string
 }
 
@@ -172,11 +173,27 @@ func List() []string {
 // Get returns a named preset.
 func Get(name string) (Preset, bool) {
 	p, ok := presets[strings.ToLower(name)]
+	if p.Verify == "" {
+		p.Verify = p.VerifyTODO
+	}
 	return p, ok
+}
+
+func init() {
+	for k, p := range presets {
+		if p.Verify == "" {
+			p.Verify = p.VerifyTODO
+			presets[k] = p
+		}
+	}
 }
 
 // Format prints a preset for humans and agents.
 func Format(p Preset) string {
+	verify := p.Verify
+	if verify == "" {
+		verify = p.VerifyTODO
+	}
 	return fmt.Sprintf("name: %s\nbase_url: %s\nauth: %s\ncloak: %s\nnotes: %s\n\n# snippet\n%s\n# verify: %s\n",
-		p.Name, p.BaseURL, p.AuthHeader, p.Cloak, p.Notes, p.Snippet, p.VerifyTODO)
+		p.Name, p.BaseURL, p.AuthHeader, p.Cloak, p.Notes, p.Snippet, verify)
 }

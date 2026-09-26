@@ -76,7 +76,7 @@ Implemented: `internal/catalog` (+ tests) with live merge from adapters in `serv
 
 ## 7. Showcase
 
-Per connected provider: one-click text example; if `image_in`, multimodal example; show raw request/response (redacted). Docs should mirror the same examples. **UI page is a placeholder.**
+Per connected provider: one-click text example; if `image_in`, multimodal example; show raw request/response (redacted). Showcase groups models by provider and shows usage totals per provider and per account.
 
 ## 8. Harness quick-setup
 

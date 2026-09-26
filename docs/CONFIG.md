@@ -40,7 +40,7 @@ Binding `0.0.0.0` (or any non-loopback address) is refused unless **both**:
 1. `--allow-lan` or `allowNonLoopback: true` or `PEAPROXY_ALLOW_LAN=1`
 2. a non-empty `adminToken` (`--admin-token` / `PEAPROXY_ADMIN_TOKEN` / YAML)
 
-Then `/admin/*` requires `X-Admin-Token` (or `Authorization: Bearer …`). `GET /healthz`, `/v1/*`, and the UI static files stay reachable; the UI shows a LAN warning and stores the token in `localStorage` for admin fetches.
+Then `/admin/*` requires `X-Admin-Token` (or `Authorization: Bearer …`). `GET /healthz`, `/v1/*`, and the UI static files stay reachable; the UI shows a LAN warning and stores the token in `localStorage` for admin fetches. Settings → Listen repeats the bind/LAN warning and whether an admin token is required.
 
 ## Catalog overlays
 
@@ -54,8 +54,43 @@ catalog:
     llama3.2: Llama 3.2 local
 ```
 
-The UI Catalog page and `POST /admin/catalog/overlay` write the same fields. Hide still affects listing only (CPA #5995). Rename never becomes a routing alias — clients must use the live provider id.
+Rules (`peaproxy config validate`):
+
+- Pin ids must be non-empty and unique.
+- Rename keys (live model ids) and display names must be non-empty.
+- Hide/expose lists must not contain empty ids or duplicates.
+- Pin/rename never become routing aliases — clients must use the live provider id.
+- Hidden pinned models stay off `/v1/models` and remain routable by id unless `hide.blockRouting` is true.
+
+The UI Catalog page and `POST /admin/catalog/overlay` write the same fields. Settings shows pin/rename/hide counts (edit them on Catalog).
 
 ## Request log
 
-`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log / Settings toggle) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` tails the inspector for the UI. Usage counters still go to `usage.json` even when the inspector is off.
+`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` tails the inspector for the UI. Usage counters still go to `usage.json` even when the inspector is off.
+
+## Validate
+
+```bash
+peaproxy config validate
+peaproxy config validate --config ./peaproxy.yaml
+```
+
+Exits non-zero when the file is invalid. Prints a summary on success:
+
+```
+ok
+path: /home/you/.config/peaproxy/config.yaml
+bind: 127.0.0.1:8317
+loopback: true
+requestLog: false
+catalog.pin: 0
+catalog.rename: 0
+providers: 1
+secrets: file
+```
+
+`secrets` is `file` or `keyring` — never token values. Unknown adapter names fail validate (see [PROVIDERS.md](PROVIDERS.md)). Invalid `tier` values (not `free|freemium|paid|local`) fail. First-run `serve` writes the skeleton, then the same checks apply.
+
+## Settings UI
+
+`GET /admin/settings` (and the Settings page) reports bind/port, loopback vs LAN warning, config path, secret-backend name + note, request-log on/off and path, and catalog overlay counts. It never returns `adminToken`, API keys, or OAuth tokens. `hasAdminToken` is a boolean only.

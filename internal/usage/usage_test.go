@@ -68,6 +68,31 @@ func TestRequestLogTailNewestFirstAndDropsSecrets(t *testing.T) {
 	}
 }
 
+func TestByProviderRollup(t *testing.T) {
+	s := Open("")
+	s.Add(Event{AccountID: "ollama-local", Provider: "ollama", Model: "llama3.2", Status: 200, PromptTokens: 3, CompletionTokens: 5})
+	s.Add(Event{AccountID: "openai-key", Provider: "openai", Model: "gpt-4o", Status: 200, PromptTokens: 10, CompletionTokens: 2})
+	s.Add(Event{AccountID: "openai-oauth", Provider: "openai", Model: "gpt-4o", Status: 429, Error: "rate"})
+	s.Add(Event{AccountID: "legacy", Model: "old", Status: 200})
+	got := s.ByProvider()
+	if len(got) != 3 {
+		t.Fatalf("%#v", got)
+	}
+	by := map[string]ProviderRollup{}
+	for _, r := range got {
+		by[r.Provider] = r
+	}
+	if by["ollama"].Calls != 1 || by["ollama"].Tokens != 8 || by["ollama"].Accounts != 1 {
+		t.Fatalf("ollama: %#v", by["ollama"])
+	}
+	if by["openai"].Calls != 2 || by["openai"].Errors != 1 || by["openai"].Accounts != 2 || by["openai"].Tokens != 12 {
+		t.Fatalf("openai: %#v", by["openai"])
+	}
+	if by["legacy"].Calls != 1 || by["legacy"].Accounts != 1 {
+		t.Fatalf("fallback account id: %#v", by["legacy"])
+	}
+}
+
 func TestRequestLogRotatesWhenOverMaxBytes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "requests.log")

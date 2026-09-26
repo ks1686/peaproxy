@@ -100,6 +100,9 @@ Examples:
 			if err := cfg.Validate(); err != nil {
 				return err
 			}
+			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
+				return err
+			}
 			return runServe(cmd.OutOrStdout(), cfg, path, created)
 		},
 	}
@@ -254,8 +257,8 @@ func configCmd(configPath *string) *cobra.Command {
 			if store != nil {
 				backend = string(store.Backend())
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nproviders: %d\nhide.blockRouting: %v\nsecrets: %s\n",
-				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, len(cfg.Providers), cfg.Hide.BlockRouting, backend)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "path: %s\nschemaVersion: %d\nbind: %s\nport: %d\nloopback: %v\nrequestLog: %v\nproviders: %d\ncatalog.pin: %d\ncatalog.rename: %d\nhide.blockRouting: %v\nsecrets: %s\n",
+				path, cfg.SchemaVersion, cfg.Bind, cfg.Port, config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Providers), len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), cfg.Hide.BlockRouting, backend)
 			return nil
 		},
 	})
@@ -264,14 +267,23 @@ func configCmd(configPath *string) *cobra.Command {
 		Short: "Exit non-zero if config is invalid",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
-			cfg, _, err := loadCfg(*configPath)
+			cfg, path, err := loadCfg(*configPath)
 			if err != nil {
 				return err
 			}
 			if err := cfg.Validate(); err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "ok")
+			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
+				return err
+			}
+			store, _ := config.OpenStore(path)
+			backend := "file"
+			if store != nil {
+				backend = string(store.Backend())
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ok\npath: %s\nbind: %s\nloopback: %v\nrequestLog: %v\ncatalog.pin: %d\ncatalog.rename: %d\nproviders: %d\nsecrets: %s\n",
+				path, cfg.Addr(), config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), len(cfg.Providers), backend)
 			return nil
 		},
 	})
