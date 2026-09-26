@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **v0.2.6** on main. Usable 0.2.x product. 1.0 cut: [docs/V1.md](docs/V1.md).
+Status: **v0.2.8** on main (CLI parity with Catalog / Health / Request log / `accounts add`). Usable 0.2.x product. 1.0 cut: [docs/V1.md](docs/V1.md) — that tag is not cut yet.
 
 **Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
@@ -23,12 +23,11 @@ Point coding tools at one local OpenAI-shaped, Claude-shaped, and Responses endp
 
 ## Install
 
-Pin the current release, or follow `main`:
+Follow `main` with `@latest`, or pin a tagged 0.2.x:
 
 ```bash
-go install github.com/ks1686/peaproxy/cmd/peaproxy@v0.2.6
-# or
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
+# or pin a tagged 0.2.x, e.g. @v0.2.8
 peaproxy --version
 peaproxy serve
 ```
@@ -46,9 +45,9 @@ Open http://127.0.0.1:8317/
 ![Showcase](docs/screenshots/showcase.png)
 ![Health](docs/screenshots/health.png)
 
-Screenshots are from an earlier UI build; Settings, Request log, and first-run Accounts CTAs exist in v0.2.6 even if the images lag.
+Screenshots are from an earlier UI build; Settings, Request log, and first-run Accounts CTAs exist on main even if the images lag.
 
-## Feature matrix (v0.2.6)
+## Feature matrix (v0.2.8)
 
 | Capability | Status |
 |---|---|
@@ -65,7 +64,8 @@ Screenshots are from an earlier UI build; Settings, Request log, and first-run A
 | OS keychain / `secrets.enc` | Shipped |
 | 429/401 failover + cooldown skip + Health | Shipped (round-robin) |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp) |
-| Settings, onboarding CTAs, `config validate` | Shipped (v0.2.6) |
+| Settings, onboarding CTAs, `config validate` | Shipped |
+| CLI `catalog` / `health` / `requests` / `accounts add` | Shipped (v0.2.8) |
 | Loopback default; LAN needs token | Shipped |
 | macOS / Windows tray | **No, by design** (CLI + localhost UI) |
 | Claude OAuth through Cloudflare | Stock Go TLS; may **403**. Prefer API key. No uTLS. |

@@ -1,6 +1,6 @@
 # PeaProxy — approved plan (2026-09-26)
 
-Status: **v0.2.6 on main**. Phases 0–4 are done. Releases are tagged through **v0.2.6**. This is a usable 0.2.x product, not a scaffold.
+Status: **v0.2.8 on main**. Phases 0–4 are done. Releases are tagged through **v0.2.8**. This is a usable 0.2.x product, not a scaffold. A **v1.0.0** tag is a honesty/quality cut ([V1.md](V1.md)); that tag is not cut yet.
 
 Residuals (documented, not unmarked phase work):
 
@@ -76,7 +76,7 @@ Each free adapter still uses **live ListModels** — new local pulls appear with
 ## 6. Product surface
 
 - Binary: `peaproxy`
-- CLI: `serve | auth | accounts | models | status | config | clients`
+- CLI: `serve | auth | accounts | models | catalog | requests | health | status | config | clients` (v0.2.8: `catalog pin|rename|hide`, `requests tail`, `health`, `accounts add`)
 - Localhost UI: Accounts (onboarding CTAs), Catalog (filters/hide/pin/rename), Showcase, Clients (harness presets + verify copy), Health (adapter probe + cooldowns), Request log (opt-in), Settings (bind/LAN/secret backend)
 - HTTP: OpenAI `/v1/chat/completions`, `/v1/models`; Claude `/v1/messages`; Codex `/v1/responses`; admin loopback routes
 
@@ -103,9 +103,9 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 2. Core P0 key adapters; multi-account failover; CLI; harness presets (Cursor + Claude Code + OpenCode + Pi, later Codex/Continue/Cline/Amp) ✅
 3. Catalog polish (hide/filter/pin/rename); showcase; request inspector; health; Settings / first-run onboarding ✅ (v0.2.4–v0.2.6)
 4. OAuth maximize + remaining free/local hosted presets ✅ (v0.2.0 OAuth; v0.2.2–v0.2.5 presets). **Qwen consumer OAuth still stubbed.**
-5. Releases — **v0.2.0 through v0.2.6 tagged** (GoReleaser linux/darwin/windows amd64+arm64). Site/marketing is not this repo.
+5. Releases — **v0.2.0 through v0.2.8 tagged** (GoReleaser linux/darwin/windows amd64+arm64). **v1.0.0** is the next cut ([V1.md](V1.md)); site/marketing is not this repo.
 
-**Shipped in this tree:** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, image-out gating, cooldown-storm failover, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, subscription OAuth (ToS documented), OS keychain / encrypted-file secrets.
+**Shipped in this tree:** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, image-out gating, cooldown-storm failover, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add` (v0.2.8), subscription OAuth (ToS documented), OS keychain / encrypted-file secrets.
 
 ## 11. Security
 
@@ -117,7 +117,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 
 ## 12. Success
 
-**v0.1 / v0.2 — met on main (v0.2.6):**
+**v0.1 / v0.2 — met on main (v0.2.8):**
 
 - ≥2 OAuth + ≥2 API-key + Ollama free
 - Live models appear without code change when a provider adds one
