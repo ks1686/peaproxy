@@ -841,6 +841,9 @@ func (s *Server) record(account, model, proto, path string, stream bool, status 
 			e.Status = statusOf(err)
 		}
 	}
+	if snap, ok := s.gw.QuotaSnapshot(account); ok && snap.Reported() && snap.CapturedAt != nil && !snap.CapturedAt.Before(started) {
+		e.QuotaHint = snap.Compact()
+	}
 	s.gw.Usage.Add(e)
 }
 

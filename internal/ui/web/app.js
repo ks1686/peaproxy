@@ -68,6 +68,38 @@ function emptyState(title, detail) {
   return `<div class="empty"><strong>${escapeHtml(title)}</strong><br />${escapeHtml(detail)}</div>`;
 }
 
+function quotaByAccount(list) {
+  const m = {};
+  (list || []).forEach((q) => {
+    if (q && q.accountId) m[q.accountId] = q;
+  });
+  return m;
+}
+
+function formatQuotaRemaining(q) {
+  if (!q) return "";
+  const parts = [];
+  const add = (label, v) => {
+    if (v !== null && v !== undefined) parts.push(label + ": " + v);
+  };
+  add("requests", q.remainingRequests);
+  add("tokens", q.remainingTokens);
+  add("requests/day", q.remainingRequestsDay);
+  add("tokens/min", q.remainingTokensMinute);
+  add("input tokens", q.remainingInputTokens);
+  add("output tokens", q.remainingOutputTokens);
+  add("credits", q.remainingCredits);
+  if (q.creditsUnlimited) parts.push("credits: unlimited (provider)");
+  return parts.join(" · ");
+}
+
+function quotaRemainingHTML(q, hint) {
+  if (hint) return escapeHtml(hint);
+  const remaining = formatQuotaRemaining(q);
+  if (remaining) return escapeHtml(remaining);
+  return `<span class="muted">not reported by provider</span>`;
+}
+
 function onboardingCard() {
   return `<div class="empty cta" id="onboarding">
     <strong>Getting started</strong>
@@ -811,33 +843,21 @@ function healthPage(root) {
     const sec = Math.ceil(n / 1000);
     return sec + "s left";
   };
-  const formatQuotaRemaining = (q) => {
-    if (!q) return "";
-    const parts = [];
-    const add = (label, v) => {
-      if (v !== null && v !== undefined) parts.push(label + ": " + v);
-    };
-    add("requests", q.remainingRequests);
-    add("tokens", q.remainingTokens);
-    add("requests/day", q.remainingRequestsDay);
-    add("tokens/min", q.remainingTokensMinute);
-    add("credits", q.remainingCredits);
-    if (q.creditsUnlimited) parts.push("credits: unlimited (provider)");
-    return parts.join(" · ");
-  };
   const loadHealth = async () => {
     const d = await getJSON("/admin/health");
     document.getElementById("h").textContent = JSON.stringify(d, null, 2);
+    const quotaMap = quotaByAccount(d.quota);
     const adapters = d.adapterHealth || [];
     document.getElementById("ah").innerHTML = adapters.length
       ? `<table>
-      <thead><tr><th>Account</th><th>Adapter</th><th>Status</th><th>Models</th><th>Latency</th><th>Error</th></tr></thead>
+      <thead><tr><th>Account</th><th>Adapter</th><th>Status</th><th>Quota remaining</th><th>Models</th><th>Latency</th><th>Error</th></tr></thead>
       <tbody>${adapters
         .map(
           (a) => `<tr>
         <td>${escapeHtml(a.accountId)}</td>
         <td>${escapeHtml(a.adapter)}</td>
         <td><span class="pill ${a.status === "ok" ? "ok" : ""}">${escapeHtml(a.status)}</span></td>
+        <td>${quotaRemainingHTML(quotaMap[a.accountId], a.quotaHint)}</td>
         <td>${escapeHtml(String(a.models ?? 0))}</td>
         <td>${escapeHtml(String(a.latencyMs ?? 0))}ms</td>
         <td>${a.error ? `<span class="warn">${escapeHtml(a.error)}</span>` : ""}</td>
@@ -847,14 +867,10 @@ function healthPage(root) {
       : emptyState("No adapters probed yet", "Add an account, then refresh the catalog or click Probe.");
     const quotaRows = (d.quota || [])
       .map((q) => {
-        const remaining = formatQuotaRemaining(q);
-        const shown = remaining
-          ? escapeHtml(remaining)
-          : `<span class="muted">not reported by provider</span>`;
         return `<tr>
         <td>${escapeHtml(q.accountId || "")}</td>
         <td>${escapeHtml(q.adapter || "")}</td>
-        <td>${shown}</td>
+        <td>${quotaRemainingHTML(q, "")}</td>
         <td class="muted">${escapeHtml(q.source || "none")}</td>
       </tr>`;
       })
@@ -863,18 +879,18 @@ function healthPage(root) {
       ? `<table>
       <thead><tr><th>Account</th><th>Adapter</th><th>Remaining</th><th>Source</th></tr></thead>
       <tbody>${quotaRows}</tbody></table>`
-      : emptyState("No accounts", "Add an account to see quota remaining when a provider reports it.");
+      : emptyState("No accounts", "Add an account to see quota remaining when a provider reports it. Missing remaining stays unknown — never shown as 0.");
     const rows = (d.cooldowns || [])
       .map(
         (c) =>
-          `<tr><td>${escapeHtml(c.accountId)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(fmtRemaining(c.remainingMs))}</td><td class="muted">${escapeHtml(c.until || "")}</td></tr>`
+          `<tr><td>${escapeHtml(c.accountId)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(fmtRemaining(c.remainingMs))}</td><td>${quotaRemainingHTML(quotaMap[c.accountId], c.quotaHint)}</td><td class="muted">${escapeHtml(c.until || "")}</td></tr>`
       )
       .join("");
     document.getElementById("cd").innerHTML = rows
       ? `<table>
-      <thead><tr><th>Account</th><th>Reason</th><th>Remaining</th><th>Until</th></tr></thead>
+      <thead><tr><th>Account</th><th>Reason</th><th>Cooldown</th><th>Quota remaining</th><th>Until</th></tr></thead>
       <tbody>${rows}</tbody></table>`
-      : emptyState("No accounts in cooldown", "Retryable failover (429/401, rate-limit / overloaded / auth-expired bodies) will show a skip window here.");
+      : emptyState("No accounts in cooldown", "Retryable failover (429/401, rate-limit / overloaded / auth-expired bodies) will show a skip window here. Last known remaining still appears on adapter health.");
   };
   loadHealth().catch((err) => {
     document.getElementById("h").textContent = err.message;
@@ -904,7 +920,7 @@ function healthPage(root) {
 function requestsPage(root) {
   root.innerHTML = `<section class="card">
       <h2>Request log</h2>
-      <p class="muted">Opt-in inspector. Previews are redacted (tokens, API keys, JWTs, PEM). The JSONL file is mode <code>0600</code> and rotates at 1MiB.</p>
+      <p class="muted">Opt-in inspector. Previews are redacted (tokens, API keys, JWTs, PEM). The JSONL file is mode <code>0600</code> and rotates at 1MiB. When an upstream response includes rate-limit remaining headers, a compact hint is shown on that row — never invented as 0.</p>
       <label class="row"><input type="checkbox" id="reqlog-page" /> Enable redacted <code>requests.log</code></label>
       <p class="muted" id="req-path"></p>
       <button class="btn" id="req-refresh">Refresh</button>
@@ -940,7 +956,7 @@ function requestsPage(root) {
             <td>${escapeHtml(t)}</td>
             <td><code>${escapeHtml(e.path || e.protocol || "")}</code></td>
             <td>${escapeHtml(e.model || "")}</td>
-            <td>${escapeHtml(e.accountId || "")}</td>
+            <td>${escapeHtml(e.accountId || "")}${e.quotaHint ? ` <span class="muted">${escapeHtml(e.quotaHint)}</span>` : ""}</td>
             <td>${escapeHtml(String(e.status || ""))}${e.error ? ` <span class="warn">${escapeHtml(e.error)}</span>` : ""}</td>
             <td>${escapeHtml(String(e.durationMs || 0))}</td>
             <td class="preview">${escapeHtml(e.preview || "")}</td>

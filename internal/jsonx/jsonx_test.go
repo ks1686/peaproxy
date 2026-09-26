@@ -88,3 +88,40 @@ func TestDropTopLevelKeysPreservesOrder(t *testing.T) {
 		t.Fatalf("key remained: %s", out)
 	}
 }
+
+func TestDropTopLevelKeysTable(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "drop first key",
+			in:   `{"stream_options":{"include_usage":true},"model":"gpt-5","input":"ping"}`,
+			want: `{"model":"gpt-5","input":"ping"}`,
+		},
+		{
+			name: "keep quoted stream_options in input",
+			in:   `{"model":"gpt-5","input":"do not drop stream_options here","stream_options":{"include_usage":true}}`,
+			want: `{"model":"gpt-5","input":"do not drop stream_options here"}`,
+		},
+		{
+			name: "keep nested stream_options object",
+			in:   `{"model":"gpt-5","tools":[{"function":{"parameters":{"stream_options":true}}}],"stream_options":{"include_usage":true}}`,
+			want: `{"model":"gpt-5","tools":[{"function":{"parameters":{"stream_options":true}}}]}`,
+		},
+		{
+			name: "noop when missing",
+			in:   `{"model":"gpt-5","input":"ping"}`,
+			want: `{"model":"gpt-5","input":"ping"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DropTopLevelKeys([]byte(tc.in), "stream_options")
+			if !bytes.Equal(got, []byte(tc.want)) {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
+	}
+}

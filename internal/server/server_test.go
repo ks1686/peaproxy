@@ -624,7 +624,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth", "not reported by provider", "/admin/quota"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth", "not reported by provider", "/admin/quota", "quotaHint", "Quota remaining", "quotaByAccount"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
@@ -810,6 +810,87 @@ func TestAdminRequestLogOptInTailsRedactedEvents(t *testing.T) {
 	}
 	if !strings.Contains(got, "[redacted]") {
 		t.Fatalf("expected redaction: %s", got)
+	}
+}
+
+func TestAdminRequestLogSurfacesQuotaHintFromHeaders(t *testing.T) {
+	dir := t.TempDir()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"data":   []map[string]string{{"id": "llama3.2"}},
+			})
+		case "/v1/chat/completions":
+			w.Header().Set("x-ratelimit-remaining-requests", "7")
+			w.Header().Set("x-ratelimit-remaining-tokens", "1200")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":    "chatcmpl-test",
+				"model": "llama3.2",
+				"choices": []map[string]any{{
+					"message":       map[string]string{"role": "assistant", "content": "ok"},
+					"finish_reason": "stop",
+				}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		RequestLog:    true,
+		Providers: []config.Provider{{
+			ID: "local", Adapter: "openai_compat", Tier: "local", BaseURL: up.URL + "/v1",
+		}},
+	}
+	gw, err := gateway.New(cfg, dir+"/peaproxy.yaml", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	s := New(Options{Gateway: gw})
+	chat := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, chat)
+	if crr.Code != http.StatusOK {
+		t.Fatalf("chat %d %s", crr.Code, crr.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/requests", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	got := rr.Body.String()
+	if !strings.Contains(got, `"quotaHint":"req=7 tok=1200"`) {
+		t.Fatalf("missing remaining hint: %s", got)
+	}
+}
+
+func TestAdminRequestLogOmitsQuotaHintWhenHeadersMissing(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := testServer(t)
+	s.gw.SetConfigPath(dir + "/peaproxy.yaml")
+	on := true
+	body, _ := json.Marshal(map[string]any{"requestLog": on})
+	post := httptest.NewRequest(http.MethodPost, "/admin/settings", bytes.NewReader(body))
+	prr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(prr, post)
+	if prr.Code != http.StatusOK {
+		t.Fatalf("settings %d %s", prr.Code, prr.Body)
+	}
+	chat := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, chat)
+	if crr.Code != http.StatusOK {
+		t.Fatalf("chat %d %s", crr.Code, crr.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/requests", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if strings.Contains(rr.Body.String(), `"quotaHint"`) {
+		t.Fatalf("must not invent remaining: %s", rr.Body)
 	}
 }
 

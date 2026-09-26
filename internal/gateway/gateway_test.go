@@ -496,6 +496,7 @@ func TestAdapterHealthAndCooldownRemaining(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
 				return
 			}
+			w.Header().Set("x-ratelimit-remaining-requests", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = io.WriteString(w, `{"error":"quota"}`)
 		},
@@ -516,6 +517,9 @@ func TestAdapterHealthAndCooldownRemaining(t *testing.T) {
 	if len(cds) != 1 || cds[0].RemainingMs <= 0 || cds[0].RemainingMs > 30_000 {
 		t.Fatalf("remaining: %#v", cds)
 	}
+	if cds[0].QuotaHint != "req=0" {
+		t.Fatalf("cooldown must show last known remaining (honest 0), got %#v", cds[0])
+	}
 	health := gw.AdapterHealth()
 	if len(health) != 2 {
 		t.Fatalf("health: %#v", health)
@@ -529,6 +533,9 @@ func TestAdapterHealthAndCooldownRemaining(t *testing.T) {
 			}
 		case "cooldown":
 			foundCool = true
+			if h.QuotaHint != "req=0" {
+				t.Fatalf("adapter health must show last known remaining next to cooldown: %#v", h)
+			}
 		default:
 			t.Fatalf("adapter health: %#v", h)
 		}
