@@ -4,6 +4,7 @@ const pages = {
   showcase: showcasePage,
   clients: clientsPage,
   health: healthPage,
+  requests: requestsPage,
   settings: settingsPage,
 };
 
@@ -266,7 +267,7 @@ function catalogPage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Catalog</h2>
-      <p class="muted">Live ListModels. Hide removes a model from <code>/v1/models</code> only — it stays routable if a client names the id (CPA #5995).</p>
+      <p class="muted">Live ListModels is the source of truth. Hide removes a model from <code>/v1/models</code> only — it stays routable if a client names the id (CPA #5995). Pin and rename are local overlays; they never change the live id used for routing.</p>
       <div class="filters" id="filters">
         <button data-filter="all">All</button>
         <button data-filter="free">Free</button>
@@ -296,15 +297,26 @@ function catalogPage(root) {
       const rows = models
         .map((m) => {
           const hideLabel = m.hidden ? "Unhide" : "Hide from /v1/models";
+          const pinLabel = m.pinned ? "Unpin" : "Pin";
+          const shown = m.displayName || m.id;
           return `<tr>
-          <td>${escapeHtml(m.id)}</td>
+          <td>${m.pinned ? `<span class="pill accent">pin</span> ` : ""}${escapeHtml(shown)}
+            <div class="muted">${escapeHtml(m.id)}</div>
+            <div class="row tight">
+              <input data-rename-input="${escapeHtml(m.id)}" value="${escapeHtml(m.displayName || "")}" placeholder="Display name" size="18" />
+              <button class="btn" data-rename="${escapeHtml(m.id)}">Save name</button>
+            </div>
+          </td>
           <td><span class="pill">${escapeHtml(m.tier)}</span></td>
           <td>${escapeHtml(m.provider)}</td>
           <td>${escapeHtml(m.accountId || "")}</td>
           <td>${escapeHtml((m.modalities || []).join(", "))}</td>
           <td>${m.exposed ? "listed" : "hidden"} / ${m.routable ? "routable" : "blocked"}</td>
           <td>${m.privacyNote ? `<span class="warn">${escapeHtml(m.privacyNote)}</span>` : ""}</td>
-          <td><button class="btn" data-hide="${escapeHtml(m.id)}" data-on="${m.hidden ? "0" : "1"}">${hideLabel}</button></td>
+          <td>
+            <button class="btn" data-pin="${escapeHtml(m.id)}" data-on="${m.pinned ? "0" : "1"}">${pinLabel}</button>
+            <button class="btn" data-hide="${escapeHtml(m.id)}" data-on="${m.hidden ? "0" : "1"}">${hideLabel}</button>
+          </td>
         </tr>`;
         })
         .join("");
@@ -319,6 +331,34 @@ function catalogPage(root) {
               id: btn.dataset.hide,
               hidden: btn.dataset.on === "1",
             });
+            load();
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-pin]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await sendJSON("/admin/catalog/overlay", "POST", {
+              id: btn.dataset.pin,
+              pinned: btn.dataset.on === "1",
+            });
+            load();
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-rename]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const input = btn.parentElement.querySelector("input");
+          try {
+            await sendJSON("/admin/catalog/overlay", "POST", {
+              id: btn.dataset.rename,
+              displayName: input ? input.value : "",
+            });
+            toast("Display name saved", "ok");
             load();
           } catch (err) {
             toast(err.message);
@@ -402,7 +442,7 @@ function showcasePage(root) {
       models.forEach((m) => {
         const opt = document.createElement("option");
         opt.value = m.id;
-        opt.textContent = `${m.id} (${m.tier})`;
+        opt.textContent = `${m.displayName ? m.displayName + " · " : ""}${m.id} (${m.tier})`;
         sel.appendChild(opt);
       });
       sel.addEventListener("change", toggleVision);
@@ -483,34 +523,151 @@ function clientsPage(root) {
 }
 
 function healthPage(root) {
-  root.innerHTML = `<section class="card"><h2>Health</h2><pre id="h">loading…</pre></section>
+  root.innerHTML = `<section class="card"><h2>Adapter health</h2>
+      <p class="muted">Last live <code>ListModels</code> (or <code>Validate</code> after Probe). Cooldown overlays 429/401 skip windows without disabling the account.</p>
+      <button class="btn" id="probe">Probe adapters</button>
+      <div id="ah">loading…</div>
+    </section>
     <section class="card"><h2>Account cooldowns</h2>
       <p class="muted">After HTTP 429 or 401 the account is skipped for 30s. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Round-robin tries the next hot key for the same model.</p>
       <div id="cd">loading…</div>
     </section>
+    <section class="card"><h2>Gateway</h2><pre id="h">loading…</pre></section>
     <section class="card"><h2>Usage</h2><pre id="u">loading…</pre></section>`;
-  getJSON("/admin/health")
-    .then((d) => {
-      document.getElementById("h").textContent = JSON.stringify(d, null, 2);
-      const rows = (d.cooldowns || [])
-        .map((c) => `<tr><td>${escapeHtml(c.accountId)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(c.until)}</td></tr>`)
-        .join("");
-      document.getElementById("cd").innerHTML = rows
-        ? `<table>
-      <thead><tr><th>Account</th><th>Reason</th><th>Until</th></tr></thead>
+  const fmtRemaining = (ms) => {
+    const n = Number(ms) || 0;
+    if (n <= 0) return "expired";
+    const sec = Math.ceil(n / 1000);
+    return sec + "s left";
+  };
+  const loadHealth = async () => {
+    const d = await getJSON("/admin/health");
+    document.getElementById("h").textContent = JSON.stringify(d, null, 2);
+    const adapters = d.adapterHealth || [];
+    document.getElementById("ah").innerHTML = adapters.length
+      ? `<table>
+      <thead><tr><th>Account</th><th>Adapter</th><th>Status</th><th>Models</th><th>Latency</th><th>Error</th></tr></thead>
+      <tbody>${adapters
+        .map(
+          (a) => `<tr>
+        <td>${escapeHtml(a.accountId)}</td>
+        <td>${escapeHtml(a.adapter)}</td>
+        <td><span class="pill ${a.status === "ok" ? "ok" : ""}">${escapeHtml(a.status)}</span></td>
+        <td>${escapeHtml(String(a.models ?? 0))}</td>
+        <td>${escapeHtml(String(a.latencyMs ?? 0))}ms</td>
+        <td>${a.error ? `<span class="warn">${escapeHtml(a.error)}</span>` : ""}</td>
+      </tr>`
+        )
+        .join("")}</tbody></table>`
+      : emptyState("No adapters probed yet", "Add an account, then refresh the catalog or click Probe.");
+    const rows = (d.cooldowns || [])
+      .map(
+        (c) =>
+          `<tr><td>${escapeHtml(c.accountId)}</td><td>${escapeHtml(c.reason)}</td><td>${escapeHtml(fmtRemaining(c.remainingMs))}</td><td class="muted">${escapeHtml(c.until || "")}</td></tr>`
+      )
+      .join("");
+    document.getElementById("cd").innerHTML = rows
+      ? `<table>
+      <thead><tr><th>Account</th><th>Reason</th><th>Remaining</th><th>Until</th></tr></thead>
       <tbody>${rows}</tbody></table>`
-        : emptyState("No accounts in cooldown", "429/401 failover will show a skip window here.");
-    })
-    .catch((err) => {
-      document.getElementById("h").textContent = err.message;
-      document.getElementById("cd").innerHTML = emptyState("Health unavailable", err.message);
+      : emptyState("No accounts in cooldown", "429/401 failover will show a skip window here.");
+  };
+  loadHealth().catch((err) => {
+    document.getElementById("h").textContent = err.message;
+    document.getElementById("ah").innerHTML = emptyState("Health unavailable", err.message);
+    document.getElementById("cd").innerHTML = emptyState("Health unavailable", err.message);
+    toast(err.message);
+  });
+  document.getElementById("probe").addEventListener("click", async () => {
+    try {
+      await sendJSON("/admin/health/probe", "POST");
+      toast("Adapters probed", "ok");
+      await loadHealth();
+    } catch (err) {
       toast(err.message);
-    });
+    }
+  });
   getJSON("/admin/usage")
     .then((d) => (document.getElementById("u").textContent = JSON.stringify(d, null, 2)))
     .catch((err) => {
       document.getElementById("u").textContent = err.message;
     });
+}
+
+function requestsPage(root) {
+  root.innerHTML = `<section class="card">
+      <h2>Request log</h2>
+      <p class="muted">Opt-in inspector. Previews are redacted (tokens, API keys, JWTs, PEM). The JSONL file is mode <code>0600</code> and rotates at 1MiB.</p>
+      <label class="row"><input type="checkbox" id="reqlog-page" /> Enable redacted <code>requests.log</code></label>
+      <p class="muted" id="req-path"></p>
+      <button class="btn" id="req-refresh">Refresh</button>
+      <div id="req-table">loading…</div>
+    </section>`;
+  const box = document.getElementById("reqlog-page");
+  let timer = 0;
+  const stop = () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = 0;
+    }
+  };
+  const renderEvents = (d) => {
+    document.getElementById("req-path").textContent = d.path ? "File: " + d.path : "No log file (enable to start writing).";
+    box.checked = !!d.enabled;
+    const host = document.getElementById("req-table");
+    if (!d.enabled) {
+      host.innerHTML = emptyState("Request log is off", "Enable the checkbox to persist a redacted JSONL inspector next to the config file.");
+      return;
+    }
+    const events = d.events || [];
+    if (!events.length) {
+      host.innerHTML = emptyState("No requests yet", "Send a chat, Showcase prompt, or /v1/messages call while the log is enabled.");
+      return;
+    }
+    host.innerHTML = `<table>
+      <thead><tr><th>Time</th><th>Path</th><th>Model</th><th>Account</th><th>Status</th><th>ms</th><th>Preview</th></tr></thead>
+      <tbody>${events
+        .map((e) => {
+          const t = e.time ? new Date(e.time).toLocaleTimeString() : "";
+          return `<tr>
+            <td>${escapeHtml(t)}</td>
+            <td><code>${escapeHtml(e.path || e.protocol || "")}</code></td>
+            <td>${escapeHtml(e.model || "")}</td>
+            <td>${escapeHtml(e.accountId || "")}</td>
+            <td>${escapeHtml(String(e.status || ""))}${e.error ? ` <span class="warn">${escapeHtml(e.error)}</span>` : ""}</td>
+            <td>${escapeHtml(String(e.durationMs || 0))}</td>
+            <td class="preview">${escapeHtml(e.preview || "")}</td>
+          </tr>`;
+        })
+        .join("")}</tbody></table>`;
+  };
+  const load = async () => {
+    try {
+      renderEvents(await getJSON("/admin/requests"));
+    } catch (err) {
+      document.getElementById("req-table").innerHTML = emptyState("Could not load request log", err.message);
+      toast(err.message);
+    }
+  };
+  box.addEventListener("change", async () => {
+    try {
+      await sendJSON("/admin/settings", "POST", { requestLog: box.checked });
+      toast(box.checked ? "Request log enabled" : "Request log disabled", "ok");
+      await load();
+    } catch (err) {
+      toast(err.message);
+      box.checked = !box.checked;
+    }
+  });
+  document.getElementById("req-refresh").addEventListener("click", load);
+  load().then(() => {
+    stop();
+    timer = setInterval(load, 4000);
+  });
+  const obs = new MutationObserver(() => {
+    if (!document.getElementById("req-table")) stop();
+  });
+  obs.observe(document.getElementById("page"), { childList: true });
 }
 
 function settingsPage(root) {

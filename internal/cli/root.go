@@ -180,7 +180,15 @@ func modelsCmd(configPath *string) *cobra.Command {
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "filter=%s hide.providers=%v hide.models=%v listed=%d (hidden still routable)\n",
 				filter, cfg.Hide.Providers, cfg.Hide.Models, len(listed))
 			for _, m := range listed {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\ttier=%s\tprovider=%s\taccount=%s\n", m.ID, m.Tier, m.Provider, m.AccountID)
+				name := m.ID
+				if m.DisplayName != "" && m.DisplayName != m.ID {
+					name = m.DisplayName + " (" + m.ID + ")"
+				}
+				pin := ""
+				if m.Pinned {
+					pin = "\tpin"
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\ttier=%s\tprovider=%s\taccount=%s%s\n", name, m.Tier, m.Provider, m.AccountID, pin)
 			}
 			return nil
 		},
@@ -203,7 +211,7 @@ func statusCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: subscription (ToS risk; docs/OAUTH.md)\nsecrets: OS keychain or encrypted file (docs/CONFIG.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\nrequestLog: %v\noauth: subscription (ToS risk; docs/OAUTH.md)\nsecrets: OS keychain or encrypted file (docs/CONFIG.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.RequestLog, cfg.Addr())
 			return nil
 		},
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ks1686/peaproxy/internal/adapters"
+	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/router"
 )
@@ -355,5 +356,94 @@ func TestResponsesFailsover429(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"output_text":"ok"`) {
 		t.Fatalf("%s", out)
+	}
+}
+
+func TestListedAppliesPinAndRenameWithoutChangingRouteID(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "alpha"}, {"id": "beta"}},
+		})
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Catalog: config.CatalogPrefs{
+			Pin:    []string{"beta"},
+			Rename: map[string]string{"beta": "Beta local"},
+		},
+		Hide: config.HideList{Models: []string{"beta"}},
+		Providers: []config.Provider{{
+			ID: "local", Adapter: "openai_compat", Tier: "local", BaseURL: up.URL + "/v1",
+		}},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	listed := gw.Listed("all")
+	for _, m := range listed {
+		if m.ID == "beta" {
+			t.Fatal("hidden pinned model leaked into listing")
+		}
+	}
+	ann := gw.Annotated("all")
+	if len(ann) < 2 || ann[0].ID != "beta" || !ann[0].Pinned || ann[0].DisplayName != "Beta local" {
+		t.Fatalf("annotated pin/rename: %#v", ann)
+	}
+	if _, ok := catalog.FindRoutable(gw.Models(), gw.Query(), "beta"); !ok {
+		t.Fatal("hidden renamed model must still route by live id")
+	}
+}
+
+func TestAdapterHealthAndCooldownRemaining(t *testing.T) {
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":"quota"}`)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+			})
+		},
+	)
+	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	cds := gw.Cooldowns()
+	if len(cds) != 1 || cds[0].RemainingMs <= 0 || cds[0].RemainingMs > 30_000 {
+		t.Fatalf("remaining: %#v", cds)
+	}
+	health := gw.AdapterHealth()
+	if len(health) != 2 {
+		t.Fatalf("health: %#v", health)
+	}
+	foundCool := false
+	for _, h := range health {
+		switch h.Status {
+		case "ok":
+			if h.Models < 1 {
+				t.Fatalf("%#v", h)
+			}
+		case "cooldown":
+			foundCool = true
+		default:
+			t.Fatalf("adapter health: %#v", h)
+		}
+	}
+	if !foundCool {
+		t.Fatal("expected cooldown overlay on adapter health")
 	}
 }

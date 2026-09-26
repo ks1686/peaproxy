@@ -76,7 +76,7 @@ Several **free** Zen models may use prompts for training (NVIDIA Nemotron free, 
 
 ## Failover
 
-Multiple accounts that list the same model id are tried **round-robin**. HTTP **429** and **401** cool that account down for 30s and try the next one. Health UI shows active cooldowns.
+Multiple accounts that list the same model id are tried **round-robin**. HTTP **429** and **401** cool that account down for 30s and try the next one. Health UI shows adapter health (last ListModels/Validate) and remaining cooldown time.
 
 ## Catalog UX
 

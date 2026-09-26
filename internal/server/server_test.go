@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -372,7 +373,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	body := rr.Body.String()
-	for _, want := range []string{`id="toasts"`, `id="lan-banner"`} {
+	for _, want := range []string{`id="toasts"`, `id="lan-banner"`, `data-page="requests"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %s in %s", want, body)
 		}
@@ -381,10 +382,127 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Image generation not yet", "/admin/requests", "data-pin", "displayName"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
+	}
+}
+
+func TestAdminRequestLogDisabledByDefault(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/requests", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), `"enabled":false`) {
+		t.Fatalf("%s", rr.Body)
+	}
+	chat := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"Authorization: Bearer sk-secret-live"}]}`))
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, chat)
+	req2 := httptest.NewRequest(http.MethodGet, "/admin/requests", nil)
+	rr2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr2, req2)
+	if strings.Contains(rr2.Body.String(), "sk-secret-live") {
+		t.Fatalf("secret leaked: %s", rr2.Body)
+	}
+}
+
+func TestAdminRequestLogOptInTailsRedactedEvents(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := testServer(t)
+	s.gw.SetConfigPath(dir + "/peaproxy.yaml")
+	on := true
+	body, _ := json.Marshal(map[string]any{"requestLog": on})
+	post := httptest.NewRequest(http.MethodPost, "/admin/settings", bytes.NewReader(body))
+	prr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(prr, post)
+	if prr.Code != http.StatusOK {
+		t.Fatalf("settings %d %s", prr.Code, prr.Body)
+	}
+	chat := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi Bearer sk-secret-live"}]}`))
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, chat)
+	if crr.Code != http.StatusOK {
+		t.Fatalf("chat %d %s", crr.Code, crr.Body)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/requests", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	got := rr.Body.String()
+	if !strings.Contains(got, `"enabled":true`) || !strings.Contains(got, "llama3.2") {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, "sk-secret-live") {
+		t.Fatalf("secret leaked: %s", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Fatalf("expected redaction: %s", got)
+	}
+}
+
+func TestCatalogOverlayPinRenamePersistsAndHidesUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := testServer(t)
+	s.gw.SetConfigPath(dir + "/config.yaml")
+	body := `{"id":"llama3.2","displayName":"Llama local","pinned":true}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/catalog/overlay", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+	cat := httptest.NewRequest(http.MethodGet, "/admin/catalog?filter=all", nil)
+	crr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(crr, cat)
+	var payload struct {
+		Models []catalog.Model `json:"models"`
+	}
+	if err := json.Unmarshal(crr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Models) == 0 || payload.Models[0].ID != "llama3.2" || !payload.Models[0].Pinned || payload.Models[0].DisplayName != "Llama local" {
+		t.Fatalf("%#v", payload.Models)
+	}
+	models := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	mrr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(mrr, models)
+	var list catalog.OpenAIModelList
+	if err := json.Unmarshal(mrr.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Data) == 0 || list.Data[0].ID != "llama3.2" {
+		t.Fatalf("pin should order /v1/models by live id: %#v", list.Data)
+	}
+	onDisk, err := os.ReadFile(dir + "/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(onDisk), "Llama local") {
+		t.Fatalf("overlay not persisted: %s", onDisk)
+	}
+}
+
+func TestHealthIncludesAdapterHealthAndProbe(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	got := rr.Body.String()
+	if !strings.Contains(got, `"adapterHealth"`) || !strings.Contains(got, `"cooldownTtlMs"`) {
+		t.Fatalf("%s", got)
+	}
+	if !strings.Contains(got, `"accountId":"local"`) {
+		t.Fatalf("adapter health missing account: %s", got)
+	}
+	probe := httptest.NewRequest(http.MethodPost, "/admin/health/probe", nil)
+	prr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(prr, probe)
+	if prr.Code != http.StatusOK || !strings.Contains(prr.Body.String(), `"adapterHealth"`) {
+		t.Fatalf("probe %d %s", prr.Code, prr.Body)
 	}
 }
 
