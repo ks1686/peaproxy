@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
+	"github.com/ks1686/peaproxy/internal/catalog"
 )
 
 const Name = "anthropic_oauth"
