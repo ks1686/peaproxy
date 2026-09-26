@@ -132,7 +132,7 @@ func TestClientsListIncludesClineAndContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, name := range []string{"cline", "continue", "pi", "cursor", "amp"} {
+	for _, name := range []string{"cline", "continue", "pi", "cursor", "amp", "droid"} {
 		if !strings.Contains(got, name) {
 			t.Fatalf("missing %s in %s", name, got)
 		}
@@ -189,6 +189,36 @@ func TestAuthLoginQwenNotYet(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "not liable") {
 		t.Fatalf("warning should print before not-yet: %s", out)
+	}
+}
+
+func TestAuthLoginFactoryNotYet(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := ExecuteWithArgs([]string{"auth", "login", "--provider", "factory", "--print-url"}, out)
+	if err == nil || !strings.Contains(err.Error(), "not yet") {
+		t.Fatalf("want not yet, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "not liable") {
+		t.Fatalf("warning should print before not-yet: %s", out)
+	}
+}
+
+func TestAuthLoginOpenCodeGoIsAPIKey(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := ExecuteWithArgs([]string{"auth", "login", "--provider", "opencode-go", "--print-url"}, out)
+	if err == nil || !strings.Contains(err.Error(), "opencode.ai/auth") {
+		t.Fatalf("want API-key instructions, got %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "not liable") {
+		t.Fatalf("warning should print first: %s", out)
+	}
+}
+
+func TestAuthLoginDroidAliasIsFactoryStub(t *testing.T) {
+	out := &bytes.Buffer{}
+	err := ExecuteWithArgs([]string{"auth", "login", "--provider", "droid", "--print-url"}, out)
+	if err == nil || !strings.Contains(err.Error(), "not yet") {
+		t.Fatalf("droid should map to factory stub, got %v\n%s", err, out)
 	}
 }
 

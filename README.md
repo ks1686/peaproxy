@@ -1,6 +1,6 @@
 # PeaProxy
 
-Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
+Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
 Status: **v0.2.8** on main (CLI parity with Catalog / Health / Request log / `accounts add`). Usable 0.2.x product. 1.0 cut: [docs/V1.md](docs/V1.md) — that tag is not cut yet.
 
@@ -12,8 +12,10 @@ Status: **v0.2.8** on main (CLI parity with Catalog / Health / Request log / `ac
 |---|---|---|
 | **API key** (`anthropic`, `openai`, `google`/`gemini`, `xai`, Groq, …) | Official provider console / AI Studio | Supported. Prefer this. |
 | **Local / no key** (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | Software you already run | Supported. |
-| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, or Meta Muse subscription | **ToS/ban risk. At your own risk.** Authors not liable. |
+| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, or GitHub Copilot subscription | **ToS/ban risk. At your own risk.** Authors not liable. |
 | **Qwen consumer OAuth** | — | **Not yet** (no CPA flow). Use a Qwen **API key** with `openai_compat`. |
+| **Factory / Droid upstream** | — | **Not yet** (no public consumer chat OAuth). Use **Droid as a client** of PeaProxy. |
+| **OpenCode Go** | Subscribe at [opencode.ai/auth](https://opencode.ai/auth) | Official **API key** (`adapter: opencode_go`). Distinct from Zen. Not OAuth. |
 
 OAuth presets in the UI print the same warning. Tokens and inline keys go to the **OS keychain** (encrypted file fallback), not plaintext YAML.
 
@@ -79,11 +81,13 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Embeddings / `POST /v1/embeddings` | **Shipped** for API-key OpenAI-compat when the catalog tags `embeddings`. Showcase can try. OAuth / Messages-only adapters refuse clearly (no fake vectors). Quota-remaining is later |
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
-| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse) | Shipped, **ToS/ban risk** |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk** |
 | Qwen consumer OAuth | **Not yet** — use an API key |
+| Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
+| OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
 | OS keychain / `secrets.enc` | Shipped |
 | 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`) |
-| Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp) |
+| Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped |
 | CLI `catalog` / `health` / `requests` / `accounts add` | Shipped (v0.2.8) |
 | Loopback default; LAN needs token | Shipped |
@@ -98,7 +102,7 @@ Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PL
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename. Filters persist in the UI.
 3. **Showcase** — try a prompt; `image_in` models accept an image URL or upload. `image_out` one-click generates via `/v1/images/generations` when the account can proxy it. `embeddings` models try via `/v1/embeddings`.
 4. **Request log** — opt-in redacted inspector (`requestLog: true` or the UI toggle).
-5. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
+5. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp / Droid at the local base URL (`peaproxy clients show …`).
 
 ```bash
 curl -s http://127.0.0.1:8317/v1/models
@@ -120,6 +124,7 @@ peaproxy clients show claude-code  # does NOT include /v1
 peaproxy clients show pi         # both wires; cloak off
 peaproxy clients show codex      # Responses API (wire_api = responses)
 peaproxy clients show amp        # Custom URL, not amp.url
+peaproxy clients show droid      # Factory Droid BYOK client
 peaproxy clients verify cursor --chat
 ```
 
@@ -129,7 +134,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` | Build version (`dev` unless a release ldflag) |
-| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen is **not yet**. |
+| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta\|copilot`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen and Factory are **not yet**. OpenCode Go is an API key (`--provider opencode-go` explains). |
 | `accounts` | Configured provider accounts (`list` / `add <preset>`) |
 | `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |
 | `catalog` | Listing overlays (`pin` / `rename` / `hide`) matching the Catalog UI |

@@ -15,6 +15,7 @@ func TestLiabilityWarningCoversBanRiskAndOfficialKeys(t *testing.T) {
 		"platform.openai.com/api-keys",
 		"adapter anthropic",
 		"adapter openai",
+		"GitHub Copilot",
 	} {
 		if !strings.Contains(w, want) {
 			t.Fatalf("warning missing %q:\n%s", want, w)

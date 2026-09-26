@@ -28,13 +28,16 @@ Adapters in this repo today (v0.2.6):
 | `openrouter` | Preset; ids ending `:free` tagged free; live list | API key | `https://openrouter.ai/api/v1` |
 | `openai_compat` | Generic base URL + optional key, stream + non-stream | none / API key | required `baseURL` |
 | `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
+| `opencode_go` | Named OpenCode Go subscription client (distinct from Zen) | official API key from [opencode.ai/auth](https://opencode.ai/auth) | `https://opencode.ai/zen/go/v1` |
 | `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
 | `openai_oauth` | ChatGPT/Codex subscription OAuth + native Responses tools pass-through (chat clients map tools). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
 | `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
 | `xai_oauth` | xAI Grok subscription device OAuth + CLI chat proxy. **ToS/ban risk.** | OAuth (`--provider xai`) | `https://cli-chat-proxy.grok.com/v1` |
 | `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |
 | `meta_oauth` | Meta Muse device OAuth + minted key. **ToS/ban risk.** | OAuth (`--provider meta`) | `https://api.meta.ai/v1` |
+| `copilot_oauth` | GitHub Copilot subscription device OAuth + Copilot chat (`api.githubcopilot.com`). **ToS/ban risk.** Not GitHub Models. | OAuth (`--provider copilot`) | `https://api.githubcopilot.com` |
 | `qwen_oauth` | Stub: CPA has no Qwen consumer OAuth | n/a | use `openai_compat` + a Qwen key |
+| `factory_oauth` | Stub: no public Factory consumer chat OAuth | n/a | use Droid as a PeaProxy **client** (`peaproxy clients show droid`) |
 
 Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default base URL and catalog tier, then delegate to `openai_compat`.
 
@@ -50,11 +53,11 @@ PeaProxy **key** adapters do **not** call `generateContent`. Set `GEMINI_API_KEY
 
 ## Paid / subscription
 
-**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
+**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
-**P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
+**P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
 
-**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`. Z.AI / others: `openai_compat` + their OpenAI-compat base URL (no first-class preset).
+**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`, `opencode_zen`, **`opencode_go`**. Z.AI / others: `openai_compat` + their OpenAI-compat base URL (no first-class preset).
 
 Do **not** advertise Claude Free OAuth (CPA #6016).
 
@@ -70,6 +73,7 @@ Do **not** advertise Claude Free OAuth (CPA #6016).
 | GPT4All | `:4891/v1` (`adapter: gpt4all`) | none | `local` |
 | OpenRouter `:free` | adapter `openrouter` | key | `free` (ids ending `:free`) |
 | **OpenCode Zen free** | `https://opencode.ai/zen/v1` | official key from [opencode.ai](https://opencode.ai/docs/zen/); community empty Bearer + `x-session-id` is ToS-fragile | `free` for `-free` / named free ids |
+| **OpenCode Go** | `https://opencode.ai/zen/go/v1` (`adapter: opencode_go`) | official key from [opencode.ai/auth](https://opencode.ai/auth) after subscribing to Go. Distinct from Zen. `x-opencode-session` + `User-Agent: peaproxy`. | `paid` (subscription); ids ending `-free` tagged free |
 | Hugging Face Inference | `adapter: huggingface` router | token | `freemium` |
 | Google AI Studio | official OpenAI-compat Gemini | free key | `freemium` |
 | Groq / Cerebras | first-class wrappers | key | `freemium` |
@@ -78,9 +82,13 @@ Do **not** advertise Claude Free OAuth (CPA #6016).
 | Ollama Cloud | `adapter: ollama_cloud` → `https://ollama.com/v1` | `OLLAMA_API_KEY` | `freemium` |
 | SambaNova Cloud | `adapter: sambanova` → `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` | `freemium` |
 
-**GitHub Models is retired (2026-07-30).** Do not ship it. Migrate narrative: Azure AI Foundry (paid) or Copilot OAuth (separate, later).
+**GitHub Models is retired (2026-07-30).** Do not ship it. Copilot chat is a **separate** adapter (`copilot_oauth`).
 
 **Not shipped (audit, 2026-09-26):** LocalAI defaults to `:8080/v1`, same as llama.cpp — use the llama.cpp or custom OpenAI-compat preset. Together AI (`https://api.together.ai/v1`) is OpenAI-compat but pay-per-token, not a free inference tier. SGLang / TGI: no extra preset; use custom OpenAI-compat with the port you launched. Accounts shows the env var **name** a preset expects (`envKey` / `accountIDEnv`) and whether it is set in this process; values are never returned.
+
+### OpenCode Go vs Zen
+
+Zen (`opencode_zen`, `https://opencode.ai/zen/v1`) is the free/pay-per-token Zen catalog. Go (`opencode_go`, `https://opencode.ai/zen/go/v1`) is the **$10/month OpenCode Go subscription**. Both use an API key from the same console ([opencode.ai/auth](https://opencode.ai/auth)); there is **no public Go OAuth**. Muse Spark contributor models on Go may train on prompts — PeaProxy shows a privacy note. Send `x-opencode-session` (stable per account) and `User-Agent: peaproxy` as [OpenCode Go docs](https://opencode.ai/docs/go/) request.
 
 ### OpenCode Zen privacy
 

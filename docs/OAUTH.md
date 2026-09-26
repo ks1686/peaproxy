@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **v0.2.6**: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, and Meta Muse. Qwen remains **not yet**. 1.0 residuals: [V1.md](V1.md).
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **v0.2.6**: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, and Meta Muse. **1.x leftover:** GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
 
 ## Liability (read this)
 
@@ -32,9 +32,12 @@ Flows were studied from [router-for-me/CLIProxyAPI](https://github.com/router-fo
 | `kimi_oauth` | Implemented | Device code at `auth.kimi.com`, OpenAI-compat at `https://api.kimi.com/coding/v1` |
 | `kimi_ai_oauth` | Implemented | Same flow on `kimi.ai` (`auth.kimi.ai` / `api.kimi.ai/coding/v1`) |
 | `meta_oauth` | Implemented | Device code at `auth.meta.com`, mint `api.meta.ai/muse-code/key`, then OpenAI-compat at `https://api.meta.ai/v1` |
+| `copilot_oauth` | Implemented | GitHub device code with the public VS Code Copilot Chat GitHub App (`Iv1.b507a08c87ecfe98`, scope `read:user`), then `GET https://api.github.com/copilot_internal/v2/token` for a short-lived Copilot session, then live `GET /models` + `POST /chat/completions` at `https://api.githubcopilot.com` (enterprise `proxy-ep` swapped `proxy.` → `api.`). **Not** retired GitHub Models. |
 | `qwen_oauth` | **Not yet** | CPA has no working Qwen consumer OAuth. Use a Qwen API key with `openai_compat`. |
+| `factory_oauth` | **Not yet** | Factory has no public consumer chat OAuth or OpenAI-compat chat API. Official Factory HTTP is sessions/CI/computers at `https://api.factory.ai`. Use **Droid as a PeaProxy client** (`peaproxy clients show droid`). |
 | Devin | Skipped | CPA has a session-token login; it is not a generic chat-model upstream for this gateway. |
 | Vertex | Skipped | Service-account / GCP credentials, not consumer subscription OAuth. |
+| OpenCode Go | API key (not OAuth) | Official key from [opencode.ai/auth](https://opencode.ai/auth); adapter `opencode_go` at `https://opencode.ai/zen/go/v1`. Distinct from Zen (`opencode_zen` / `/zen/v1`). `peaproxy auth login --provider opencode-go` explains this. |
 
 Live `ListModels` is still the catalog source of truth. If a subscription token cannot list a model, it will not appear — there is no baked-in allowlist.
 
@@ -52,6 +55,7 @@ peaproxy auth login --provider xai
 peaproxy auth login --provider kimi
 peaproxy auth login --provider kimi-ai
 peaproxy auth login --provider meta
+peaproxy auth login --provider copilot
 peaproxy auth login --provider anthropic --print-url  # URL only, no wait
 ```
 
@@ -72,7 +76,7 @@ Callback ports (must match the public CLI OAuth clients):
 - Codex: `http://localhost:1455/auth/callback`
 - Gemini / Antigravity: `http://localhost:51121/oauth-callback`
 
-xAI, Kimi, and Meta Muse use **device code** (no loopback port). If a PKCE port is busy, paste the redirect URL into a later `AuthComplete` or use Codex `--device`.
+xAI, Kimi, Meta Muse, and **GitHub Copilot** use **device code** (no loopback port). If a PKCE port is busy, paste the redirect URL into a later `AuthComplete` or use Codex `--device`.
 
 ## Storage and secrets
 
@@ -88,13 +92,14 @@ Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it canno
 - Adapters implement `Authenticator` (`AuthStart` / `AuthComplete`) plus `ListModels` / `Chat` / `ChatStream`. Claude OAuth also implements `NativeMessages`.
 - JSON bodies used for Anthropic token exchange are structs (fixed key order), not `map[string]any`. Chat and Responses bodies use `jsonx.SetStream` / `jsonx.DropTopLevelKeys` (top-level only; nested `"stream"` and quoted text stay put). Codex OAuth drops Amp `stream_options` without reshuffling remaining keys.
 - Failover, hide≠route, and catalog filters (`subscription_oauth`) are unchanged.
-- PeaProxy does **not** vendor CLIProxyAPI. Public CLI client ids (Claude Code, Codex CLI, Antigravity IDE, Grok CLI, Kimi Code, Muse CLI) are used because those are the clients the subscription tokens are issued for.
+- PeaProxy does **not** vendor CLIProxyAPI. Public CLI client ids (Claude Code, Codex CLI, Antigravity IDE, Grok CLI, Kimi Code, Muse CLI, VS Code Copilot Chat GitHub App) are used because those are the clients the subscription tokens are issued for.
 
 ## Residual gaps
 
 These are accepted 0.2.x / 1.0 residuals — [V1.md](V1.md), [PLAN.md](PLAN.md).
 
 - Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Use `openai_compat` + a Qwen API key. Not a 1.0 blocker; do not reverse-engineer a new flow unless a public one exists.
+- Factory / Droid consumer chat OAuth is stubbed **not yet** (no public chat OAuth; Factory’s public API is not OpenAI-compat chat). Point Droid at PeaProxy instead ([HARNESS.md](HARNESS.md)).
 - Devin and Vertex are intentionally omitted (not generic consumer chat OAuth).
 - **Claude Cloudflare 403:** `platform.claude.com/v1/oauth/token` sits behind Cloudflare. Token requests now send Claude Code’s control-plane `User-Agent` (`axios/1.15.2`). PeaProxy does **not** add uTLS / TLS fingerprint spoofing (heavy dependency; CPA does this with a Firefox hello). Stock Go `crypto/tls` may still get **HTTP 403** on AuthComplete or refresh. If that happens, the error tells you to use an official API key (`adapter: anthropic`, [console keys](https://console.anthropic.com/settings/keys)) or retry from a typical desktop network (home/office, not some datacenter IPs). Chat against `api.anthropic.com` with a key is the supported path.
 - Codex chat from OpenAI-compat clients is still translated internally into Responses (now including tools / `tool_calls` / `tool` messages). Native Codex **`POST /v1/responses`** is a first-class PeaProxy route: `openai_oauth` passes through `tools`, `tool_choice`, and input items after dropping `stream_options`. Other adapters round-trip function tools one level via chat completions; they do not execute tools or fake a full Responses tool event stream. `image_gen` is not a generations proxy.
@@ -109,6 +114,6 @@ These are accepted 0.2.x / 1.0 residuals — [V1.md](V1.md), [PLAN.md](PLAN.md).
 2. `peaproxy serve` and Catalog filter **Subscription OAuth**.
 3. Showcase a listed Claude model (short prompt).
 4. Repeat for `--provider openai` (Plus/Pro/Codex). Confirm `Chatgpt-Account-Id` is not logged.
-5. Repeat for `--provider gemini`, then `--provider xai` (device code).
+5. Repeat for `--provider gemini`, then `--provider xai` (device code), then `--provider copilot` (GitHub device code; Copilot subscription required).
 6. Confirm `peaproxy auth login --provider anthropic --print-url` prints a PKCE URL without waiting.
 7. Confirm `config.yaml` lists the account (email/adapter) but does not contain `accessToken` / `refreshToken`; secrets live in the keychain or `secrets.enc`.

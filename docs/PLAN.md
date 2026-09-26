@@ -5,6 +5,7 @@ Status: **v0.2.8 on main**. Phases 0–4 are done. Releases are tagged through *
 Residuals (documented, not unmarked phase work):
 
 - **Qwen consumer OAuth:** stubbed **not yet** (no working CPA flow). Use `openai_compat` + a Qwen API key. Do not reverse-engineer a new flow unless a public one exists.
+- **Factory/Droid upstream:** stubbed **not yet** (no public consumer chat OAuth). Use Droid as a PeaProxy **client**.
 - **Image-out:** **Shipped (1.x).** `POST /v1/images/generations` is proxied for API-key OpenAI-compat adapters when the live catalog tags `image_out`. Showcase one-click generates; subscription OAuth does not invent an image path.
 - **Embeddings:** **Shipped (1.x).** `POST /v1/embeddings` is proxied for API-key OpenAI-compat adapters when the live catalog tags `embeddings`. Subscription OAuth does not invent vectors. Quota-remaining remains later.
 - **Claude Cloudflare 403:** token exchange uses stock Go `crypto/tls` (no uTLS). Prefer the official Anthropic API-key adapter. Details: [OAUTH.md](OAUTH.md).
@@ -43,7 +44,7 @@ Must beat them on (see [COMPETITOR-WINS.md](COMPETITOR-WINS.md) for shipped vs r
 4. **Secure localhost default** — shipped (`127.0.0.1:8317`; LAN needs `--allow-lan` + admin token).
 5. **UI without macOS tray** — shipped **by design** (CLI + browser only).
 6. **Credential reliability** — OS keychain / encrypted-file store; YAML lists accounts without printing secrets.
-7. **Onboarding** — shipped (Accounts CTAs, Clients copy/verify, Settings, `config validate`). Factory Droid is not a preset.
+7. **Onboarding** — shipped (Accounts CTAs, Clients copy/verify, Settings, `config validate`). Factory Droid is a **client** preset (`peaproxy clients show droid`); Factory is not a chat-model upstream.
 8. **Free + custom providers** — shipped (local + hosted OpenAI-compat presets). GitHub Models retired; not listed.
 9. **Multimodal** — vision-in shipped; image-out **proxied** (`POST /v1/images/generations` for keyed OpenAI-compat adapters); embeddings **proxied** (`POST /v1/embeddings`).
 
@@ -53,13 +54,13 @@ See [PROVIDERS.md](PROVIDERS.md).
 
 ### Paid / subscription (OAuth maximize + keys)
 
-**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse. **ToS/ban risk** — [OAUTH.md](OAUTH.md). Prefer official API keys.
+**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, GitHub Copilot. **ToS/ban risk** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
-**P0 OAuth (not yet):** Qwen consumer OAuth — stub only. No CPA flow.
+**P0 OAuth (not yet):** Qwen consumer OAuth — stub only. No CPA flow. Factory/Droid consumer chat OAuth — stub only (Droid is a client preset).
 
 **P0 keys (shipped):** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`, plus any OpenAI-compat `baseURL`. **Z.AI** has no first-class preset; use `openai_compat`.
 
-**Later (not 1.0 blockers):** GitHub Copilot OAuth, Factory/Droid, OpenCode Go subscription, Cline-as-cloud. Devin and Vertex are skipped (not generic consumer chat OAuth).
+**Later (not 1.0 blockers):** Cline-as-cloud. Devin and Vertex are skipped (not generic consumer chat OAuth). **GitHub Copilot OAuth** and **OpenCode Go** (API key, distinct from Zen) are shipped as 1.x leftovers. **Factory/Droid** has no public consumer chat OAuth — stub + Droid harness preset.
 
 ### Free / open (first-class)
 
@@ -87,7 +88,7 @@ Per connected provider: one-click text example; if `image_in`, multimodal exampl
 
 ## 8. Harness quick-setup
 
-See [HARNESS.md](HARNESS.md). Copy-ready configs for Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp. Each preset: base URL, auth header, cloak default, sample snippet, `peaproxy clients verify <name> [--chat]`.
+See [HARNESS.md](HARNESS.md). Copy-ready configs for Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid. Each preset: base URL, auth header, cloak default, sample snippet, `peaproxy clients verify <name> [--chat]`.
 
 ## 9. Architecture
 

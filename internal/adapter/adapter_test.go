@@ -27,7 +27,7 @@ import (
 
 func TestDefaultRegistryHasStubAndLiveFactories(t *testing.T) {
 	r := adapters.DefaultRegistry()
-	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "anthropic_oauth", "openai_oauth", "lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "antigravity", "gemini_oauth", "xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth"} {
+	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "opencode_go", "anthropic_oauth", "openai_oauth", "lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "antigravity", "gemini_oauth", "xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth", "copilot_oauth", "factory_oauth"} {
 		if _, err := r.Open(name, adapter.Options{ID: name, BaseURL: "http://127.0.0.1:9/v1"}); err != nil {
 			t.Fatalf("open %s: %v", name, err)
 		}
@@ -94,6 +94,16 @@ func TestOAuthAdaptersImplementAuthenticator(t *testing.T) {
 	}
 	if !anth.Capabilities().OAuth || !oa.Capabilities().OAuth || !ag.Capabilities().OAuth {
 		t.Fatal("OAuth capability should be advertised")
+	}
+	cp, err := adapters.DefaultRegistry().Open("copilot_oauth", adapter.Options{ID: "cp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cp.(adapter.Authenticator); !ok || !cp.Capabilities().OAuth {
+		t.Fatal("copilot_oauth must implement Authenticator")
+	}
+	if _, err := cp.ListModels(ctx); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("copilot_oauth without token: %v", err)
 	}
 }
 

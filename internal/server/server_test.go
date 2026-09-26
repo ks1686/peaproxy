@@ -475,7 +475,7 @@ func TestHealthListsNativeAdaptersAndCooldowns(t *testing.T) {
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	got := rr.Body.String()
-	for _, name := range []string{"anthropic", "openai", "openrouter", "opencode_zen", "lmstudio", "llamacpp", "vllm", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "nim", "workers_ai", "ollama_cloud"} {
+	for _, name := range []string{"anthropic", "openai", "openrouter", "opencode_zen", "opencode_go", "lmstudio", "llamacpp", "vllm", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "nim", "workers_ai", "ollama_cloud"} {
 		if !strings.Contains(got, name) {
 			t.Fatalf("missing adapter %s in %s", name, got)
 		}
@@ -522,7 +522,7 @@ func TestHealthzPublicAndPresets(t *testing.T) {
 	if prr.Code != http.StatusOK {
 		t.Fatalf("presets %d %s", prr.Code, prr.Body)
 	}
-	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth"} {
+	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth", "copilot_oauth", "factory_oauth", "opencode_go"} {
 		if !strings.Contains(prr.Body.String(), name) {
 			t.Fatalf("missing %s in %s", name, prr.Body)
 		}
@@ -624,7 +624,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}
@@ -883,7 +883,7 @@ func TestClientsVerifyAgainstLocalAdapter(t *testing.T) {
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	ctx := context.Background()
-	for _, name := range []string{"cursor", "opencode", "claude-code", "pi", "amp", "continue", "cline"} {
+	for _, name := range []string{"cursor", "opencode", "claude-code", "pi", "amp", "continue", "cline", "droid"} {
 		res, err := clients.Verify(ctx, name, srv.URL, true)
 		if err != nil {
 			t.Fatalf("%s: %v detail=%s", name, err, res.Detail)
