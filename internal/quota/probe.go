@@ -70,7 +70,7 @@ func ProbeOpenRouter(ctx context.Context, client *http.Client, accountID, apiKey
 		Adapter:          "openrouter",
 		Source:           SourceProbe,
 		Note:             "from OpenRouter GET /key",
-		CapturedAt:       time.Now().UTC(),
+		CapturedAt:       nowUTC(),
 		UsageCredits:     parsed.Data.Usage,
 		LimitCredits:     parsed.Data.Limit,
 		RemainingCredits: parsed.Data.LimitRemaining,

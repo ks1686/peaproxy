@@ -3,7 +3,6 @@ package quota
 import (
 	"net/http"
 	"sync"
-	"time"
 )
 
 // Store keeps the latest remaining snapshot per account. Observe is a short
@@ -164,8 +163,8 @@ func mergeProbe(prev, next Snapshot) Snapshot {
 	out.Source = SourceProbe
 	out.Note = next.Note
 	out.CapturedAt = next.CapturedAt
-	if out.CapturedAt.IsZero() {
-		out.CapturedAt = time.Now().UTC()
+	if out.CapturedAt == nil {
+		out.CapturedAt = nowUTC()
 	}
 	out.RemainingCredits = next.RemainingCredits
 	out.LimitCredits = next.LimitCredits

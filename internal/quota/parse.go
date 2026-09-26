@@ -62,7 +62,7 @@ type Snapshot struct {
 	// (OpenRouter GET /api/v1/key). It is never inferred from missing headers.
 	CreditsUnlimited bool `json:"creditsUnlimited,omitempty"`
 
-	CapturedAt time.Time `json:"capturedAt,omitempty"`
+	CapturedAt *time.Time `json:"capturedAt,omitempty"`
 }
 
 // Reported is true when at least one provider-supplied remaining/limit value is present.
@@ -124,8 +124,13 @@ func ParseHeaders(h http.Header) Snapshot {
 	if !s.Reported() {
 		return Snapshot{}
 	}
-	s.CapturedAt = time.Now().UTC()
+	s.CapturedAt = nowUTC()
 	return s
+}
+
+func nowUTC() *time.Time {
+	t := time.Now().UTC()
+	return &t
 }
 
 func intHeader(h http.Header, keys ...string) *int64 {

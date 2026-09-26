@@ -40,7 +40,7 @@ var families = map[string]Family{
 	"openrouter":      {Headers: "X-RateLimit-* on 429", Probe: "GET /api/v1/key", Note: "credit remaining from documented GET /api/v1/key (Health refresh). Rate-limit headers only on 429s"},
 	"opencode_zen":    {Headers: "x-ratelimit-* if sent", Note: "not reported by provider unless Zen sends rate-limit headers; no documented remaining GET"},
 	"opencode_go":     {Headers: "x-ratelimit-* if sent", Note: "not reported by provider unless OpenCode Go sends rate-limit headers; no documented remaining GET"},
-	"openai_compat":   {Headers: "x-ratelimit-* / anthropic-ratelimit-* if sent", Note: headersOnly("rate-limit headers if the upstream sends them")},
+	"openai_compat":   {Headers: "x-ratelimit-* / anthropic-ratelimit-* if sent", Note: "not reported by provider unless the upstream sends rate-limit remaining headers"},
 	"ollama":          {Headers: "", Note: localNote()},
 	"lmstudio":        {Headers: "", Note: localNote()},
 	"llamacpp":        {Headers: "", Note: localNote()},

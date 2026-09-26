@@ -1,7 +1,9 @@
 package quota
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +49,13 @@ func TestViewsUnknownIsNotReported(t *testing.T) {
 	}
 	if views[0].Note == "" {
 		t.Fatal("want a not-reported note")
+	}
+	b, err := json.Marshal(views[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "capturedAt") || strings.Contains(string(b), "remainingRequests") {
+		t.Fatalf("unknown leaked fields: %s", b)
 	}
 }
 
