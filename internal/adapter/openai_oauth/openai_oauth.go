@@ -6,6 +6,7 @@ package openai_oauth
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -65,7 +66,10 @@ func (a *Adapter) Validate(ctx context.Context) error {
 
 func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 	_ = ctx
-	return adapter.AuthSession{Provider: Name}, adapter.ErrNotImplemented
+	return adapter.AuthSession{
+		Provider: Name,
+		LoginURL: "https://platform.openai.com/api-keys",
+	}, fmt.Errorf("%w: ChatGPT/Codex subscription OAuth is not a public API; use adapter openai with a key from https://platform.openai.com/api-keys", adapter.ErrNotImplemented)
 }
 
 func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession, code string) error {

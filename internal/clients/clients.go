@@ -63,15 +63,16 @@ export ANTHROPIC_API_KEY=peaproxy
 		Name:       "pi",
 		BaseURL:    "http://127.0.0.1:8317",
 		AuthHeader: "depends on anthropic-messages vs OpenAI path",
-		Notes:      "Do not apply Claude-Code cloak defaults to Pi.",
-		Snippet: `# Pi — Anthropic-messages path (no cloak)
-ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-ANTHROPIC_API_KEY=peaproxy
-# Pi — OpenAI path
-OPENAI_BASE_URL=http://127.0.0.1:8317/v1
-OPENAI_API_KEY=peaproxy
+		Notes:      "Pi speaks both wires. Anthropic path has no /v1; OpenAI path includes /v1. Do not apply Claude-Code cloak defaults to Pi.",
+		Snippet: `# Pi — Anthropic-messages wire (NO /v1; Pi appends /v1/messages)
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+export ANTHROPIC_API_KEY=peaproxy
+
+# Pi — OpenAI chat-completions wire (includes /v1)
+export OPENAI_BASE_URL=http://127.0.0.1:8317/v1
+export OPENAI_API_KEY=peaproxy
 `,
-		VerifyTODO: "peaproxy clients verify pi",
+		VerifyTODO: "peaproxy clients verify pi --chat",
 	},
 	"codex": {
 		Name:       "codex",
@@ -87,16 +88,30 @@ OPENAI_API_KEY=peaproxy
 		Name:       "continue",
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
-		Notes:      "Generic OpenAI-compat template.",
+		Notes:      "Continue.dev OpenAI-compat. Point apiBase at PeaProxy /v1.",
 		Snippet: `{
   "models": [{
+    "title": "PeaProxy",
     "provider": "openai",
+    "model": "REPLACE_WITH_CATALOG_ID",
     "apiBase": "http://127.0.0.1:8317/v1",
     "apiKey": "peaproxy"
   }]
 }
 `,
 		VerifyTODO: "peaproxy clients verify continue",
+	},
+	"cline": {
+		Name:       "cline",
+		BaseURL:    "http://127.0.0.1:8317/v1",
+		AuthHeader: "Authorization: Bearer peaproxy",
+		Notes:      "Cline → API Provider → OpenAI Compatible. Base URL includes /v1.",
+		Snippet: `Cline → Settings → API Provider: OpenAI Compatible
+Base URL: http://127.0.0.1:8317/v1
+API Key: peaproxy
+Model: pick an id from GET /v1/models
+`,
+		VerifyTODO: "peaproxy clients verify cline",
 	},
 }
 

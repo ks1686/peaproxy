@@ -7,6 +7,12 @@ Adapters in this repo today:
 | Adapter | Status | Typical auth | Default |
 |---|---|---|---|
 | `ollama` | List + chat + stream (`/v1` with `/api/tags` fallback) | none | `http://127.0.0.1:11434/v1` |
+| `lmstudio` | Thin OpenAI-compat wrapper | none | `http://127.0.0.1:1234/v1` |
+| `groq` | Thin OpenAI-compat wrapper | API key | `https://api.groq.com/openai/v1` |
+| `cerebras` | Thin OpenAI-compat wrapper | API key | `https://api.cerebras.ai/v1` |
+| `google` / `gemini` | Thin OpenAI-compat wrapper | API key | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `xai` | Thin OpenAI-compat wrapper | API key | `https://api.x.ai/v1` |
+| `huggingface` | Thin OpenAI-compat wrapper | token | `https://router.huggingface.co/v1` |
 | `openai` | First-class OpenAI API (models + chat completions stream) | API key | `https://api.openai.com/v1` |
 | `anthropic` | Native Messages (`x-api-key`) + OpenAI chat/completions bridge; true SSE | API key | `https://api.anthropic.com` |
 | `openrouter` | Preset; ids ending `:free` tagged free; live list | API key | `https://openrouter.ai/api/v1` |
@@ -15,11 +21,21 @@ Adapters in this repo today:
 | `anthropic_oauth` | **Stub** — `ErrNotImplemented` | OAuth (TODO, official path only) | — |
 | `openai_oauth` | **Stub** — `ErrNotImplemented` | OAuth (TODO, official path only) | — |
 
+Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default base URL and catalog tier, then delegate to `openai_compat`.
+
+## Gemini / Google AI Studio
+
+**Official OpenAI-compat is used.** Google documents an OpenAI-compatible Gemini endpoint ([OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai)):
+
+`https://generativelanguage.googleapis.com/v1beta/openai`
+
+PeaProxy does **not** call `generateContent`. Set `GEMINI_API_KEY` and adapter `google` or alias `gemini`.
+
 ## Paid / subscription
 
-**P0 OAuth (stubs only):** Anthropic Claude, OpenAI ChatGPT/Codex, later Gemini/Grok/Kimi/Qwen. Use the provider’s **official** OAuth / login docs when those adapters are implemented. Do not reverse-engineer private clients.
+**P0 OAuth (stubs only):** Anthropic Claude, OpenAI ChatGPT/Codex, later Gemini/Grok/Kimi/Qwen consumer login. Use the provider’s **official** OAuth / login docs when those adapters are implemented. Do not reverse-engineer private clients. See [OAUTH.md](OAUTH.md).
 
-**P0 keys:** `anthropic`, `openai`, `openrouter`, plus Google AI Studio / xAI / Z.AI / Groq via `openai_compat`.
+**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `openrouter`.
 
 Do **not** advertise Claude Free OAuth (CPA #6016).
 
@@ -28,13 +44,13 @@ Do **not** advertise Claude Free OAuth (CPA #6016).
 | Provider | How | Auth | Catalog tier |
 |---|---|---|---|
 | Ollama | `localhost:11434/v1` | none | `local` |
-| LM Studio | `:1234/v1` | none / optional | `local` |
-| llama.cpp / vLLM | user `baseURL` | none | `local` |
+| LM Studio | `:1234/v1` (`adapter: lmstudio`) | none / optional | `local` |
+| llama.cpp / vLLM | user `baseURL` on `openai_compat` | none | `local` |
 | OpenRouter `:free` | adapter `openrouter` | key | `free` (ids ending `:free`) |
 | **OpenCode Zen free** | `https://opencode.ai/zen/v1` | official key from [opencode.ai](https://opencode.ai/docs/zen/); community empty Bearer + `x-session-id` is ToS-fragile | `free` for `-free` / named free ids |
-| Hugging Face Inference | HF router OpenAI-compat | token | `freemium` |
-| Google AI Studio | Gemini API / OpenAI-compat if offered | free key | `freemium` |
-| Groq / Cerebras / NIM / Workers AI | OpenAI-compat | key | `freemium` |
+| Hugging Face Inference | `adapter: huggingface` router | token | `freemium` |
+| Google AI Studio | official OpenAI-compat Gemini | free key | `freemium` |
+| Groq / Cerebras | first-class wrappers | key | `freemium` |
 | Ollama Cloud | hosted OpenAI-compat | account / key | `freemium` |
 
 **GitHub Models is retired (2026-07-30).** Do not ship it. Migrate narrative: Azure AI Foundry (paid) or Copilot OAuth (separate, later).
@@ -49,7 +65,7 @@ Multiple accounts that list the same model id are tried **round-robin**. HTTP **
 
 ## Catalog UX
 
-Filters: **All | Free | Paid | Local | Subscription OAuth**.
+Filters: **All | Free | Paid | Local | Subscription OAuth** (persisted in the UI via `localStorage`).
 
 - Hide provider / hide model: omitted from `GET /v1/models` **only**. POST routing still works unless `hide.blockRouting: true` (CPA #5995 / #5349).
 - Rich metadata: `GET /v0/catalog` and `GET /admin/catalog` (tier, modalities, privacy).

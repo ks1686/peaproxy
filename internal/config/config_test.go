@@ -87,8 +87,60 @@ func TestBindAllRequiresExplicitOptIn(t *testing.T) {
 		t.Fatal("expected error when bind-all has no admin token")
 	}
 	cfg.AdminToken = "test-token"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error when bind-all has token but no --allow-lan")
+	}
 	cfg.AllowNonLoopback = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEnsureFileWritesOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	cfg, gotPath, created, err := config.EnsureFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || gotPath != path {
+		t.Fatalf("created=%v path=%s", created, gotPath)
+	}
+	if cfg.Bind != "127.0.0.1" || len(cfg.Providers) != 1 {
+		t.Fatalf("%#v", cfg)
+	}
+	again, _, created2, err := config.EnsureFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created2 {
+		t.Fatal("second EnsureFile must not rewrite")
+	}
+	if again.Providers[0].ID != "ollama-local" {
+		t.Fatalf("%#v", again.Providers)
+	}
+}
+
+func TestApplyEnvOverlaysFile(t *testing.T) {
+	cfg := config.Default()
+	t.Setenv("PEAPROXY_BIND", "127.0.0.1")
+	t.Setenv("PEAPROXY_PORT", "9001")
+	t.Setenv("PEAPROXY_ADMIN_TOKEN", "secret-token")
+	t.Setenv("PEAPROXY_ALLOW_LAN", "true")
+	t.Setenv("PEAPROXY_REQUEST_LOG", "1")
+	config.ApplyEnv(&cfg)
+	if cfg.Port != 9001 || cfg.AdminToken != "secret-token" || !cfg.AllowNonLoopback || !cfg.RequestLog {
+		t.Fatalf("%#v", cfg)
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	for _, h := range []string{"127.0.0.1", "localhost", "::1"} {
+		if !config.IsLoopback(h) {
+			t.Fatalf("%s should be loopback", h)
+		}
+	}
+	if config.IsLoopback("0.0.0.0") || config.IsLoopback("192.168.1.5") {
+		t.Fatal("non-loopback reported as loopback")
 	}
 }

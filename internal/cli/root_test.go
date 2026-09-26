@@ -67,3 +67,65 @@ func TestVersionFlag(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+func TestClientsListIncludesClineAndContinue(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"clients", "list"}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, name := range []string{"cline", "continue", "pi", "cursor"} {
+		if !strings.Contains(got, name) {
+			t.Fatalf("missing %s in %s", name, got)
+		}
+	}
+}
+
+func TestClientsShowPiBothWires(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"clients", "show", "pi"}, out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "ANTHROPIC_BASE_URL=http://127.0.0.1:8317\n") {
+		t.Fatalf("%s", s)
+	}
+	if !strings.Contains(s, "OPENAI_BASE_URL=http://127.0.0.1:8317/v1") {
+		t.Fatalf("%s", s)
+	}
+}
+
+func TestAuthLoginPrintsOfficialKeyDocs(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"auth", "login", "--provider", "anthropic"}, out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "console.anthropic.com") {
+		t.Fatalf("%s", out)
+	}
+}
+
+func TestServeRefusesBindAllWithoutAllowLAN(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/peaproxy.yaml"
+	out := &bytes.Buffer{}
+	err := ExecuteWithArgs([]string{"serve", "--config", path, "--bind", "0.0.0.0"}, out)
+	if err == nil {
+		t.Fatal("expected bind-all without --allow-lan to fail")
+	}
+	if !strings.Contains(err.Error(), "allow-lan") {
+		t.Fatalf("error %v", err)
+	}
+}
+
+func TestConfigInitWritesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/peaproxy.yaml"
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"config", "init", "--config", path}, out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "wrote") {
+		t.Fatalf("%s", out)
+	}
+}

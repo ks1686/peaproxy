@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers** (subscription OAuth is stubbed), first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
 
-Status: **usable product core**. Add Ollama, an Anthropic/OpenAI/OpenRouter key, or OpenCode Zen — live models, chat, Claude SSE, vision in Showcase, multi-account failover. **OAuth login is not implemented.**
+Status: **v0.1.0-ready** (cut the tag after this checklist is green on `main`). Add Ollama, LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face, Anthropic/OpenAI/OpenRouter keys, or OpenCode Zen — live models, chat, Claude SSE, vision in Showcase, multi-account failover. **OAuth login is not implemented.**
 
 ## One-liner
 
@@ -31,10 +31,10 @@ Open http://127.0.0.1:8317/
 
 ## Quick start
 
-1. **Accounts** — pick a preset (Ollama, Anthropic API key, OpenAI API key, OpenRouter, OpenCode Zen, or custom OpenAI-compat).
-2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995).
+1. **Accounts** — pick a preset (Ollama, LM Studio, Groq, Cerebras, Google AI Studio / Gemini, xAI, Hugging Face, Anthropic, OpenAI, OpenRouter, OpenCode Zen, or custom OpenAI-compat).
+2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Free/Paid/Local filter is remembered in the UI.
 3. **Showcase** — try a prompt; vision models accept an image URL or upload.
-4. Point Cursor / OpenCode / Claude Code at the local base URL (`peaproxy clients show …`).
+4. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline at the local base URL (`peaproxy clients show …`).
 
 ```bash
 curl -s http://127.0.0.1:8317/v1/models
@@ -47,20 +47,22 @@ curl -s http://127.0.0.1:8317/v1/messages \
 peaproxy clients show cursor
 peaproxy clients show opencode   # includes /v1
 peaproxy clients show claude-code  # does NOT include /v1
+peaproxy clients show pi         # both wires
+peaproxy clients verify cursor --chat
 ```
 
-Config defaults to `~/.config/peaproxy/config.yaml` (created when you add accounts). Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Usage is persisted as `usage.json` next to the config; set `requestLog: true` for a redacted `requests.log`.
+First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is persisted as `usage.json` next to the config; set `requestLog: true` for a redacted `requests.log`.
 
 | Command | Purpose |
 |---|---|
-| `serve` | Listen `127.0.0.1:8317` + UI |
+| `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` | Build version (`dev` unless a release ldflag) |
-| `auth` | OAuth login **stub** |
+| `auth` | OAuth login **stub** (prints official API-key URLs) |
 | `accounts` | Configured provider accounts |
 | `models` | Live catalog (`--filter free\|paid\|local`) |
 | `status` | Bind / config path / version |
-| `config` | `path` / `show` / `validate` |
-| `clients` | Harness presets (`list` / `show` / `verify`) |
+| `config` | `path` / `show` / `validate` / `init` |
+| `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |
 
 ## HTTP
 
@@ -71,8 +73,36 @@ Config defaults to `~/.config/peaproxy/config.yaml` (created when you add accoun
 | `POST /v1/chat/completions` | Stream + non-stream; failover on 429/401 |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Settings |
-| `GET /admin/health` | Bind, adapters, **account cooldowns** |
+| `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
+| `GET /admin/health` | Bind, adapters, **account cooldowns** (token required off loopback) |
+| `GET /admin/presets` | Account dropdown templates |
 | `GET /admin/usage` | Persisted usage (`usage.json`) |
+
+## Gemini
+
+Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generativelanguage.googleapis.com/v1beta/openai`), not `generateContent`. Adapter ids: `google` and alias `gemini`. Docs: [PROVIDERS.md](docs/PROVIDERS.md).
+
+## v0.1.0 readiness checklist
+
+- [x] Live catalog, OpenAI + Claude chat (incl. true SSE), vision Showcase
+- [x] Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters
+- [x] Hosted presets: LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face
+- [x] Multi-account 429/401 failover + persisted usage
+- [x] Clients: Cursor, Claude Code, OpenCode, Pi (both wires), Codex, Continue, Cline + `clients verify`
+- [x] First-run default config on `serve`; example YAML; `PEAPROXY_*` env overlays
+- [x] Refuse `0.0.0.0` without `--allow-lan` + admin token; UI LAN warning
+- [x] OAuth: stubs only; official API-key docs ([OAUTH.md](docs/OAUTH.md)) — no reverse-engineered clients
+- [ ] Tag **`v0.1.0`** on `main` after CI is green (GoReleaser publishes binaries). Do not tag from a feature PR.
+
+### After merge: how to tag
+
+```bash
+git checkout main && git pull
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+Wait for the `release` workflow. Confirm the GitHub Release assets (linux/darwin/windows, amd64+arm64) before calling it shipped. Prefer this over `gh release create` unless that release is already clean.
 
 ## Why this exists
 
@@ -88,11 +118,11 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 8. **Free + custom providers** — including OpenCode Zen (CPA declined #6018).
 9. **Built-in usage / showcase** — CPA removed usage in v6.10+.
 
-Details: [docs/PLAN.md](docs/PLAN.md), [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md).
+Details: [docs/PLAN.md](docs/PLAN.md), [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md).
 
 ## Security
 
-- Default bind is **loopback**. Binding `0.0.0.0` requires `allowNonLoopback: true` **and** a non-empty `adminToken`.
+- Default bind is **loopback**. Binding `0.0.0.0` requires `--allow-lan` **and** a non-empty admin token (`docs/CONFIG.md`).
 - Never log secrets. Opt-in request log is redacted.
 - **ToS:** subscription OAuth through a local proxy may violate a provider’s terms. OpenCode Zen **free** models may train on prompts — see catalog privacy notes and [OpenCode Zen docs](https://opencode.ai/docs/zen/).
 - **GitHub Models is retired** (2026-07-30) and is not a provider.

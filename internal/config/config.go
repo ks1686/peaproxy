@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -96,19 +98,91 @@ func DefaultPath() string {
 	return filepath.Join(dir, "peaproxy", "config.yaml")
 }
 
-// LoadOrDefault loads path, or DefaultPath if empty. Missing files yield Default().
+// LoadOrDefault loads path, or DefaultPath if empty. Missing files yield Default()
+// without writing. Serve calls EnsureFile to persist a first-run skeleton.
 func LoadOrDefault(path string) (Config, string, error) {
 	if path == "" {
 		path = DefaultPath()
 	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return Default(), path, nil
+			cfg := Default()
+			ApplyEnv(&cfg)
+			return cfg, path, nil
 		}
 		return Config{}, path, err
 	}
 	cfg, err := Load(path)
-	return cfg, path, err
+	if err != nil {
+		return Config{}, path, err
+	}
+	ApplyEnv(&cfg)
+	return cfg, path, nil
+}
+
+// EnsureFile writes Default() to path when the file does not exist.
+func EnsureFile(path string) (Config, string, bool, error) {
+	if path == "" {
+		path = DefaultPath()
+	}
+	if _, err := os.Stat(path); err == nil {
+		cfg, err := Load(path)
+		if err != nil {
+			return Config{}, path, false, err
+		}
+		ApplyEnv(&cfg)
+		return cfg, path, false, nil
+	} else if !os.IsNotExist(err) {
+		return Config{}, path, false, err
+	}
+	cfg := Default()
+	if err := Save(path, cfg); err != nil {
+		return Config{}, path, false, err
+	}
+	ApplyEnv(&cfg)
+	return cfg, path, true, nil
+}
+
+// ApplyEnv overlays PEAPROXY_* variables (file < env < CLI flags).
+func ApplyEnv(c *Config) {
+	if c == nil {
+		return
+	}
+	if v := os.Getenv("PEAPROXY_BIND"); v != "" {
+		c.Bind = v
+	}
+	if v := os.Getenv("PEAPROXY_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil {
+			c.Port = p
+		}
+	}
+	if v := os.Getenv("PEAPROXY_ADMIN_TOKEN"); v != "" {
+		c.AdminToken = v
+	}
+	if v := os.Getenv("PEAPROXY_ALLOW_LAN"); envTruthy(v) {
+		c.AllowNonLoopback = true
+	}
+	if v := os.Getenv("PEAPROXY_REQUEST_LOG"); envTruthy(v) {
+		c.RequestLog = true
+	}
+}
+
+func envTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsLoopback reports whether bind is a loopback host.
+func IsLoopback(bind string) bool {
+	if bind == "127.0.0.1" || bind == "localhost" || bind == "::1" {
+		return true
+	}
+	ip := net.ParseIP(bind)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Load reads YAML from path.
@@ -157,11 +231,9 @@ func (c Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d", c.Port)
 	}
-	ip := net.ParseIP(c.Bind)
-	loopback := c.Bind == "127.0.0.1" || c.Bind == "localhost" || (ip != nil && ip.IsLoopback())
-	if !loopback {
+	if !IsLoopback(c.Bind) {
 		if !c.AllowNonLoopback || c.AdminToken == "" {
-			return fmt.Errorf("non-loopback bind %q requires allowNonLoopback: true and a non-empty adminToken", c.Bind)
+			return fmt.Errorf("non-loopback bind %q requires --allow-lan (or allowNonLoopback: true) and a non-empty adminToken", c.Bind)
 		}
 	}
 	ids := map[string]struct{}{}
