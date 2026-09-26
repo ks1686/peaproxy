@@ -25,6 +25,7 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 | `PEAPROXY_ADMIN_TOKEN` | Admin token for `/admin` when bound off loopback |
 | `PEAPROXY_ALLOW_LAN` | `1` / `true` / `yes` / `on` sets `allowNonLoopback` |
 | `PEAPROXY_REQUEST_LOG` | same truthy values enable redacted `requests.log` |
+| `PEAPROXY_FAILOVER_POLICY` | `round-robin` (default), `fill-first`, or `sticky` |
 | `PEAPROXY_SECRET_BACKEND` | `file` forces the AES-GCM file next to the config; `keyring` requires the OS store (macOS Keychain / Windows Credential Manager / Linux Secret Service). Unset: try keyring, then file. `go test` always uses `file`. |
 
 Prefer `apiKeyEnv` over inline `apiKey`. Inline keys and OAuth tokens are **not** written back to YAML; they go to the secret store. YAML still lists `providers[]` (id, adapter, email, expiry, non-secret extra).
@@ -66,6 +67,27 @@ Rules (`peaproxy config validate`):
 
 The UI Catalog page, `POST /admin/catalog/overlay`, and `peaproxy catalog pin|rename|hide` write the same fields. Settings shows pin/rename/hide counts (edit them on Catalog).
 
+## Failover
+
+When several accounts list the same model id, PeaProxy tries them in policy order. Cooled accounts (30s skip after a retryable failure) are omitted from that order.
+
+```yaml
+failover:
+  policy: round-robin   # default
+  # policy: fill-first
+  # policy: sticky
+```
+
+| Policy | Behavior |
+|---|---|
+| `round-robin` | Rotate the starting hot account on each request (default). |
+| `fill-first` | Always start at the first hot account in YAML `providers` order. |
+| `sticky` | Remember the last successful account per model and try it first; if it is cooled or fails, try the remaining hot accounts in YAML order and stick to whoever succeeds. |
+
+Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider error bodies that look like rate-limit / quota, overloaded, or auth-expired. Cooldown reasons are those classes (`rate-limit`, `overloaded`, `auth-expired`) — not raw bodies (no secrets). Plain `400 invalid_request_error` does not fail over.
+
+`peaproxy config validate` prints the effective `failover.policy`. Health UI and `peaproxy health` still list active cooldowns with remaining time.
+
 ## Request log
 
 `requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` and `peaproxy requests tail` read that inspector. Usage counters still go to `usage.json` even when the inspector is off. `peaproxy health` prints the same bind / adapterHealth / cooldowns fields as `GET /admin/health`.
@@ -87,6 +109,7 @@ loopback: true
 requestLog: false
 catalog.pin: 0
 catalog.rename: 0
+failover.policy: round-robin
 providers: 1
 secrets: file
 ```

@@ -88,7 +88,7 @@ providers:
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, want := range []string{"ok", "requestLog: true", "catalog.pin: 1", "catalog.rename: 1", "secrets: file"} {
+	for _, want := range []string{"ok", "requestLog: true", "catalog.pin: 1", "catalog.rename: 1", "failover.policy: round-robin", "secrets: file"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}

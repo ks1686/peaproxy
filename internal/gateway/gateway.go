@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,7 +25,7 @@ import (
 
 const CooldownTTL = 30 * time.Second
 
-// cooldownTTL is the skip window after 429/401. Tests may shorten it.
+// cooldownTTL is the skip window after a retryable failure. Tests may shorten it.
 var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
@@ -40,10 +39,11 @@ type Gateway struct {
 	Usage  *usage.Store
 	cool   map[string]Cooldown
 	rr     uint64
+	sticky map[string]string
 	health []AdapterHealth
 }
 
-// Cooldown is a temporary skip of an account after 429/401.
+// Cooldown is a temporary skip of an account after a retryable failure.
 type Cooldown struct {
 	AccountID   string    `json:"accountId"`
 	Until       time.Time `json:"until"`
@@ -73,7 +73,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}}
+	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}}
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -228,7 +228,7 @@ func (g *Gateway) Annotated(filter catalog.Filter) []catalog.Model {
 	return catalog.AllAnnotated(g.models, q)
 }
 
-// Chat proxies a non-stream OpenAI chat.completions body with round-robin + 429/401 failover.
+// Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, string, error) {
 	peek := jsonx.PeekBody(raw)
 	cands, err := g.route(peek.Model)
@@ -242,6 +242,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 		lastAccount = inst.Provider.ID
 		resp, err := inst.Adapter.Chat(ctx, req)
 		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -269,6 +270,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		lastAccount = inst.Provider.ID
 		err := inst.Adapter.ChatStream(ctx, req, cw)
 		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
 			return lastAccount, nil
 		}
 		last = err
@@ -303,6 +305,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
+				g.rememberSticky(peek.Model, lastAccount)
 				return out, lastAccount, nil
 			}
 			last = err
@@ -328,10 +331,14 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if len(resp.Raw) > 0 {
 			out, ferr := translate.FromOpenAIChat(resp.Raw, oaReq.Model)
 			if ferr == nil {
+				g.rememberSticky(peek.Model, lastAccount)
 				return out, lastAccount, nil
 			}
 		}
 		out, err := translate.FromChatContent(resp.ID, oaReq.Model, resp.Content)
+		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
+		}
 		return out, lastAccount, err
 	}
 	if last == nil {
@@ -366,6 +373,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), cw)
 			if err == nil {
+				g.rememberSticky(peek.Model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -392,6 +400,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -435,6 +444,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			out, err := nm.Messages(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
+				g.rememberSticky(peek.Model, lastAccount)
 				return out, lastAccount, nil
 			}
 			last = err
@@ -472,6 +482,9 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 			}
 		}
 		out, err := translate.FromOpenAI(oaRaw, oaReq.Model)
+		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
+		}
 		return out, lastAccount, err
 	}
 	if last == nil {
@@ -506,6 +519,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			err := nm.MessagesStream(ctx, jsonx.SetStream(raw, true), cw)
 			if err == nil {
+				g.rememberSticky(peek.Model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -532,6 +546,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -584,17 +599,20 @@ func (c *countWriter) Write(p []byte) (int, error) {
 }
 
 func retryable(err error) bool {
-	var he adapter.HTTPError
-	if errors.As(err, &he) {
-		return he.Status == http.StatusTooManyRequests ||
-			he.Status == http.StatusUnauthorized ||
-			he.Status == http.StatusServiceUnavailable
-	}
-	return false
+	return router.Retryable(err)
 }
 
 func cooldownErr(last error) error {
 	return router.CooldownError{RetryAfter: cooldownTTL, Err: last}
+}
+
+func (g *Gateway) rememberSticky(model, account string) {
+	if model == "" || account == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.sticky[model] = account
 }
 
 func (g *Gateway) route(model string) ([]instance, error) {
@@ -609,10 +627,14 @@ func (g *Gateway) route(model string) ([]instance, error) {
 }
 
 func (g *Gateway) markCooldown(id string, err error) {
-	reason := "failover"
+	class := router.Classify(err)
+	reason := class.String()
+	if class == router.FailoverNone {
+		reason = "failover"
+	}
 	var he adapter.HTTPError
 	if errors.As(err, &he) {
-		reason = fmt.Sprintf("HTTP %d", he.Status)
+		reason = fmt.Sprintf("HTTP %d (%s)", he.Status, reason)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -742,11 +764,17 @@ func (g *Gateway) candidates(model string) ([]instance, time.Duration) {
 		}
 		return nil, time.Until(until)
 	}
-	start := int(g.rr % uint64(len(hot)))
-	g.rr++
-	out := make([]instance, 0, len(hot))
-	out = append(out, hot[start:]...)
-	out = append(out, hot[:start]...)
+	hotIDs := make([]string, len(hot))
+	byID := make(map[string]instance, len(hot))
+	for i, inst := range hot {
+		hotIDs[i] = inst.Provider.ID
+		byID[inst.Provider.ID] = inst
+	}
+	ordered := router.Order(router.Policy(g.cfg.Failover.Policy), hotIDs, &g.rr, g.sticky[model])
+	out := make([]instance, 0, len(ordered))
+	for _, id := range ordered {
+		out = append(out, byID[id])
+	}
 	return out, 0
 }
 

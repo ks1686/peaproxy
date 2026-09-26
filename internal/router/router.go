@@ -5,14 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
 )
 
-// Policy is a failover strategy. Implementations in the spike will do real rotation.
+// Policy is a failover strategy. Gateway routing honours these names.
 type Policy string
 
 const (
@@ -102,9 +101,7 @@ func (r *Router) Resolve(model string) []Candidate {
 	return out
 }
 
-// Chat tries candidates in order until one succeeds. Quota/429 continues; other errors stop.
-//
-// TODO(spike): inspect provider error bodies, not only HTTP status; persist cooldowns.
+// Chat tries candidates in order until one succeeds. Retryable status/body errors continue; other errors stop.
 func (r *Router) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.ChatResponse, error) {
 	cands := r.Resolve(req.Model)
 	if len(cands) == 0 {
@@ -117,24 +114,12 @@ func (r *Router) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Cha
 			return resp, nil
 		}
 		last = err
-		if retryable(err) {
+		if Retryable(err) {
 			continue
 		}
 		return adapter.ChatResponse{}, err
 	}
 	return adapter.ChatResponse{}, fmt.Errorf("%w: %v", ErrNoAccount, last)
-}
-
-func retryable(err error) bool {
-	var re RouteError
-	if errors.As(err, &re) {
-		return re.Retryable || re.Status == http.StatusTooManyRequests
-	}
-	var he adapter.HTTPError
-	if errors.As(err, &he) {
-		return he.Status == http.StatusTooManyRequests || he.Status == http.StatusUnauthorized || he.Status == http.StatusServiceUnavailable
-	}
-	return false
 }
 
 // CatalogQuery is a convenience for applying hide/expose after merging adapter lists.

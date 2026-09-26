@@ -12,11 +12,11 @@ CLIProxyAPI repeatedly gets "add model X" issues (Opus 4.6/4.7, Fable, GPT Daybr
 
 **PeaProxy:** adapters always list from provider live endpoints; never ship allowlists as source of truth; enrich optionally. Hide/pin/rename are overlays only.
 
-### 2. Failover that actually fails over — shipped (round-robin)
+### 2. Failover that actually fails over — shipped
 
 #6135 failover broken when quota exhausted; #6130 scheduler can't terminal-reject; cooldown/429 storms (#1015, #903).
 
-**PeaProxy:** HTTP 429/401 cools that account for 30s and tries the next; cooled accounts are not re-hit (503 + `Retry-After`). Health UI shows remaining cooldown. Residual: `fill-first` / `sticky` policy names are unused; error-body inspection beyond status is incomplete.
+**PeaProxy:** `failover.policy` is `round-robin` (default), `fill-first`, or `sticky`. HTTP 429/401/503/529 **and** rate-limit / overloaded / auth-expired error bodies cool that account for 30s and try the next; cooled accounts are not re-hit (503 + `Retry-After`). Health UI and `peaproxy health` show remaining cooldown. Cooldown reasons are classes, not secret-bearing bodies.
 
 ### 3. Protocol fidelity for coding harnesses — shipped (documented limits)
 
@@ -71,7 +71,7 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 2. Free + paid providers with catalog filters/hide — **yes**
 3. Loopback-secure by default — **yes**
 4. Harness quick-setup (OpenCode, Pi, Cursor, Claude Code, Codex, Continue, Cline, Amp) — **yes** (Droid no)
-5. Reliable multi-account failover with visible cooldowns — **yes** (round-robin; see residual above)
+5. Reliable multi-account failover with visible cooldowns — **yes** (`round-robin` / `fill-first` / `sticky`)
 6. Per-provider usage showcase (text + vision-in; image-out gated) — **yes / gated**
 7. Cross-platform CLI + localhost UI (no tray) — **yes, by design**
 8. Protocol profiles that don't break thinking/tools/cloak for non-official clients — **defaults off**; not a full translator golden-test suite

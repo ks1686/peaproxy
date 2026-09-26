@@ -31,6 +31,12 @@ expose:
 #   rename:
 #     llama3.2: Llama 3.2 local
 
+# Matching accounts for a model. Empty / omitted policy is round-robin.
+# fill-first: always start at the first hot account in YAML order.
+# sticky: keep the last successful account for that model until it cools or fails.
+failover:
+  policy: round-robin
+
 providers:
   - id: ollama-local
     adapter: ollama
