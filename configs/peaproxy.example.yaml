@@ -105,3 +105,18 @@ providers:
   # - id: openai-oauth
   #   adapter: openai_oauth
   #   tier: paid
+
+  # Gemini / Antigravity consumer OAuth (distinct from AI Studio keys). ToS/ban risk.
+  # peaproxy auth login --provider gemini
+  # - id: antigravity
+  #   adapter: antigravity
+  #   tier: paid
+
+  # xAI Grok subscription device OAuth. ToS/ban risk. Prefer adapter xai + XAI_API_KEY.
+  # peaproxy auth login --provider xai
+  # - id: xai-oauth
+  #   adapter: xai_oauth
+  #   tier: paid
+
+  # Kimi / Meta Muse: peaproxy auth login --provider kimi|kimi-ai|meta (ToS/ban risk).
+  # Qwen consumer OAuth is not yet (no CPA flow); use openai_compat + a Qwen key.

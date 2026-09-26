@@ -14,6 +14,9 @@ type Token struct {
 	AccountID    string
 	Email        string
 	PlanType     string
+	// Extra holds provider-specific fields (project_id, device_id, token_endpoint).
+	// Values may be secrets (dca_token); never log.
+	Extra map[string]string
 }
 
 type tokenResponse struct {
@@ -76,4 +79,52 @@ func (t Token) NeedsRefresh(skew time.Duration) bool {
 // Valid reports whether an access token is present.
 func (t Token) Valid() bool {
 	return t.AccessToken != ""
+}
+
+// ExtraGet returns a metadata value.
+func (t Token) ExtraGet(key string) string {
+	if t.Extra == nil {
+		return ""
+	}
+	return t.Extra[key]
+}
+
+// WithExtra copies t and sets one Extra key.
+func (t Token) WithExtra(key, value string) Token {
+	next := make(map[string]string, len(t.Extra)+1)
+	for k, v := range t.Extra {
+		next[k] = v
+	}
+	if value == "" {
+		delete(next, key)
+	} else {
+		next[key] = value
+	}
+	t.Extra = next
+	return t
+}
+
+// KeepExtra copies Extra (and empty-safe identity fields) from prev after refresh.
+func (t Token) KeepExtra(prev Token) Token {
+	if t.Email == "" {
+		t.Email = prev.Email
+	}
+	if t.AccountID == "" {
+		t.AccountID = prev.AccountID
+	}
+	if t.PlanType == "" {
+		t.PlanType = prev.PlanType
+	}
+	if len(prev.Extra) == 0 {
+		return t
+	}
+	next := make(map[string]string, len(prev.Extra)+len(t.Extra))
+	for k, v := range prev.Extra {
+		next[k] = v
+	}
+	for k, v := range t.Extra {
+		next[k] = v
+	}
+	t.Extra = next
+	return t
 }

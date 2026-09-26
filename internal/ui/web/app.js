@@ -101,7 +101,7 @@ function accountsPage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Add account</h2>
-      <p class="muted">Presets for local servers, API keys, subscription OAuth, and OpenAI-compat hosts. Gemini uses Google AI Studio’s official OpenAI-compat endpoint — not generateContent. Subscription OAuth may violate provider ToS and can ban the account; PeaProxy authors are not liable. Prefer API keys.</p>
+      <p class="muted">Presets for local servers, API keys, subscription OAuth, and OpenAI-compat hosts. Gemini API keys use Google AI Studio’s official OpenAI-compat endpoint; Gemini/Antigravity subscription OAuth is a separate Cloud Code path. Subscription OAuth may violate provider ToS and can ban the account; PeaProxy authors are not liable. Prefer API keys.</p>
       <div class="row">
         <label>Preset
           <select id="preset"></select>
@@ -175,7 +175,7 @@ function accountsPage(root) {
       }
       const rows = accounts
         .map((a) => {
-          const oauth = a.adapter === "anthropic_oauth" || a.adapter === "openai_oauth";
+          const oauth = isOAuthAdapter(a.adapter);
           const login = oauth
             ? `<button class="btn" data-oauth="${escapeHtml(a.id)}">OAuth login</button>
                <button class="btn" data-cli="${escapeHtml(a.adapter)}">Copy CLI</button>`
@@ -205,8 +205,7 @@ function accountsPage(root) {
       });
       document.querySelectorAll("[data-cli]").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          const provider = btn.dataset.cli === "openai_oauth" ? "openai" : "anthropic";
-          const cmd = "peaproxy auth login --provider " + provider;
+          const cmd = "peaproxy auth login --provider " + oauthCLIProvider(btn.dataset.cli);
           try {
             await navigator.clipboard.writeText(cmd);
             toast("Copied " + cmd, "ok");
@@ -556,6 +555,34 @@ function fileToDataURL(file) {
     reader.onerror = () => reject(reader.error || new Error("read failed"));
     reader.readAsDataURL(file);
   });
+}
+
+function isOAuthAdapter(adapter) {
+  return adapter === "antigravity" || String(adapter || "").endsWith("_oauth");
+}
+
+function oauthCLIProvider(adapter) {
+  switch (adapter) {
+    case "openai_oauth":
+      return "openai";
+    case "anthropic_oauth":
+      return "anthropic";
+    case "antigravity":
+    case "gemini_oauth":
+      return "gemini";
+    case "xai_oauth":
+      return "xai";
+    case "kimi_oauth":
+      return "kimi";
+    case "kimi_ai_oauth":
+      return "kimi-ai";
+    case "meta_oauth":
+      return "meta";
+    case "qwen_oauth":
+      return "qwen";
+    default:
+      return adapter;
+  }
 }
 
 function escapeHtml(s) {

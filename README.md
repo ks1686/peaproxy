@@ -1,12 +1,12 @@
 # PeaProxy
 
-Local multi-provider AI gateway in Go: **API keys + free/local providers + Claude/Codex subscription OAuth** (ToS/ban risk; API keys remain the official path), first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
+Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse; ToS/ban risk; API keys remain the official path), first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
 
-Status: **v0.1.0-ready** (cut the tag after this checklist is green on `main`). Add Ollama, LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face, Anthropic/OpenAI/OpenRouter keys, OpenCode Zen, or Claude/Codex subscription OAuth. Live models, chat, Claude SSE, vision in Showcase, multi-account failover. **Do not tag a release from this feature PR.**
+Status: **v0.1.0-ready** (cut the tag after this checklist is green on `main`). Add Ollama, LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face, Anthropic/OpenAI/OpenRouter keys, OpenCode Zen, or subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse). Live models, chat, Claude SSE, vision in Showcase, multi-account failover. **Do not tag a release from this feature PR.**
 
 ## One-liner
 
-Maximize whatever you already pay for (Claude Pro/Max and ChatGPT/Codex subscription OAuth, **at your own risk**), fall back to keys, and treat Ollama / LM Studio / OpenRouter-free / OpenCode Zen as first-class — then expose one OpenAI-shaped and one Claude-shaped local endpoint that coding tools already speak.
+Maximize whatever you already pay for (Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse subscription OAuth, **at your own risk**), fall back to keys, and treat Ollama / LM Studio / OpenRouter-free / OpenCode Zen as first-class — then expose one OpenAI-shaped and one Claude-shaped local endpoint that coding tools already speak.
 
 ## Install
 
@@ -31,7 +31,7 @@ Open http://127.0.0.1:8317/
 
 ## Quick start
 
-1. **Accounts** — pick a preset (Ollama, LM Studio, Groq, Cerebras, Google AI Studio / Gemini, xAI, Hugging Face, Anthropic **API key**, OpenAI **API key**, Claude/Codex **subscription OAuth**, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
+1. **Accounts** — pick a preset (Ollama, LM Studio, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). OAuth presets show a ban-risk warning; prefer keys.
 2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Free/Paid/Local filter is remembered in the UI.
 3. **Showcase** — try a prompt; vision models accept an image URL or upload.
 4. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline at the local base URL (`peaproxy clients show …`).
@@ -57,7 +57,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` | Build version (`dev` unless a release ldflag) |
-| `auth` | Subscription OAuth for Claude / Codex (`--provider anthropic\|openai`). Prints a ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. |
+| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta`). Prints a ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen is stubbed not-yet. |
 | `accounts` | Configured provider accounts |
 | `models` | Live catalog (`--filter free\|paid\|local`) |
 | `status` | Bind / config path / version |

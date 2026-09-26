@@ -26,7 +26,7 @@ import (
 
 func TestDefaultRegistryHasStubAndLiveFactories(t *testing.T) {
 	r := adapters.DefaultRegistry()
-	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "anthropic_oauth", "openai_oauth", "lmstudio", "groq", "cerebras", "google", "gemini", "xai", "huggingface"} {
+	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "anthropic_oauth", "openai_oauth", "lmstudio", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "antigravity", "gemini_oauth", "xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth"} {
 		if _, err := r.Open(name, adapter.Options{ID: name, BaseURL: "http://127.0.0.1:9/v1"}); err != nil {
 			t.Fatalf("open %s: %v", name, err)
 		}
@@ -81,13 +81,17 @@ func TestOAuthAdaptersImplementAuthenticator(t *testing.T) {
 	if _, err := oa.Chat(ctx, adapter.ChatRequest{}); !errors.Is(err, adapter.ErrAuthRequired) {
 		t.Fatalf("openai_oauth without token: %v", err)
 	}
-	if _, ok := anth.(adapter.Authenticator); !ok {
-		t.Fatal("anthropic_oauth must implement Authenticator")
+	ag, err := adapters.DefaultRegistry().Open("antigravity", adapter.Options{ID: "ag", SkipLoopback: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := oa.(adapter.Authenticator); !ok {
-		t.Fatal("openai_oauth must implement Authenticator")
+	if _, err := ag.ListModels(ctx); !errors.Is(err, adapter.ErrAuthRequired) {
+		t.Fatalf("antigravity without token: %v", err)
 	}
-	if !anth.Capabilities().OAuth || !oa.Capabilities().OAuth {
+	if _, ok := ag.(adapter.Authenticator); !ok {
+		t.Fatal("antigravity must implement Authenticator")
+	}
+	if !anth.Capabilities().OAuth || !oa.Capabilities().OAuth || !ag.Capabilities().OAuth {
 		t.Fatal("OAuth capability should be advertised")
 	}
 }

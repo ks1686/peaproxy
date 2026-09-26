@@ -219,7 +219,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"version":            version.Version,
 		"bind":               cfg.Bind,
 		"port":               cfg.Port,
-		"oauth":              "claude+codex subscription (ToS risk)",
+		"oauth":              "subscription OAuth (ToS risk)",
 		"config":             s.gw.ConfigPath(),
 		"usageFile":          usagePath,
 		"requestLog":         cfg.RequestLog,
@@ -265,8 +265,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	out := []row{}
 	for _, p := range s.gw.Instances() {
 		status := "configured"
-		switch p.Adapter {
-		case "anthropic_oauth", "openai_oauth":
+		if adapters.IsOAuthAdapter(p.Adapter) {
 			if p.HasOAuth() || p.APIKey == "configured" {
 				status = "oauth-ready"
 			} else {
@@ -388,22 +387,10 @@ func (s *Server) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) cliProviderFor(id string) string {
 	for _, p := range s.gw.Instances() {
 		if p.ID == id {
-			if p.Adapter == "openai_oauth" {
-				return "openai"
-			}
-			if p.Adapter == "anthropic_oauth" {
-				return "anthropic"
-			}
+			return adapters.CLIProvider(p.Adapter)
 		}
 	}
-	return oauthCLIProvider(id)
-}
-
-func oauthCLIProvider(accountID string) string {
-	if strings.Contains(accountID, "openai") || strings.Contains(accountID, "codex") {
-		return "openai"
-	}
-	return "anthropic"
+	return adapters.CLIProvider(id)
 }
 
 func (s *Server) handleAdminCatalog(w http.ResponseWriter, r *http.Request) {

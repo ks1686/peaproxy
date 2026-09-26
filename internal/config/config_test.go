@@ -80,6 +80,7 @@ func TestOAuthTokenRoundTrip(t *testing.T) {
 			RefreshToken: "rt",
 			ExpiresAt:    "2026-09-26T12:00:00Z",
 			Email:        "a@b.c",
+			Extra:        map[string]string{"project_id": "proj-1"},
 		},
 	})
 	if err := config.Save(path, cfg); err != nil {
@@ -97,6 +98,9 @@ func TestOAuthTokenRoundTrip(t *testing.T) {
 	}
 	if found == nil || found.AccessToken != "at" || found.RefreshToken != "rt" || found.Email != "a@b.c" {
 		t.Fatalf("%#v", found)
+	}
+	if found.Extra["project_id"] != "proj-1" {
+		t.Fatalf("extra %#v", found.Extra)
 	}
 	if !found.Runtime().Valid() {
 		t.Fatal("runtime token should be valid")

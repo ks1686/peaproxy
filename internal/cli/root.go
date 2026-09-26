@@ -27,8 +27,9 @@ func NewRoot() *cobra.Command {
 		Long: `PeaProxy is a localhost gateway: subscription OAuth + API keys + free/local
 providers, a live model catalog, and OpenAI/Claude-compatible endpoints.
 
-Subscription OAuth (Claude Pro/Max, ChatGPT/Codex) is implemented and may violate
-provider ToS — see docs/OAUTH.md. API keys remain the official path.
+Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) is
+implemented and may violate provider ToS — see docs/OAUTH.md. API keys remain
+the official path.
 
 Examples:
   peaproxy serve
@@ -193,7 +194,7 @@ func statusCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: claude+codex subscription (ToS risk; docs/OAUTH.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: subscription (ToS risk; docs/OAUTH.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
 			return nil
 		},
 	}

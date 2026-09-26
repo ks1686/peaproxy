@@ -75,6 +75,8 @@ type OAuthToken struct {
 	AccountID    string `yaml:"accountId,omitempty"`
 	Email        string `yaml:"email,omitempty"`
 	PlanType     string `yaml:"planType,omitempty"`
+	// Extra is provider-specific (project_id, device_id). May contain secrets.
+	Extra map[string]string `yaml:"extra,omitempty"`
 }
 
 // ResolveKey returns the API key from env or the inline field.
@@ -101,6 +103,7 @@ func (t OAuthToken) Runtime() oauth.Token {
 		AccountID:    t.AccountID,
 		Email:        t.Email,
 		PlanType:     t.PlanType,
+		Extra:        t.Extra,
 	}
 	if t.ExpiresAt != "" {
 		if ts, err := time.Parse(time.RFC3339, t.ExpiresAt); err == nil {
@@ -119,6 +122,7 @@ func OAuthFromRuntime(tok oauth.Token) OAuthToken {
 		AccountID:    tok.AccountID,
 		Email:        tok.Email,
 		PlanType:     tok.PlanType,
+		Extra:        tok.Extra,
 	}
 	if !tok.ExpiresAt.IsZero() {
 		out.ExpiresAt = tok.ExpiresAt.UTC().Format(time.RFC3339)

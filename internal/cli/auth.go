@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -18,8 +17,8 @@ import (
 func authCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
-		Short: "Subscription OAuth login (Claude / Codex)",
-		Long: `Login with a Claude Pro/Max or ChatGPT/Codex subscription.
+		Short: "Subscription OAuth login",
+		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse).
 
 ` + oauth.LiabilityWarning() + `
 
@@ -27,6 +26,10 @@ Examples:
   peaproxy auth login --provider anthropic
   peaproxy auth login --provider openai
   peaproxy auth login --provider openai --device
+  peaproxy auth login --provider gemini
+  peaproxy auth login --provider xai
+  peaproxy auth login --provider kimi
+  peaproxy auth login --provider meta
   peaproxy auth login --provider anthropic --print-url
 `,
 	}
@@ -39,19 +42,19 @@ Examples:
 	)
 	login := &cobra.Command{
 		Use:   "login",
-		Short: "Start Claude or Codex subscription OAuth",
+		Short: "Start subscription OAuth (ToS/ban risk)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
 			if provider == "" {
-				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  peaproxy auth login --provider openai")
+				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  peaproxy auth login --provider openai\n  peaproxy auth login --provider gemini")
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), oauth.LiabilityWarning())
-			adapterName, err := oauthAdapterName(provider)
+			adapterName, err := adapters.OAuthAdapterName(provider)
 			if err != nil {
 				return err
 			}
 			if accountID == "" {
-				accountID = defaultOAuthAccountID(adapterName)
+				accountID = adapters.DefaultOAuthAccountID(adapterName)
 			}
 			opts := adapter.Options{
 				ID:           accountID,
@@ -92,7 +95,7 @@ Examples:
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Could not open a browser (%v). Open the URL manually.\n", err)
 				}
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Waiting for OAuth callback (5m). If the browser never returns, paste the redirect URL and re-run, or use --device for Codex.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Waiting for OAuth callback or device approval (5m). Codex also supports --device.")
 			waitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 			defer cancel()
 			if err := auth.AuthComplete(waitCtx, sess, ""); err != nil {
@@ -131,33 +134,13 @@ Examples:
 			return nil
 		},
 	}
-	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai")
-	login.Flags().StringVar(&accountID, "id", "", "Account id to write (default anthropic-oauth / openai-oauth)")
-	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (no loopback port)")
+	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen")
+	login.Flags().StringVar(&accountID, "id", "", "Account id to write (default per provider)")
+	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (xAI/Kimi/Meta already use device code)")
 	login.Flags().BoolVar(&noBrowser, "no-browser", false, "Do not open a browser")
 	login.Flags().BoolVar(&printURL, "print-url", false, "Print the authorize URL and exit without waiting")
 	cmd.AddCommand(login)
 	return cmd
-}
-
-func oauthAdapterName(provider string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic", "anthropic_oauth", "claude":
-		return "anthropic_oauth", nil
-	case "openai", "openai_oauth", "chatgpt", "codex":
-		return "openai_oauth", nil
-	default:
-		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai). Gemini/xAI OAuth is not implemented", provider)
-	}
-}
-
-func defaultOAuthAccountID(adapterName string) string {
-	switch adapterName {
-	case "anthropic_oauth":
-		return "anthropic-oauth"
-	default:
-		return "openai-oauth"
-	}
 }
 
 func openBrowser(u string) error {

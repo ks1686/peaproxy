@@ -20,6 +20,11 @@ Adapters in this repo today:
 | `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
 | `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
 | `openai_oauth` | ChatGPT/Codex subscription OAuth + Responses→chat. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
+| `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
+| `xai_oauth` | xAI Grok subscription device OAuth + CLI chat proxy. **ToS/ban risk.** | OAuth (`--provider xai`) | `https://cli-chat-proxy.grok.com/v1` |
+| `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |
+| `meta_oauth` | Meta Muse device OAuth + minted key. **ToS/ban risk.** | OAuth (`--provider meta`) | `https://api.meta.ai/v1` |
+| `qwen_oauth` | Stub: CPA has no Qwen consumer OAuth | n/a | use `openai_compat` + a Qwen key |
 
 Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default base URL and catalog tier, then delegate to `openai_compat`.
 
@@ -29,11 +34,13 @@ Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default b
 
 `https://generativelanguage.googleapis.com/v1beta/openai`
 
-PeaProxy does **not** call `generateContent`. Set `GEMINI_API_KEY` and adapter `google` or alias `gemini`.
+PeaProxy **key** adapters do **not** call `generateContent`. Set `GEMINI_API_KEY` and adapter `google` or alias `gemini`.
+
+**Gemini consumer / Antigravity subscription OAuth** is a separate adapter (`antigravity`, CLI `--provider gemini`). It uses Google OAuth for the public Antigravity IDE client and Cloud Code `generateContent`. **ToS/ban risk** — [OAUTH.md](OAUTH.md). Prefer the AI Studio key.
 
 ## Paid / subscription
 
-**P0 OAuth (Claude + Codex shipped):** Anthropic Claude Pro/Max and OpenAI ChatGPT/Codex subscription login. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys. Gemini/Grok/Kimi/Qwen consumer OAuth is deferred.
+**P0 OAuth:** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys. Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Devin skipped (not a generic chat upstream).
 
 **P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `openrouter`.
 
