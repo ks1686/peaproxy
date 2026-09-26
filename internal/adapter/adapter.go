@@ -99,11 +99,18 @@ func (e HTTPError) Error() string {
 
 // Options is the generic constructor input for stub adapters.
 type Options struct {
-	ID        string
-	BaseURL   string
-	APIKey    string
-	SessionID string
-	Tier      catalog.Tier
+	ID           string
+	BaseURL      string
+	APIKey       string
+	SessionID    string
+	Tier         catalog.Tier
+	ExtraHeaders map[string]string
+}
+
+// NativeMessages is implemented by adapters that speak Anthropic /v1/messages natively.
+type NativeMessages interface {
+	Messages(ctx context.Context, raw []byte) ([]byte, error)
+	MessagesStream(ctx context.Context, raw []byte, w io.Writer) error
 }
 
 // Registry looks up adapter factories by name.

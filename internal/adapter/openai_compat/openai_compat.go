@@ -19,13 +19,14 @@ const Name = "openai_compat"
 
 // Adapter is a generic OpenAI-compatible HTTP client (LM Studio, llama.cpp, Groq, OpenRouter, …).
 type Adapter struct {
-	id        string
-	baseURL   string
-	apiKey    string
-	sessionID string
-	tier      catalog.Tier
-	client    *http.Client
-	provider  string
+	id           string
+	baseURL      string
+	apiKey       string
+	sessionID    string
+	tier         catalog.Tier
+	client       *http.Client
+	provider     string
+	extraHeaders map[string]string
 }
 
 // New requires a base URL. The API key may be empty for local servers.
@@ -42,13 +43,14 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		tier = catalog.TierPaid
 	}
 	return &Adapter{
-		id:        id,
-		baseURL:   strings.TrimRight(opts.BaseURL, "/"),
-		apiKey:    opts.APIKey,
-		sessionID: opts.SessionID,
-		tier:      tier,
-		client:    &http.Client{Timeout: 0},
-		provider:  Name,
+		id:           id,
+		baseURL:      strings.TrimRight(opts.BaseURL, "/"),
+		apiKey:       opts.APIKey,
+		sessionID:    opts.SessionID,
+		tier:         tier,
+		client:       &http.Client{Timeout: 0},
+		provider:     Name,
+		extraHeaders: opts.ExtraHeaders,
 	}, nil
 }
 
@@ -107,13 +109,14 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	out := make([]catalog.Model, 0, len(list.Data))
 	for _, m := range list.Data {
 		out = append(out, catalog.Model{
-			ID:        m.ID,
-			Provider:  a.provider,
-			AccountID: a.id,
-			Tier:      inferTier(m.ID, a.tier),
-			Status:    "ready",
-			Exposed:   true,
-			Routable:  true,
+			ID:         m.ID,
+			Provider:   a.provider,
+			AccountID:  a.id,
+			Tier:       inferTier(m.ID, a.tier),
+			Modalities: catalog.InferModalities(m.ID),
+			Status:     "ready",
+			Exposed:    true,
+			Routable:   true,
 		})
 	}
 	return out, nil
@@ -194,6 +197,11 @@ func (a *Adapter) auth(req *http.Request) {
 	}
 	if a.sessionID != "" {
 		req.Header.Set("x-session-id", a.sessionID)
+	}
+	for k, v := range a.extraHeaders {
+		if k != "" && v != "" {
+			req.Header.Set(k, v)
+		}
 	}
 }
 

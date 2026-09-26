@@ -37,8 +37,8 @@ type openAIRequest struct {
 }
 
 type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
 }
 
 type openAIResponse struct {
@@ -88,10 +88,14 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 	}
 	msgs := make([]openAIMessage, 0, len(in.Messages)+1)
 	if sys := systemText(in.System); sys != "" {
-		msgs = append(msgs, openAIMessage{Role: "system", Content: sys})
+		rawSys, err := json.Marshal(sys)
+		if err != nil {
+			return nil, adapter.ChatRequest{}, err
+		}
+		msgs = append(msgs, openAIMessage{Role: "system", Content: rawSys})
 	}
 	for _, m := range in.Messages {
-		text, err := contentText(m.Content)
+		content, err := claudeContentToOpenAI(m.Content)
 		if err != nil {
 			return nil, adapter.ChatRequest{}, err
 		}
@@ -99,7 +103,7 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 		if role == "human" {
 			role = "user"
 		}
-		msgs = append(msgs, openAIMessage{Role: role, Content: text})
+		msgs = append(msgs, openAIMessage{Role: role, Content: content})
 	}
 	out := openAIRequest{
 		Model:     in.Model,
@@ -120,7 +124,8 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 	}
 	chatMsgs := make([]adapter.Message, 0, len(msgs))
 	for _, m := range msgs {
-		chatMsgs = append(chatMsgs, adapter.Message{Role: m.Role, Content: m.Content})
+		text, _ := contentText(m.Content)
+		chatMsgs = append(chatMsgs, adapter.Message{Role: m.Role, Content: text})
 	}
 	return body, adapter.ChatRequest{Model: in.Model, Messages: chatMsgs, Stream: in.Stream, Raw: body}, nil
 }
@@ -201,6 +206,99 @@ func contentText(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("refusing to drop non-text Claude content into an empty message")
 	}
 	return b.String(), nil
+}
+
+type oaImagePart struct {
+	URL string `json:"url"`
+}
+
+type oaContentPart struct {
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	ImageURL *oaImagePart `json:"image_url,omitempty"`
+}
+
+func claudeContentToOpenAI(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.Marshal("")
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return json.Marshal(s)
+	}
+	var blocks []struct {
+		Type   string `json:"type"`
+		Text   string `json:"text"`
+		Source *struct {
+			Type      string `json:"type"`
+			URL       string `json:"url"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		} `json:"source"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, fmt.Errorf("unsupported Claude content: %w", err)
+	}
+	var parts []oaContentPart
+	var textOnly strings.Builder
+	hasImage := false
+	for _, bl := range blocks {
+		switch bl.Type {
+		case "text", "":
+			textOnly.WriteString(bl.Text)
+			parts = append(parts, oaContentPart{Type: "text", Text: bl.Text})
+		case "image":
+			hasImage = true
+			url, err := claudeImageURL(bl.Source)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, oaContentPart{Type: "image_url", ImageURL: &oaImagePart{URL: url}})
+		default:
+			if textOnly.Len() == 0 && !hasImage {
+				return nil, fmt.Errorf("refusing to drop non-text Claude content into an empty message")
+			}
+		}
+	}
+	if hasImage {
+		if len(parts) == 0 {
+			return nil, fmt.Errorf("empty multimodal content")
+		}
+		return json.Marshal(parts)
+	}
+	return json.Marshal(textOnly.String())
+}
+
+func claudeImageURL(src *struct {
+	Type      string `json:"type"`
+	URL       string `json:"url"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}) (string, error) {
+	if src == nil {
+		return "", fmt.Errorf("claude image missing source")
+	}
+	switch src.Type {
+	case "url":
+		if src.URL == "" {
+			return "", fmt.Errorf("claude image url empty")
+		}
+		return src.URL, nil
+	case "base64":
+		if src.Data == "" {
+			return "", fmt.Errorf("claude image base64 empty")
+		}
+		if strings.HasPrefix(src.Data, "data:") {
+			return src.Data, nil
+		}
+		mt := src.MediaType
+		if mt == "" {
+			mt = "image/png"
+		}
+		return "data:" + mt + ";base64," + src.Data, nil
+	default:
+		return "", fmt.Errorf("unsupported claude image source %q", src.Type)
+	}
 }
 
 type claudeTool struct {

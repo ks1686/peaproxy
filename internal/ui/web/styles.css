@@ -54,7 +54,7 @@ input, select, textarea {
   border-radius: 8px;
   padding: 0.4rem 0.55rem;
 }
-textarea { width: 100%; min-height: 5rem; }
+input[type="checkbox"] { width: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.4rem 0.35rem; border-bottom: 1px solid var(--border); }
 .filters { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.75rem 0; }

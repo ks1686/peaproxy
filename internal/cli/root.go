@@ -14,6 +14,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/clients"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/gateway"
+	"github.com/ks1686/peaproxy/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -37,9 +38,11 @@ Examples:
   peaproxy clients show opencode
   peaproxy clients show claude-code
 `,
+		Version:       version.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	root.SetVersionTemplate("peaproxy {{.Version}}\n")
 	root.PersistentFlags().StringVar(&configPath, "config", "", "Path to peaproxy.yaml (default: user config dir)")
 
 	root.AddCommand(serveCmd(&configPath))
@@ -204,7 +207,7 @@ func statusCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: v0.1\nlisten: %s\nconfig: %s\noauth: not implemented\nui: http://%s/\n", cfg.Addr(), path, cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\noauth: not implemented\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.Addr())
 			return nil
 		},
 	}

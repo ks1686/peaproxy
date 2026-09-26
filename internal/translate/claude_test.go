@@ -33,10 +33,21 @@ func TestToOpenAIUsesStructsNotMaps(t *testing.T) {
 }
 
 func TestRefusesEmptyAfterDroppingNonText(t *testing.T) {
-	in := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64"}}]}]}`)
+	in := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"tool_use","id":"x"}]}]}`)
 	_, _, err := ToOpenAI(in)
 	if err == nil {
-		t.Fatal("expected error for silent multimodal drop")
+		t.Fatal("expected error for silent tool_use drop")
+	}
+}
+
+func TestToOpenAIPreservesVision(t *testing.T) {
+	in := []byte(`{"model":"m","max_tokens":16,"messages":[{"role":"user","content":[{"type":"text","text":"what"},{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}]}]}`)
+	out, _, err := ToOpenAI(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"image_url"`) || !strings.Contains(string(out), "https://example.com/a.png") {
+		t.Fatalf("%s", out)
 	}
 }
 

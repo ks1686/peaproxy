@@ -6,7 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapters"
@@ -18,6 +22,8 @@ import (
 	"github.com/ks1686/peaproxy/internal/usage"
 )
 
+const cooldownTTL = 30 * time.Second
+
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
 	mu     sync.RWMutex
@@ -27,6 +33,15 @@ type Gateway struct {
 	inst   []instance
 	models []catalog.Model
 	Usage  *usage.Store
+	cool   map[string]Cooldown
+	rr     uint64
+}
+
+// Cooldown is a temporary skip of an account after 429/401.
+type Cooldown struct {
+	AccountID string    `json:"accountId"`
+	Until     time.Time `json:"until"`
+	Reason    string    `json:"reason"`
 }
 
 type instance struct {
@@ -39,7 +54,15 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, path: path, reg: reg, Usage: &usage.Store{}}
+	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}}
+	if path != "" {
+		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
+		if cfg.RequestLog {
+			g.Usage.SetRequestLog(filepath.Join(filepath.Dir(path), "requests.log"))
+		}
+	} else {
+		g.Usage = &usage.Store{}
+	}
 	if err := g.rebuild(); err != nil {
 		return nil, err
 	}
@@ -157,57 +180,194 @@ func (g *Gateway) Annotated(filter catalog.Filter) []catalog.Model {
 	return catalog.AllAnnotated(g.models, q)
 }
 
-// Chat proxies a non-stream OpenAI chat.completions body.
+// Chat proxies a non-stream OpenAI chat.completions body with round-robin + 429/401 failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, string, error) {
 	peek := jsonx.PeekBody(raw)
-	adp, account, err := g.route(peek.Model)
-	if err != nil {
-		return adapter.ChatResponse{}, "", err
+	cands := g.candidates(peek.Model)
+	if len(cands) == 0 {
+		return adapter.ChatResponse{}, "", router.ErrNoAccount
 	}
-	resp, err := adp.Chat(ctx, adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: false})
-	return resp, account, err
+	req := adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: false}
+	var last error
+	var lastAccount string
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		resp, err := inst.Adapter.Chat(ctx, req)
+		if err == nil {
+			return resp, lastAccount, nil
+		}
+		last = err
+		if retryable(err) {
+			g.markCooldown(inst.Provider.ID, err)
+			continue
+		}
+		return adapter.ChatResponse{}, lastAccount, err
+	}
+	return adapter.ChatResponse{}, lastAccount, last
 }
 
-// ChatStream proxies SSE.
+// ChatStream proxies SSE with failover before any bytes are written.
 func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
 	peek := jsonx.PeekBody(raw)
-	adp, account, err := g.route(peek.Model)
-	if err != nil {
-		return "", err
+	cands := g.candidates(peek.Model)
+	if len(cands) == 0 {
+		return "", router.ErrNoAccount
 	}
-	return account, adp.ChatStream(ctx, adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: true}, w)
+	cw := &countWriter{w: w}
+	req := adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: true}
+	var last error
+	var lastAccount string
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		err := inst.Adapter.ChatStream(ctx, req, cw)
+		if err == nil {
+			return lastAccount, nil
+		}
+		last = err
+		if cw.n > 0 {
+			return lastAccount, err
+		}
+		if retryable(err) {
+			g.markCooldown(inst.Provider.ID, err)
+			continue
+		}
+		return lastAccount, err
+	}
+	return lastAccount, last
 }
 
-// ClaudeChat translates Messages → OpenAI → Messages.
+// ClaudeChat uses native Messages when available, otherwise OpenAI translation.
 func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, error) {
-	_, req, err := translate.ToOpenAI(raw)
-	if err != nil {
-		return nil, "", err
+	peek := jsonx.PeekBody(raw)
+	cands := g.candidates(peek.Model)
+	if len(cands) == 0 {
+		return nil, "", router.ErrNoAccount
 	}
-	adp, account, err := g.route(req.Model)
-	if err != nil {
-		return nil, "", err
+	oaBody, oaReq, xerr := translate.ToOpenAI(raw)
+	if xerr == nil {
+		oaReq.Raw = oaBody
+		oaReq.Stream = false
 	}
-	resp, err := adp.Chat(ctx, req)
-	if err != nil {
-		return nil, account, err
-	}
-	oaRaw := resp.Raw
-	if len(oaRaw) == 0 {
-		oaRaw, err = json.Marshal(openAIShim{
-			ID:    "peaproxy",
-			Model: req.Model,
-			Choices: []openAIChoice{{
-				Message:      openAIMsg{Role: "assistant", Content: resp.Content},
-				FinishReason: "stop",
-			}},
-		})
-		if err != nil {
-			return nil, account, err
+	var last error
+	var lastAccount string
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
+			out, err := nm.Messages(ctx, jsonx.SetStream(raw, false))
+			if err == nil {
+				return out, lastAccount, nil
+			}
+			last = err
+			if retryable(err) {
+				g.markCooldown(inst.Provider.ID, err)
+				continue
+			}
+			return nil, lastAccount, err
 		}
+		if xerr != nil {
+			last = xerr
+			continue
+		}
+		resp, err := inst.Adapter.Chat(ctx, oaReq)
+		if err != nil {
+			last = err
+			if retryable(err) {
+				g.markCooldown(inst.Provider.ID, err)
+				continue
+			}
+			return nil, lastAccount, err
+		}
+		oaRaw := resp.Raw
+		if len(oaRaw) == 0 {
+			oaRaw, err = json.Marshal(openAIShim{
+				ID:    "peaproxy",
+				Model: oaReq.Model,
+				Choices: []openAIChoice{{
+					Message:      openAIMsg{Role: "assistant", Content: resp.Content},
+					FinishReason: "stop",
+				}},
+			})
+			if err != nil {
+				return nil, lastAccount, err
+			}
+		}
+		out, err := translate.FromOpenAI(oaRaw, oaReq.Model)
+		return out, lastAccount, err
 	}
-	out, err := translate.FromOpenAI(oaRaw, req.Model)
-	return out, account, err
+	if last == nil {
+		last = xerr
+	}
+	if last == nil {
+		last = router.ErrNoAccount
+	}
+	return nil, lastAccount, last
+}
+
+// ClaudeChatStream writes true Anthropic SSE (native pass-through or converted OpenAI stream).
+func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
+	peek := jsonx.PeekBody(raw)
+	cands := g.candidates(peek.Model)
+	if len(cands) == 0 {
+		return "", router.ErrNoAccount
+	}
+	oaBody, oaReq, xerr := translate.ToOpenAI(raw)
+	if xerr == nil {
+		oaReq.Raw = jsonx.SetStream(oaBody, true)
+		oaReq.Stream = true
+	}
+	cw := &countWriter{w: w}
+	var last error
+	var lastAccount string
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
+			err := nm.MessagesStream(ctx, jsonx.SetStream(raw, true), cw)
+			if err == nil {
+				return lastAccount, nil
+			}
+			last = err
+			if cw.n > 0 {
+				return lastAccount, err
+			}
+			if retryable(err) {
+				g.markCooldown(inst.Provider.ID, err)
+				continue
+			}
+			return lastAccount, err
+		}
+		if xerr != nil {
+			last = xerr
+			continue
+		}
+		pr, pw := io.Pipe()
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- translate.OpenAISSEToClaude(pr, cw, peek.Model)
+			_ = pr.Close()
+		}()
+		err := inst.Adapter.ChatStream(ctx, oaReq, pw)
+		_ = pw.Close()
+		convErr := <-errCh
+		if err == nil {
+			return lastAccount, convErr
+		}
+		last = err
+		if cw.n > 0 {
+			return lastAccount, err
+		}
+		if retryable(err) {
+			g.markCooldown(inst.Provider.ID, err)
+			continue
+		}
+		return lastAccount, err
+	}
+	if last == nil {
+		last = xerr
+	}
+	if last == nil {
+		last = router.ErrNoAccount
+	}
+	return lastAccount, last
 }
 
 type openAIShim struct {
@@ -226,21 +386,121 @@ type openAIMsg struct {
 	Content string `json:"content"`
 }
 
-func (g *Gateway) route(model string) (adapter.Adapter, string, error) {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+type countWriter struct {
+	w io.Writer
+	n int
+}
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += n
+	return n, err
+}
+
+func retryable(err error) bool {
+	var he adapter.HTTPError
+	if errors.As(err, &he) {
+		return he.Status == http.StatusTooManyRequests || he.Status == http.StatusUnauthorized
+	}
+	return false
+}
+
+func (g *Gateway) markCooldown(id string, err error) {
+	reason := "failover"
+	var he adapter.HTTPError
+	if errors.As(err, &he) {
+		reason = fmt.Sprintf("HTTP %d", he.Status)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.cool[id] = Cooldown{AccountID: id, Until: time.Now().Add(cooldownTTL), Reason: reason}
+}
+
+// Cooldowns returns active account cooldowns for the Health UI.
+func (g *Gateway) Cooldowns() []Cooldown {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	var out []Cooldown
+	for id, c := range g.cool {
+		if now.After(c.Until) {
+			delete(g.cool, id)
+			continue
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
+	return out
+}
+
+func (g *Gateway) candidates(model string) []instance {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	for id, c := range g.cool {
+		if !now.Before(c.Until) {
+			delete(g.cool, id)
+		}
+	}
 	q := g.queryLocked()
-	if m, ok := catalog.FindRoutable(g.models, q, model); ok {
+	ids := catalog.AccountsForModel(g.models, q, model)
+	var matched []instance
+	if len(ids) > 0 {
+		want := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			want[id] = struct{}{}
+		}
 		for _, inst := range g.inst {
-			if inst.Provider.ID == m.AccountID {
-				return inst.Adapter, inst.Provider.ID, nil
+			if _, ok := want[inst.Provider.ID]; ok {
+				matched = append(matched, inst)
 			}
 		}
 	}
-	if len(g.inst) == 0 {
-		return nil, "", router.ErrNoAccount
+	if len(matched) == 0 {
+		matched = append(matched, g.inst...)
 	}
-	return g.inst[0].Adapter, g.inst[0].Provider.ID, nil
+	hot := make([]instance, 0, len(matched))
+	cool := make([]instance, 0)
+	for _, inst := range matched {
+		if c, ok := g.cool[inst.Provider.ID]; ok && now.Before(c.Until) {
+			cool = append(cool, inst)
+			continue
+		}
+		hot = append(hot, inst)
+	}
+	pool := hot
+	if len(pool) == 0 {
+		pool = cool
+	}
+	if len(pool) == 0 {
+		return nil
+	}
+	start := int(g.rr % uint64(len(pool)))
+	g.rr++
+	out := make([]instance, 0, len(pool))
+	out = append(out, pool[start:]...)
+	out = append(out, pool[:start]...)
+	return out
+}
+
+// SetRequestLog toggles the opt-in redacted JSONL log and persists config.
+func (g *Gateway) SetRequestLog(on bool) error {
+	g.mu.Lock()
+	g.cfg.RequestLog = on
+	path := g.path
+	cfg := g.cfg
+	g.mu.Unlock()
+	if g.Usage != nil {
+		if on && path != "" {
+			g.Usage.SetRequestLog(filepath.Join(filepath.Dir(path), "requests.log"))
+		} else {
+			g.Usage.SetRequestLog("")
+		}
+	}
+	if path != "" {
+		return config.Save(path, cfg)
+	}
+	return nil
 }
 
 // AddProvider appends an account, rebuilds, saves, and refreshes.
