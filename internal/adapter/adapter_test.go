@@ -464,6 +464,19 @@ func TestOpenAICompatCreateEmbeddingsProxiesUpstream(t *testing.T) {
 	if !strings.Contains(gotBody, `"input":"hello pea"`) {
 		t.Fatalf("body %s", gotBody)
 	}
+	arrayResp, err := emb.CreateEmbeddings(context.Background(), adapter.EmbeddingRequest{
+		Model: "text-embedding-3-small",
+		Raw:   []byte(`{"model":"text-embedding-3-small","input":["a","b"],"encoding_format":"float","dimensions":3}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, `"input":["a","b"]`) || !strings.Contains(gotBody, `"encoding_format":"float"`) {
+		t.Fatalf("array body %s", gotBody)
+	}
+	if arrayResp.Count != 1 {
+		t.Fatalf("array resp %#v", arrayResp)
+	}
 	if resp.Count != 1 || resp.Dimensions != 3 {
 		t.Fatalf("parsed %#v", resp)
 	}

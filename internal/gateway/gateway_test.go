@@ -907,3 +907,26 @@ func TestCreateEmbeddingsRefusesChatOnlyModelWithoutUpstream(t *testing.T) {
 		t.Fatal("must not call upstream /embeddings for a chat-only model")
 	}
 }
+
+func TestCreateEmbeddingsRequiresModel(t *testing.T) {
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+				return
+			}
+			t.Fatal("must not call upstream without a model")
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "text-embedding-3-small"}}})
+				return
+			}
+			t.Fatal("must not call upstream without a model")
+		},
+	)
+	_, _, err := gw.CreateEmbeddings(context.Background(), []byte(`{"input":"hello"}`))
+	if !errors.Is(err, adapter.ErrEmbeddingModelRequired) {
+		t.Fatalf("want ErrEmbeddingModelRequired, got %v", err)
+	}
+}

@@ -224,7 +224,7 @@ func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingReq
 		payload := struct {
 			Model string `json:"model"`
 			Input string `json:"input"`
-		}{Model: req.Model}
+		}{Model: req.Model, Input: req.Input}
 		var err error
 		raw, err = json.Marshal(payload)
 		if err != nil {
@@ -242,7 +242,7 @@ func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingReq
 		return adapter.EmbeddingResponse{}, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		return adapter.EmbeddingResponse{}, err
 	}

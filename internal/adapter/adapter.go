@@ -197,6 +197,7 @@ func GenerateImageFrom(inner Adapter, ctx context.Context, req ImageRequest) (Im
 // EmbeddingRequest is a provider-neutral embeddings call.
 type EmbeddingRequest struct {
 	Model string
+	Input string
 	// Raw is the original client body for adapters that pass through OpenAI-compat JSON.
 	Raw []byte
 }
