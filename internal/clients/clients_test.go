@@ -10,7 +10,7 @@ func TestListIncludesHarnessesFromPlan(t *testing.T) {
 	for _, n := range List() {
 		got[n] = true
 	}
-	for _, want := range []string{"cursor", "claude-code", "opencode", "pi", "codex", "continue", "cline", "amp"} {
+	for _, want := range []string{"cursor", "claude-code", "opencode", "pi", "codex", "continue", "cline", "amp", "droid"} {
 		if !got[want] {
 			t.Fatalf("missing preset %s in %v", want, List())
 		}
@@ -151,5 +151,24 @@ func TestCodexPresetDocumentsResponses(t *testing.T) {
 	}
 	if !strings.Contains(p.Notes, "stream_options") {
 		t.Fatal("codex notes should mention stream_options strip on OAuth")
+	}
+}
+
+func TestDroidPresetIsBYOKClientNotUpstream(t *testing.T) {
+	p, ok := Get("droid")
+	if !ok {
+		t.Fatal("missing droid")
+	}
+	if p.Cloak != "off" {
+		t.Fatalf("droid cloak %q", p.Cloak)
+	}
+	if !strings.Contains(p.Snippet, "generic-chat-completion-api") {
+		t.Fatalf("droid must use Factory BYOK chat-completions: %s", p.Snippet)
+	}
+	if !strings.Contains(p.Snippet, "http://127.0.0.1:8317/v1") {
+		t.Fatalf("droid base: %s", p.Snippet)
+	}
+	if !strings.Contains(p.Notes, "not a chat-model upstream") {
+		t.Fatalf("droid notes: %s", p.Notes)
 	}
 }

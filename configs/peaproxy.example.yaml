@@ -152,6 +152,13 @@ providers:
   #   baseURL: https://opencode.ai/zen/v1
   #   apiKeyEnv: OPENCODE_API_KEY
 
+  # OpenCode Go subscription (distinct from Zen). Official key from opencode.ai/auth.
+  # - id: opencode-go
+  #   adapter: opencode_go
+  #   tier: paid
+  #   baseURL: https://opencode.ai/zen/go/v1
+  #   apiKeyEnv: OPENCODE_API_KEY
+
   # Claude Pro/Max subscription OAuth. ToS/ban risk — docs/OAUTH.md.
   # peaproxy auth login --provider anthropic
   # Tokens are stored in the OS keychain / secrets.enc, not in this YAML.
@@ -180,4 +187,6 @@ providers:
   #   tier: paid
 
   # Kimi / Meta Muse: peaproxy auth login --provider kimi|kimi-ai|meta (ToS/ban risk).
+  # GitHub Copilot: peaproxy auth login --provider copilot (ToS/ban risk; not GitHub Models).
   # Qwen consumer OAuth is not yet (no CPA flow); use openai_compat + a Qwen key.
+  # Factory/Droid chat upstream is not yet; point Droid at PeaProxy (peaproxy clients show droid).

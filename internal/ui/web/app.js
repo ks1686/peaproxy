@@ -78,10 +78,12 @@ function onboardingCard() {
       <button class="btn" type="button" data-pick="jan-local">Jan local</button>
       <button class="btn" type="button" data-pick="anthropic-key">Anthropic API key</button>
       <button class="btn" type="button" data-pick="openai-key">OpenAI API key</button>
+      <button class="btn" type="button" data-pick="opencode-go">OpenCode Go key</button>
     </div>
     <p class="warn">OAuth is last-resort. Use only if you accept the ban risk.</p>
     <div class="row">
       <button class="btn" type="button" data-pick="anthropic-oauth">Claude OAuth</button>
+      <button class="btn" type="button" data-pick="copilot-oauth">Copilot OAuth</button>
       <button class="btn" type="button" data-jump="clients">Then verify a client</button>
     </div>
   </div>`;
@@ -1054,6 +1056,12 @@ function oauthCLIProvider(adapter) {
       return "meta";
     case "qwen_oauth":
       return "qwen";
+    case "copilot_oauth":
+      return "copilot";
+    case "factory_oauth":
+      return "factory";
+    case "opencode_go":
+      return "opencode-go";
     default:
       return adapter;
   }

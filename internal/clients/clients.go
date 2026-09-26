@@ -158,6 +158,34 @@ Format: chat-completions
 `,
 		VerifyTODO: "peaproxy clients verify amp --chat",
 	},
+	"droid": {
+		Name:       "droid",
+		BaseURL:    "http://127.0.0.1:8317/v1",
+		AuthHeader: "Authorization: Bearer peaproxy",
+		Cloak:      "off",
+		Notes:      "Factory Droid is a client of PeaProxy, not a chat-model upstream. Factory has no public consumer chat OAuth. Use BYOK generic-chat-completion-api (chat completions) or provider openai for Responses. Cloak defaults off.",
+		Snippet: `# ~/.factory/settings.json — Droid BYOK pointing at PeaProxy
+{
+  "customModels": [
+    {
+      "model": "REPLACE_WITH_CATALOG_ID",
+      "displayName": "PeaProxy (chat completions)",
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "apiKey": "peaproxy",
+      "provider": "generic-chat-completion-api"
+    },
+    {
+      "model": "REPLACE_WITH_CATALOG_ID",
+      "displayName": "PeaProxy (Responses)",
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "apiKey": "peaproxy",
+      "provider": "openai"
+    }
+  ]
+}
+`,
+		VerifyTODO: "peaproxy clients verify droid --chat",
+	},
 }
 
 // List returns preset names in stable order.

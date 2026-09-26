@@ -9,8 +9,8 @@ import (
 // Owner override 2026-09-26: ship subscription OAuth despite ToS/ban risk.
 func LiabilityWarning() string {
 	return `WARNING: Subscription OAuth (Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity,
-xAI Grok, Kimi, Meta Muse) may violate the provider's terms of service and can
-result in account suspension or ban.
+xAI Grok, Kimi, Meta Muse, GitHub Copilot) may violate the provider's terms of
+service and can result in account suspension or ban.
 PeaProxy authors are not liable for bans, suspensions, lost access, or other
 damages. You proceed at your own risk.
 

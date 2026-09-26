@@ -4,7 +4,7 @@ Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). A
 
 `peaproxy clients show <name>` prints copy-ready snippets.
 
-`peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
+`peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp/Droid, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
 
 Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log tail, and richer health also live on the CLI (`peaproxy catalog pin|rename|hide`, `peaproxy requests tail`, `peaproxy health` matching `GET /admin/health`; `peaproxy accounts add <preset>` for Jan/GPT4All/SambaNova/Workers AI).
 
@@ -22,6 +22,7 @@ Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log t
 | Continue | OpenAI-compat | `.../v1` | off | `apiBase` in `~/.continue/config.yaml` |
 | Cline | OpenAI Compatible provider | `.../v1` | off | Must include `/v1`; Cline sends `stream_options` (forwarded) |
 | Amp | Custom URL `chat-completions` | `.../v1` | off | **Do not** set `amp.url` / `AMP_URL` to PeaProxy. No Amp WebSocket |
+| Droid | Factory BYOK | `.../v1` | off | `generic-chat-completion-api` for chat; `provider: openai` for Responses. Factory is **not** a chat-model upstream |
 
 ## Cursor
 
@@ -122,6 +123,35 @@ Format: chat-completions
 
 Amp may send `stream_options`. Chat Completions forwards it. Codex OAuth (`openai_oauth`) drops `stream_options` because `chatgpt.com` Codex `/responses` rejects it. PeaProxy does not speak Amp WebSocket or `/api/provider/*` namespaced routes.
 
+## Factory Droid (BYOK client)
+
+Factory Droid is a **coding harness**, not a PeaProxy chat-model adapter. Factory has **no public consumer chat OAuth**. Point Droid at PeaProxy with BYOK in `~/.factory/settings.json`:
+
+```json
+{
+  "customModels": [
+    {
+      "model": "REPLACE_WITH_CATALOG_ID",
+      "displayName": "PeaProxy (chat completions)",
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "apiKey": "peaproxy",
+      "provider": "generic-chat-completion-api"
+    },
+    {
+      "model": "REPLACE_WITH_CATALOG_ID",
+      "displayName": "PeaProxy (Responses)",
+      "baseUrl": "http://127.0.0.1:8317/v1",
+      "apiKey": "peaproxy",
+      "provider": "openai"
+    }
+  ]
+}
+```
+
+`provider: "generic-chat-completion-api"` hits `POST /v1/chat/completions`. `provider: "openai"` hits Droid's Responses path (`POST /v1/responses`). Pick a live id from `GET /v1/models`. Official Factory API keys at `https://api.factory.ai` are for sessions/CI/computers — they are **not** an OpenAI-compat chat upstream.
+
+`peaproxy clients show droid` / `peaproxy clients verify droid --chat`.
+
 ## Codex (Responses)
 
 Codex CLI no longer supports `wire_api = "chat"`. Point a **custom** provider at PeaProxy (do not reuse reserved ids `openai`, `ollama`, or `lmstudio`):
@@ -156,4 +186,5 @@ peaproxy clients verify codex --chat
 peaproxy clients verify continue --chat
 peaproxy clients verify cline --chat
 peaproxy clients verify amp --chat
+peaproxy clients verify droid --chat
 ```

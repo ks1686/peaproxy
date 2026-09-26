@@ -5,6 +5,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter/hosted"
 	"github.com/ks1686/peaproxy/internal/adapter/ollama"
 	"github.com/ks1686/peaproxy/internal/adapter/openai"
+	"github.com/ks1686/peaproxy/internal/adapter/opencodego"
 	"github.com/ks1686/peaproxy/internal/adapter/opencodezen"
 	"github.com/ks1686/peaproxy/internal/adapter/openrouter"
 	"github.com/ks1686/peaproxy/internal/catalog"
@@ -66,6 +67,9 @@ func AccountPresets() []AccountPreset {
 		{ID: "kimi-ai-oauth", Adapter: "kimi_ai_oauth", Label: "Kimi.ai (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Moonshot ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider kimi-ai"},
 		{ID: "meta-oauth", Adapter: "meta_oauth", Label: "Meta Muse (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Meta ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider meta"},
 		{ID: "qwen-oauth", Adapter: "qwen_oauth", Label: "Qwen consumer OAuth (not yet)", Tier: string(catalog.TierPaid), Warn: "Not yet: CLIProxyAPI has no working Qwen consumer OAuth flow. Use a Qwen API key with the custom OpenAI-compat preset. PeaProxy authors are not liable for any future Qwen OAuth path either."},
+		{ID: "copilot-oauth", Adapter: "copilot_oauth", Label: "GitHub Copilot (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate GitHub Copilot ToS and can ban the account. PeaProxy authors are not liable. This is Copilot chat (api.githubcopilot.com), not retired GitHub Models. Run: peaproxy auth login --provider copilot"},
+		{ID: "factory-oauth", Adapter: "factory_oauth", Label: "Factory / Droid (not yet)", Tier: string(catalog.TierPaid), Warn: "Not yet: Factory has no public consumer chat OAuth. Point Droid at PeaProxy instead (peaproxy clients show droid). Official Factory API keys are for sessions/CI at api.factory.ai, not OpenAI-compat chat. PeaProxy authors are not liable."},
+		{ID: "opencode-go", Adapter: opencodego.Name, Label: "OpenCode Go", BaseURL: opencodego.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENCODE_API_KEY", Note: "Distinct from OpenCode Zen. Subscribe at opencode.ai/auth and paste the Go API key. Muse Spark contributor models may train on prompts. No public OAuth — peaproxy auth login --provider opencode-go explains this."},
 		hostedPreset("huggingface", "Hugging Face router", hosted.HuggingFace),
 		hostedPreset("nim-key", "NVIDIA NIM (API catalog)", hosted.NIM),
 		hostedPreset("workers-ai", "Cloudflare Workers AI", hosted.WorkersAI),

@@ -27,7 +27,7 @@ CLIProxyAPI repeatedly gets "add model X" issues (Opus 4.6/4.7, Fable, GPT Daybr
 - Codex Responses vs Messages quirks; image_gen tool conflicts (#456) — `POST /v1/responses` exists; image-gen tool is **not** a generations proxy
 - Amp WebSocket / stream_options failures — Custom URL only; **no** Amp WebSocket; Codex OAuth drops `stream_options`
 
-**PeaProxy:** harness profiles (Pi, OpenCode, Cursor, Claude Code, Codex, Continue, Cline, Amp) + `clients verify [--chat]`. Factory Droid is not a preset.
+**PeaProxy:** harness profiles (Pi, OpenCode, Cursor, Claude Code, Codex, Continue, Cline, Amp, Droid) + `clients verify [--chat]`. Factory Droid is a **client** of PeaProxy (BYOK), not a chat adapter.
 
 ### 4. Security defaults — shipped
 
@@ -57,7 +57,7 @@ OAuth flags missing after updates (#351, #360); credentials disappearing after r
 
 Factory Droid model config confusion (#467); OpenCode Go subscription request (#405); Cline as service (#490); Amp failures; usage stats (#178).
 
-**PeaProxy:** Clients page with copy-paste presets + verify; usage showcase per provider. OpenCode Go subscription and Droid are **not** adapters. Cline is an OpenAI-compatible **client**, not a cloud provider.
+**PeaProxy:** Clients page with copy-paste presets + verify; usage showcase per provider. OpenCode Go is a first-class **API-key** adapter (`opencode_go`, distinct from Zen). Droid is a **client** preset. Factory has no public consumer chat OAuth (stub). Cline is an OpenAI-compatible **client**, not a cloud provider.
 
 ### 9. Custom / free / local providers — shipped
 
@@ -70,7 +70,7 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 1. Auto model discovery — **yes**
 2. Free + paid providers with catalog filters/hide — **yes**
 3. Loopback-secure by default — **yes**
-4. Harness quick-setup (OpenCode, Pi, Cursor, Claude Code, Codex, Continue, Cline, Amp) — **yes** (Droid no)
+4. Harness quick-setup (OpenCode, Pi, Cursor, Claude Code, Codex, Continue, Cline, Amp, Droid) — **yes**
 5. Reliable multi-account failover with visible cooldowns — **yes** (`round-robin` / `fill-first` / `sticky`)
 6. Per-provider usage showcase (text + vision-in + image-out) — **yes**
 7. Cross-platform CLI + localhost UI (no tray) — **yes, by design**
@@ -82,3 +82,6 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 - Embeddings endpoint — **shipped** (`POST /v1/embeddings` for keyed OpenAI-compat + `embeddings` models)
 - Image generations API — **shipped** (`POST /v1/images/generations` for keyed OpenAI-compat + `image_out` models)
 - Quota remaining API when provider exposes it — not shipped
+- GitHub Copilot subscription OAuth — **shipped** (`copilot_oauth`; Copilot chat, not GitHub Models)
+- OpenCode Go subscription — **shipped** as official API key (`opencode_go` at `/zen/go/v1`)
+- Factory/Droid as a chat-model **upstream** — **not yet** (no public consumer chat OAuth). Droid **client** preset shipped.

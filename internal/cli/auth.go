@@ -18,7 +18,7 @@ func authCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
 		Short: "Subscription OAuth login",
-		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse).
+		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot).
 
 ` + oauth.LiabilityWarning() + `
 
@@ -30,6 +30,7 @@ Examples:
   peaproxy auth login --provider xai
   peaproxy auth login --provider kimi
   peaproxy auth login --provider meta
+  peaproxy auth login --provider copilot
   peaproxy auth login --provider anthropic --print-url
 `,
 	}
@@ -46,7 +47,7 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
 			if provider == "" {
-				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  peaproxy auth login --provider openai\n  peaproxy auth login --provider gemini")
+				return fmt.Errorf("missing --provider\n  peaproxy auth login --provider anthropic\n  peaproxy auth login --provider openai\n  peaproxy auth login --provider copilot")
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), oauth.LiabilityWarning())
 			adapterName, err := adapters.OAuthAdapterName(provider)
@@ -134,7 +135,7 @@ Examples:
 			return nil
 		},
 	}
-	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen")
+	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen | copilot | factory | opencode-go")
 	login.Flags().StringVar(&accountID, "id", "", "Account id to write (default per provider)")
 	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (xAI/Kimi/Meta already use device code)")
 	login.Flags().BoolVar(&noBrowser, "no-browser", false, "Do not open a browser")

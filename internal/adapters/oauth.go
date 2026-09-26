@@ -24,8 +24,14 @@ func OAuthAdapterName(provider string) (string, error) {
 		return "meta_oauth", nil
 	case "qwen", "qwen_oauth":
 		return "qwen_oauth", nil
+	case "copilot", "github-copilot", "github_copilot", "copilot_oauth":
+		return "copilot_oauth", nil
+	case "factory", "droid", "factory_oauth", "factory-droid":
+		return "factory_oauth", nil
+	case "opencode-go", "opencode_go", "opencodego":
+		return "opencode_go", nil
 	default:
-		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen)", provider)
+		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen | copilot | factory | opencode-go)", provider)
 	}
 }
 
@@ -48,6 +54,12 @@ func DefaultOAuthAccountID(adapterName string) string {
 		return "meta-oauth"
 	case "qwen_oauth":
 		return "qwen-oauth"
+	case "copilot_oauth":
+		return "copilot-oauth"
+	case "factory_oauth":
+		return "factory-oauth"
+	case "opencode_go":
+		return "opencode-go"
 	default:
 		return adapterName
 	}
@@ -72,6 +84,12 @@ func CLIProvider(adapterName string) string {
 		return "meta"
 	case "qwen_oauth":
 		return "qwen"
+	case "copilot_oauth":
+		return "copilot"
+	case "factory_oauth":
+		return "factory"
+	case "opencode_go":
+		return "opencode-go"
 	default:
 		return adapterName
 	}
@@ -81,7 +99,8 @@ func CLIProvider(adapterName string) string {
 func IsOAuthAdapter(name string) bool {
 	switch name {
 	case "anthropic_oauth", "openai_oauth", "antigravity", "gemini_oauth",
-		"xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth":
+		"xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth",
+		"copilot_oauth", "factory_oauth":
 		return true
 	default:
 		return false
