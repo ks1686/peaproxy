@@ -105,8 +105,11 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` | Build version (`dev` unless a release ldflag) |
 | `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen is **not yet**. |
-| `accounts` | Configured provider accounts |
+| `accounts` | Configured provider accounts (`list` / `add <preset>`) |
 | `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |
+| `catalog` | Listing overlays (`pin` / `rename` / `hide`) matching the Catalog UI |
+| `requests` | Opt-in inspector (`tail` when `requestLog` is on) |
+| `health` | Adapter health / cooldowns matching `GET /admin/health` |
 | `status` | Bind / config path / version |
 | `config` | `path` / `show` / `validate` / `init` |
 | `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |

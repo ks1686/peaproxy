@@ -35,6 +35,10 @@ Examples:
   peaproxy serve
   peaproxy serve --bind 127.0.0.1 --port 8317
   peaproxy models list --filter free
+  peaproxy catalog pin llama3.2
+  peaproxy accounts add jan-local
+  peaproxy health
+  peaproxy requests tail
   peaproxy clients show cursor
   peaproxy clients show opencode
   peaproxy clients show claude-code
@@ -50,10 +54,25 @@ Examples:
 	root.AddCommand(authCmd(&configPath))
 	root.AddCommand(accountsCmd(&configPath))
 	root.AddCommand(modelsCmd(&configPath))
+	root.AddCommand(catalogCmd(&configPath))
+	root.AddCommand(requestsCmd(&configPath))
+	root.AddCommand(healthCmd(&configPath))
 	root.AddCommand(statusCmd(&configPath))
 	root.AddCommand(configCmd(&configPath))
 	root.AddCommand(clientsCmd())
 	return root
+}
+
+func openGateway(configPath string) (*gateway.Gateway, config.Config, string, error) {
+	cfg, path, err := loadCfg(configPath)
+	if err != nil {
+		return nil, config.Config{}, "", err
+	}
+	gw, err := gateway.New(cfg, path, adapters.DefaultRegistry())
+	if err != nil {
+		return nil, cfg, path, err
+	}
+	return gw, cfg, path, nil
 }
 
 func loadCfg(path string) (config.Config, string, error) {
@@ -120,6 +139,10 @@ func accountsCmd(configPath *string) *cobra.Command {
 		Long: `Examples:
   peaproxy accounts list
   peaproxy accounts list --config ./peaproxy.yaml
+  peaproxy accounts add jan-local
+  peaproxy accounts add gpt4all-local
+  peaproxy accounts add sambanova-key
+  peaproxy accounts add workers-ai --account-id "$CLOUDFLARE_ACCOUNT_ID"
 `,
 	}
 	list := &cobra.Command{
@@ -150,7 +173,58 @@ func accountsCmd(configPath *string) *cobra.Command {
 			return nil
 		},
 	}
+	var (
+		idFlag        string
+		accountIDFlag string
+		baseURLFlag   string
+		apiKeyEnvFlag string
+		apiKeyFlag    string
+		tierFlag      string
+	)
+	add := &cobra.Command{
+		Use:   "add [preset]",
+		Short: "Add an account from a UI preset (Jan, GPT4All, SambaNova, Workers AI, …)",
+		Long: `Uses the same templates as GET /admin/presets.
+
+Workers AI replaces YOUR_ACCOUNT_ID from --account-id or CLOUDFLARE_ACCOUNT_ID.
+The env value is never printed.
+
+Examples:
+  peaproxy accounts add jan-local
+  peaproxy accounts add gpt4all-local
+  peaproxy accounts add sambanova-key
+  peaproxy accounts add workers-ai --account-id <cloudflare-account-id>
+`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			prov, err := providerFromPreset(args[0], idFlag, baseURLFlag, accountIDFlag, apiKeyFlag, apiKeyEnvFlag, tierFlag)
+			if err != nil {
+				return err
+			}
+			if w := presetWarn(args[0]); w != "" {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), w)
+			}
+			gw, _, _, err := openGateway(*configPath)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := gw.AddProvider(ctx, prov); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "added %s\tadapter=%s\ttier=%s\tbase=%s\n", prov.ID, prov.Adapter, prov.Tier, prov.BaseURL)
+			return nil
+		},
+	}
+	add.Flags().StringVar(&idFlag, "id", "", "Account id (default: preset id)")
+	add.Flags().StringVar(&accountIDFlag, "account-id", "", "Fills Workers AI YOUR_ACCOUNT_ID (or set CLOUDFLARE_ACCOUNT_ID)")
+	add.Flags().StringVar(&baseURLFlag, "base-url", "", "Override preset base URL")
+	add.Flags().StringVar(&apiKeyEnvFlag, "api-key-env", "", "Env var holding the API key (default: preset envKey)")
+	add.Flags().StringVar(&apiKeyFlag, "api-key", "", "Inline API key (prefer --api-key-env; stored in the secret store)")
+	add.Flags().StringVar(&tierFlag, "tier", "", "Tier override (local|free|freemium|paid)")
 	cmd.AddCommand(list)
+	cmd.AddCommand(add)
 	return cmd
 }
 

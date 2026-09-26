@@ -80,3 +80,13 @@ func AccountPresets() []AccountPreset {
 	}
 	return out
 }
+
+// LookupPreset returns the Accounts dropdown template with the given id.
+func LookupPreset(id string) (AccountPreset, bool) {
+	for _, p := range AccountPresets() {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return AccountPreset{}, false
+}

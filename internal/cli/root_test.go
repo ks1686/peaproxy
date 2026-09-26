@@ -17,7 +17,7 @@ func TestRootHelpListsPlanCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, cmd := range []string{"serve", "auth", "accounts", "models", "status", "config", "clients"} {
+	for _, cmd := range []string{"serve", "auth", "accounts", "models", "status", "config", "clients", "catalog", "requests", "health"} {
 		if !strings.Contains(got, cmd) {
 			t.Fatalf("root help missing %q:\n%s", cmd, got)
 		}
