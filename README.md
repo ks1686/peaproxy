@@ -25,7 +25,16 @@ Point coding tools at one local OpenAI-shaped, Claude-shaped, and Responses endp
 
 ## Install
 
-Follow `main` with `@latest`, or pin a tagged 0.2.x:
+Homebrew (macOS / Linux):
+
+```bash
+brew tap ks1686/tap
+brew install --cask peaproxy
+peaproxy --version
+peaproxy serve
+```
+
+Alternatively, follow `main` with Go `@latest`, or pin a tagged 0.2.x:
 
 ```bash
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
@@ -34,7 +43,7 @@ peaproxy --version
 peaproxy serve
 ```
 
-Requires Go 1.22+. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)).
+Requires Go 1.22+ for `go install`. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)).
 
 ```bash
 go run ./cmd/peaproxy serve   # from a clone
