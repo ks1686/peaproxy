@@ -88,3 +88,13 @@ func TestAccountPresetsReportEnvPresenceWithoutValues(t *testing.T) {
 		t.Fatalf("local ollama should not claim a key env: %#v", got["ollama-local"])
 	}
 }
+
+func TestLookupPresetByID(t *testing.T) {
+	p, ok := LookupPreset("jan-local")
+	if !ok || p.Adapter != hosted.Jan.Name {
+		t.Fatalf("jan-local: %#v ok=%v", p, ok)
+	}
+	if _, ok := LookupPreset("not-a-preset"); ok {
+		t.Fatal("unknown preset should miss")
+	}
+}

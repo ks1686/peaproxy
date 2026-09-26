@@ -29,7 +29,7 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 
 Prefer `apiKeyEnv` over inline `apiKey`. Inline keys and OAuth tokens are **not** written back to YAML; they go to the secret store. YAML still lists `providers[]` (id, adapter, email, expiry, non-secret extra).
 
-Provider keys can also stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `NVIDIA_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `OLLAMA_API_KEY`, `SAMBANOVA_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML. `CLOUDFLARE_ACCOUNT_ID` is **not** a secret key: it fills `YOUR_ACCOUNT_ID` in the Workers AI base URL. The Accounts UI names these env vars and whether they are set; it never prints values.
+Provider keys can also stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `NVIDIA_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `OLLAMA_API_KEY`, `SAMBANOVA_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML. `CLOUDFLARE_ACCOUNT_ID` is **not** a secret key: it fills `YOUR_ACCOUNT_ID` in the Workers AI base URL (`peaproxy accounts add workers-ai` does the same as the Accounts UI). The Accounts UI names these env vars and whether they are set; it never prints values.
 
 `peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|meta` writes the account row plus secrets. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability. Never commit `config.yaml`, `secret.key`, or `secrets.enc`.
 
@@ -64,11 +64,11 @@ Rules (`peaproxy config validate`):
 - Pin/rename never become routing aliases — clients must use the live provider id.
 - Hidden pinned models stay off `/v1/models` and remain routable by id unless `hide.blockRouting` is true.
 
-The UI Catalog page and `POST /admin/catalog/overlay` write the same fields. Settings shows pin/rename/hide counts (edit them on Catalog).
+The UI Catalog page, `POST /admin/catalog/overlay`, and `peaproxy catalog pin|rename|hide` write the same fields. Settings shows pin/rename/hide counts (edit them on Catalog).
 
 ## Request log
 
-`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` tails the inspector for the UI. Usage counters still go to `usage.json` even when the inspector is off.
+`requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. `GET /admin/requests` and `peaproxy requests tail` read that inspector. Usage counters still go to `usage.json` even when the inspector is off. `peaproxy health` prints the same bind / adapterHealth / cooldowns fields as `GET /admin/health`.
 
 ## Validate
 
