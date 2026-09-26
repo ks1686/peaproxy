@@ -87,7 +87,7 @@ export OPENAI_API_KEY=peaproxy
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
 		Cloak:      "off",
-		Notes:      "Codex CLI speaks the Responses API (wire_api=chat is gone). PeaProxy exposes POST /v1/responses. Amp/Codex often send stream_options; Codex OAuth strips that key (chatgpt.com rejects it) without reshuffling the rest of the JSON.",
+		Notes:      "Codex CLI speaks the Responses API (wire_api=chat is gone). PeaProxy exposes POST /v1/responses. Codex OAuth passes tools/tool_choice/input items through (function_call, function_call_output, reasoning) and only strips stream_options (chatgpt.com rejects it) without reshuffling the rest of the JSON. Other adapters round-trip function tools via chat completions; they do not execute tools.",
 		Snippet: `# ~/.codex/config.toml — do not reuse reserved provider ids openai/ollama/lmstudio.
 model_provider = "peaproxy"
 model = "REPLACE_WITH_CATALOG_ID"

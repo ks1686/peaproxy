@@ -20,6 +20,7 @@ type ResponsesRequest struct {
 	MaxOutputTokens int             `json:"max_output_tokens"`
 	MaxTokens       int             `json:"max_tokens"`
 	Tools           json.RawMessage `json:"tools"`
+	ToolChoice      json.RawMessage `json:"tool_choice"`
 }
 
 type responsesOutput struct {
@@ -32,9 +33,12 @@ type responsesOutput struct {
 }
 
 type responsesOutMsg struct {
-	Type    string             `json:"type"`
-	Role    string             `json:"role"`
-	Content []responsesOutPart `json:"content"`
+	Type      string             `json:"type"`
+	Role      string             `json:"role,omitempty"`
+	Content   []responsesOutPart `json:"content,omitempty"`
+	CallID    string             `json:"call_id,omitempty"`
+	Name      string             `json:"name,omitempty"`
+	Arguments string             `json:"arguments,omitempty"`
 }
 
 type responsesOutPart struct {
@@ -88,7 +92,14 @@ func ResponsesToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 		MaxTokens: maxTok,
 	}
 	if len(in.Tools) > 0 && string(in.Tools) != "null" {
-		out.Tools = in.Tools
+		converted, err := responsesToolsToChat(in.Tools)
+		if err != nil {
+			return nil, adapter.ChatRequest{}, err
+		}
+		out.Tools = converted
+	}
+	if len(in.ToolChoice) > 0 && string(in.ToolChoice) != "null" {
+		out.ToolChoice = responsesToolChoiceToChat(in.ToolChoice)
 	}
 	body, err := json.Marshal(out)
 	if err != nil {
@@ -130,16 +141,102 @@ func responsesInputToMessages(instructions string, input json.RawMessage) ([]ope
 	if err := json.Unmarshal(input, &items); err != nil {
 		return nil, fmt.Errorf("responses input: %w", err)
 	}
-	for _, item := range items {
-		msg, ok, err := responsesItemToMessage(item)
-		if err != nil {
-			return nil, err
+	var pendingCalls []json.RawMessage
+	flushCalls := func() error {
+		if len(pendingCalls) == 0 {
+			return nil
 		}
-		if ok {
+		raw, err := json.Marshal(pendingCalls)
+		if err != nil {
+			return err
+		}
+		msgs = append(msgs, openAIMessage{Role: "assistant", Content: json.RawMessage("null"), ToolCalls: raw})
+		pendingCalls = nil
+		return nil
+	}
+	for _, item := range items {
+		kind := responsesItemType(item)
+		switch kind {
+		case "function_call":
+			call, err := responsesFunctionCallToToolCall(item)
+			if err != nil {
+				return nil, err
+			}
+			pendingCalls = append(pendingCalls, call)
+		case "function_call_output":
+			if err := flushCalls(); err != nil {
+				return nil, err
+			}
+			msg, err := responsesFunctionOutputToMessage(item)
+			if err != nil {
+				return nil, err
+			}
 			msgs = append(msgs, msg)
+		case "reasoning":
+			// Chat completions have no reasoning item; skip rather than invent text.
+			continue
+		default:
+			if err := flushCalls(); err != nil {
+				return nil, err
+			}
+			msg, ok, err := responsesItemToMessage(item)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				msgs = append(msgs, msg)
+			}
 		}
 	}
+	if err := flushCalls(); err != nil {
+		return nil, err
+	}
 	return msgs, nil
+}
+
+func responsesItemType(item json.RawMessage) string {
+	var parsed struct {
+		Type string `json:"type"`
+	}
+	_ = json.Unmarshal(item, &parsed)
+	return parsed.Type
+}
+
+func responsesFunctionCallToToolCall(item json.RawMessage) (json.RawMessage, error) {
+	var parsed struct {
+		CallID    string `json:"call_id"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}
+	if err := json.Unmarshal(item, &parsed); err != nil {
+		return nil, err
+	}
+	tc := struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}{ID: parsed.CallID, Type: "function"}
+	tc.Function.Name = parsed.Name
+	tc.Function.Arguments = parsed.Arguments
+	return json.Marshal(tc)
+}
+
+func responsesFunctionOutputToMessage(item json.RawMessage) (openAIMessage, error) {
+	var parsed struct {
+		CallID string `json:"call_id"`
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(item, &parsed); err != nil {
+		return openAIMessage{}, err
+	}
+	raw, err := json.Marshal(parsed.Output)
+	if err != nil {
+		return openAIMessage{}, err
+	}
+	return openAIMessage{Role: "tool", Content: raw, ToolCallID: parsed.CallID}, nil
 }
 
 func responsesItemToMessage(item json.RawMessage) (openAIMessage, bool, error) {
@@ -185,6 +282,86 @@ func responsesItemToMessage(item json.RawMessage) (openAIMessage, bool, error) {
 	return openAIMessage{Role: role, Content: raw}, true, nil
 }
 
+func responsesToolsToChat(raw json.RawMessage) (json.RawMessage, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return raw, nil
+	}
+	out := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		converted, err := oneResponsesToolToChat(item)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, converted)
+	}
+	return json.Marshal(out)
+}
+
+func oneResponsesToolToChat(item json.RawMessage) (json.RawMessage, error) {
+	var parsed struct {
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+		Function    json.RawMessage `json:"function"`
+	}
+	if err := json.Unmarshal(item, &parsed); err != nil {
+		return item, nil
+	}
+	if len(parsed.Function) > 0 && string(parsed.Function) != "null" {
+		return item, nil
+	}
+	if parsed.Type == "function" && parsed.Name != "" {
+		tool := struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description,omitempty"`
+				Parameters  json.RawMessage `json:"parameters,omitempty"`
+			} `json:"function"`
+		}{Type: "function"}
+		tool.Function.Name = parsed.Name
+		tool.Function.Description = parsed.Description
+		tool.Function.Parameters = parsed.Parameters
+		return json.Marshal(tool)
+	}
+	return item, nil
+}
+
+func responsesToolChoiceToChat(raw json.RawMessage) json.RawMessage {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" || raw[0] == '"' {
+		return raw
+	}
+	var parsed struct {
+		Type     string          `json:"type"`
+		Name     string          `json:"name"`
+		Function json.RawMessage `json:"function"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return raw
+	}
+	if len(parsed.Function) > 0 && string(parsed.Function) != "null" {
+		return raw
+	}
+	if parsed.Type == "function" && parsed.Name != "" {
+		b, err := json.Marshal(struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}{Type: "function", Function: struct {
+			Name string `json:"name"`
+		}{Name: parsed.Name}})
+		if err != nil {
+			return raw
+		}
+		return b
+	}
+	return raw
+}
+
 // FromOpenAIChat maps a chat.completion JSON object to a Responses object.
 func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 	var in openAIResponse
@@ -192,8 +369,20 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 		return nil, err
 	}
 	text := ""
+	var calls []struct {
+		ID        string
+		Name      string
+		Arguments string
+	}
 	if len(in.Choices) > 0 {
 		text = in.Choices[0].Message.Content
+		for _, tc := range in.Choices[0].Message.ToolCalls {
+			calls = append(calls, struct {
+				ID        string
+				Name      string
+				Arguments string
+			}{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
+		}
 	}
 	id := in.ID
 	if id == "" {
@@ -202,19 +391,31 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 	if in.Model != "" {
 		model = in.Model
 	}
-	out := responsesOutput{
-		ID:     id,
-		Object: "response",
-		Status: "completed",
-		Model:  model,
-		Output: []responsesOutMsg{{
+	var output []responsesOutMsg
+	for _, tc := range calls {
+		output = append(output, responsesOutMsg{
+			Type:      "function_call",
+			CallID:    tc.ID,
+			Name:      tc.Name,
+			Arguments: tc.Arguments,
+		})
+	}
+	if text != "" || len(output) == 0 {
+		output = append(output, responsesOutMsg{
 			Type: "message",
 			Role: "assistant",
 			Content: []responsesOutPart{{
 				Type: "output_text",
 				Text: text,
 			}},
-		}},
+		})
+	}
+	out := responsesOutput{
+		ID:         id,
+		Object:     "response",
+		Status:     "completed",
+		Model:      model,
+		Output:     output,
 		OutputText: text,
 	}
 	return json.Marshal(out)

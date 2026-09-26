@@ -142,7 +142,7 @@ wire_api = "responses"
 export OPENAI_API_KEY=peaproxy
 ```
 
-`POST /v1/responses` is first-class. ChatGPT/Codex subscription OAuth (`openai_oauth`) passes the body through to Codex `/responses` after a surgical `stream_options` drop. Other adapters are translated through chat completions (text in / text out; enough for a smoke, not a full Responses tools surface).
+`POST /v1/responses` is first-class. ChatGPT/Codex subscription OAuth (`openai_oauth`) passes the body through to Codex `/responses` after a surgical `stream_options` drop — including `tools`, `tool_choice`, and input items (`function_call`, `function_call_output`, `reasoning`). Chat Completions clients on a Codex OAuth account map tools / `tool_calls` / `tool` messages into those items (and map function_call outputs back to `tool_calls`). Other adapters translate via chat completions and round-trip function tools one level (request `tools` + `tool_calls` → Responses `function_call` items). That path does **not** execute tools or synthesize a full Responses tool event stream. `image_gen` is not a `/v1/images/generations` proxy.
 
 ## Verify
 

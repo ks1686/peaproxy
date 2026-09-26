@@ -29,7 +29,7 @@ Adapters in this repo today (v0.2.6):
 | `openai_compat` | Generic base URL + optional key, stream + non-stream | none / API key | required `baseURL` |
 | `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
 | `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
-| `openai_oauth` | ChatGPT/Codex subscription OAuth + Responses→chat. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
+| `openai_oauth` | ChatGPT/Codex subscription OAuth + native Responses tools pass-through (chat clients map tools). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
 | `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
 | `xai_oauth` | xAI Grok subscription device OAuth + CLI chat proxy. **ToS/ban risk.** | OAuth (`--provider xai`) | `https://cli-chat-proxy.grok.com/v1` |
 | `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |

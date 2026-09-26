@@ -35,6 +35,81 @@ func TestResponsesToOpenAIArrayInput(t *testing.T) {
 	}
 }
 
+func TestResponsesToOpenAIMapsFunctionCallItems(t *testing.T) {
+	in := []byte(`{
+		"model":"m",
+		"tools":[{"type":"function","name":"lookup","description":"find","parameters":{"type":"object"}}],
+		"tool_choice":"auto",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"look"}]},
+			{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"},
+			{"type":"function_call_output","call_id":"call_1","output":"found"},
+			{"type":"reasoning","summary":[{"type":"summary_text","text":"skip me"}]}
+		]
+	}`)
+	body, req, err := ResponsesToOpenAI(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`"tools"`)) || !bytes.Contains(body, []byte(`"tool_choice"`)) {
+		t.Fatalf("missing tools: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"tool_calls"`)) || !bytes.Contains(body, []byte(`"call_1"`)) {
+		t.Fatalf("function_call must become assistant tool_calls: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"role":"tool"`)) || !bytes.Contains(body, []byte(`"tool_call_id":"call_1"`)) {
+		t.Fatalf("function_call_output must become tool message: %s", body)
+	}
+	if bytes.Contains(body, []byte("skip me")) {
+		t.Fatalf("reasoning must not be invented as chat text: %s", body)
+	}
+	if req.Model != "m" {
+		t.Fatalf("model %s", req.Model)
+	}
+	var parsed struct {
+		Tools []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Tools) != 1 || parsed.Tools[0].Function.Name != "lookup" {
+		t.Fatalf("chat-shaped tools: %s", body)
+	}
+}
+
+func TestFromOpenAIChatMapsToolCalls(t *testing.T) {
+	in := []byte(`{
+		"id":"chatcmpl-1",
+		"model":"m",
+		"choices":[{
+			"message":{
+				"role":"assistant",
+				"content":null,
+				"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]
+			},
+			"finish_reason":"tool_calls"
+		}]
+	}`)
+	out, err := FromOpenAIChat(in, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"type":"function_call"`)) || !bytes.Contains(out, []byte(`"call_id":"call_1"`)) {
+		t.Fatalf("missing function_call output item: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"name":"lookup"`)) {
+		t.Fatalf("%s", out)
+	}
+	if bytes.Contains(out, []byte(`"output":"found"`)) {
+		t.Fatal("must not invent tool execution results")
+	}
+}
+
 func TestFromOpenAIChatWrapsOutputText(t *testing.T) {
 	in := []byte(`{"id":"chatcmpl-1","model":"llama3.2","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]}`)
 	out, err := FromOpenAIChat(in, "llama3.2")
@@ -86,5 +161,33 @@ func TestOpenAISSEToResponses(t *testing.T) {
 	}
 	if !strings.Contains(got, `"delta":"hel"`) || !strings.Contains(got, `"delta":"lo"`) {
 		t.Fatalf("%s", got)
+	}
+}
+
+func TestOpenAISSEToResponsesMapsToolCalls(t *testing.T) {
+	in := strings.NewReader(strings.Join([]string{
+		`data: {"id":"c1","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":""}}]}}]}`,
+		``,
+		`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"x\"}"}}]}}]}`,
+		``,
+		`data: {"choices":[{"finish_reason":"tool_calls"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n"))
+	var out bytes.Buffer
+	if err := OpenAISSEToResponses(in, &out, "m"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"type":"function_call"`) || !strings.Contains(got, `"call_id":"call_1"`) {
+		t.Fatalf("completed output missing function_call: %s", got)
+	}
+	if !strings.Contains(got, `"name":"lookup"`) || !strings.Contains(got, `\"q\":\"x\"`) {
+		t.Fatalf("%s", got)
+	}
+	if strings.Contains(got, `"output":"`) && strings.Contains(got, "executed") {
+		t.Fatal("must not invent tool execution")
 	}
 }
