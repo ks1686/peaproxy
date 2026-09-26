@@ -98,7 +98,7 @@ Filters: **All | Free | Paid | Local | Subscription OAuth** (persisted in the UI
 - Rich metadata: `GET /v0/catalog` and `GET /admin/catalog` (tier, modalities, privacy).
 - Vanilla `/v1/models` stays OpenAI-minimal (`id`, `object`, `owned_by`).
 - Models with `image_in` can be tried with an image URL or upload in Showcase.
-- Models tagged `image_out` (live `output_modalities` or id enrichment) are **catalogued only**. Showcase shows a gated “not yet”; PeaProxy does not proxy `/v1/images/generations` and will not send a chat completion pretending to draw.
+- Models tagged `image_out` (live `output_modalities` or id enrichment) are generated via `POST /v1/images/generations` when the account is an API-key OpenAI-compat adapter (`openai`, `google`/`gemini`, `xai`, `openrouter`, generic `openai_compat`, local wrappers). Showcase one-click generates. Subscription OAuth does not proxy image-out and will not send a chat completion pretending to draw.
 
 `FilterFree` includes `free` **and** `freemium`.
 

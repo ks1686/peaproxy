@@ -47,6 +47,9 @@ type Model struct {
 	Routable          bool     `json:"routable"`
 	// Pinned is a local overlay; live ListModels remains the source of IDs.
 	Pinned bool `json:"pinned,omitempty"`
+	// ImageOutReady is true when this row is tagged image_out and the account's
+	// adapter can proxy POST /v1/images/generations. Listing overlay only.
+	ImageOutReady bool `json:"imageOutReady,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.
@@ -278,6 +281,11 @@ func imageOutID(lower string) bool {
 		}
 	}
 	return false
+}
+
+// HasModality reports whether m.Modalities includes tag.
+func HasModality(m Model, tag string) bool {
+	return slices.Contains(m.Modalities, tag)
 }
 
 func imageInID(lower string) bool {

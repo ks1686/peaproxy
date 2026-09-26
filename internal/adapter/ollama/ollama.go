@@ -134,6 +134,10 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	return a.inner.ChatStream(ctx, req, w)
 }
 
+func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	return adapter.GenerateImageFrom(a.inner, ctx, req)
+}
+
 func tagLocal(models []catalog.Model, account string) []catalog.Model {
 	for i := range models {
 		models[i].Provider = Name

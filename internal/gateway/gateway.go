@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -225,7 +226,20 @@ func (g *Gateway) Annotated(filter catalog.Filter) []catalog.Model {
 	q := g.queryLocked()
 	q.Filter = filter
 	q.ForClients = false
-	return catalog.AllAnnotated(g.models, q)
+	out := catalog.AllAnnotated(g.models, q)
+	g.stampImageOutReadyLocked(out)
+	return out
+}
+
+func (g *Gateway) stampImageOutReadyLocked(models []catalog.Model) {
+	ready := make(map[string]bool, len(g.inst))
+	for _, inst := range g.inst {
+		_, ok := inst.Adapter.(adapter.ImageGenerator)
+		ready[inst.Provider.ID] = ok && inst.Adapter.Capabilities().ImageOut
+	}
+	for i := range models {
+		models[i].ImageOutReady = catalog.HasModality(models[i], "image_out") && ready[models[i].AccountID]
+	}
 }
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
@@ -284,6 +298,63 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		return lastAccount, err
 	}
 	return lastAccount, cooldownErr(last)
+}
+
+// GenerateImage proxies OpenAI-compatible POST /v1/images/generations.
+// Upstream is only called when the model is tagged image_out and the adapter
+// implements ImageGenerator with Capabilities.ImageOut.
+func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageResponse, string, error) {
+	peek := jsonx.PeekBody(raw)
+	if strings.TrimSpace(peek.Model) == "" {
+		return adapter.ImageResponse{}, "", adapter.ErrImageModelRequired
+	}
+	if !g.supportsImageOut(peek.Model) {
+		return adapter.ImageResponse{}, "", adapter.ErrModelNotImageOut
+	}
+	cands, err := g.route(peek.Model)
+	if err != nil {
+		return adapter.ImageResponse{}, "", err
+	}
+	var last error
+	var lastAccount string
+	tried := false
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		gen, ok := inst.Adapter.(adapter.ImageGenerator)
+		if !ok || !inst.Adapter.Capabilities().ImageOut {
+			last = adapter.ErrImageOutUnsupported
+			continue
+		}
+		tried = true
+		resp, err := gen.GenerateImage(ctx, adapter.ImageRequest{Model: peek.Model, Raw: raw})
+		if err == nil {
+			g.rememberSticky(peek.Model, lastAccount)
+			return resp, lastAccount, nil
+		}
+		last = err
+		if retryable(err) {
+			g.markCooldown(inst.Provider.ID, err)
+			continue
+		}
+		return adapter.ImageResponse{}, lastAccount, err
+	}
+	if !tried {
+		return adapter.ImageResponse{}, lastAccount, adapter.ErrImageOutUnsupported
+	}
+	if retryable(last) {
+		return adapter.ImageResponse{}, lastAccount, cooldownErr(last)
+	}
+	return adapter.ImageResponse{}, lastAccount, last
+}
+
+func (g *Gateway) supportsImageOut(id string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	q := g.queryLocked()
+	if m, ok := catalog.FindRoutable(g.models, q, id); ok {
+		return catalog.HasModality(m, "image_out")
+	}
+	return slices.Contains(catalog.InferModalities(id), "image_out")
 }
 
 // Responses uses native Responses when available, otherwise OpenAI chat translation.

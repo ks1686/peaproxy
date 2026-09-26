@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
@@ -689,5 +690,78 @@ func TestNonRetryableBodyDoesNotFailover(t *testing.T) {
 	}
 	if hitsB != 0 {
 		t.Fatal("must not failover on invalid_request_error")
+	}
+}
+
+func TestGenerateImageProxiesTaggedModel(t *testing.T) {
+	var genHits int
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/v1/models":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "dall-e-3"}}})
+			case "/v1/images/generations":
+				genHits++
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"created": 1,
+					"data":    []map[string]string{{"url": "https://img.example/a.png"}},
+				})
+			default:
+				http.NotFound(w, r)
+			}
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "dall-e-3"}}})
+				return
+			}
+			t.Fatal("must not call second account")
+		},
+	)
+	resp, account, err := gw.GenerateImage(context.Background(), []byte(`{"model":"dall-e-3","prompt":"a cat"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "acct-a" {
+		t.Fatalf("account %s", account)
+	}
+	if genHits != 1 {
+		t.Fatalf("hits %d", genHits)
+	}
+	if len(resp.URLs) != 1 {
+		t.Fatalf("urls %#v", resp.URLs)
+	}
+}
+
+func TestGenerateImageRefusesChatOnlyModelWithoutUpstream(t *testing.T) {
+	var genHits int
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+				return
+			}
+			if r.URL.Path == "/v1/images/generations" {
+				genHits++
+			}
+			http.NotFound(w, r)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
+				return
+			}
+			if r.URL.Path == "/v1/images/generations" {
+				genHits++
+			}
+			http.NotFound(w, r)
+		},
+	)
+	_, _, err := gw.GenerateImage(context.Background(), []byte(`{"model":"llama3.2","prompt":"a cat"}`))
+	if !errors.Is(err, adapter.ErrModelNotImageOut) {
+		t.Fatalf("want ErrModelNotImageOut, got %v", err)
+	}
+	if genHits != 0 {
+		t.Fatal("must not call upstream /images/generations for a chat-only model")
 	}
 }

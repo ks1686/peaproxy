@@ -63,7 +63,7 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 		Chat:       true,
 		Stream:     true,
 		VisionIn:   true,
-		ImageOut:   false, // catalog may tag image_out; /v1/images/generations is not proxied yet
+		ImageOut:   true,
 		ListModels: true,
 		APIKey:     a.apiKey != "",
 		Local:      a.tier == catalog.TierLocal,
@@ -182,6 +182,43 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	_, err = io.Copy(w, resp.Body)
 	return err
 }
+
+func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	raw := req.Raw
+	if len(raw) == 0 {
+		payload := struct {
+			Model  string `json:"model"`
+			Prompt string `json:"prompt"`
+		}{Model: req.Model, Prompt: req.Prompt}
+		var err error
+		raw, err = json.Marshal(payload)
+		if err != nil {
+			return adapter.ImageResponse{}, err
+		}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/images/generations", bytes.NewReader(raw))
+	if err != nil {
+		return adapter.ImageResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.auth(httpReq)
+	resp, err := a.client.Do(httpReq)
+	if err != nil {
+		return adapter.ImageResponse{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return adapter.ImageResponse{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return adapter.ImageResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+	}
+	return adapter.ParseImageResponse(body, req.Model), nil
+}
+
+var _ adapter.Adapter = (*Adapter)(nil)
+var _ adapter.ImageGenerator = (*Adapter)(nil)
 
 func (a *Adapter) body(req adapter.ChatRequest, stream bool) ([]byte, error) {
 	if len(req.Raw) > 0 {

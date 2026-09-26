@@ -14,6 +14,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/oauthcompat"
 	"github.com/ks1686/peaproxy/internal/adapter/ollama"
 	"github.com/ks1686/peaproxy/internal/adapter/openai"
 	"github.com/ks1686/peaproxy/internal/adapter/openai_compat"
@@ -225,8 +226,60 @@ func TestOpenAICompatUsesLiveArchitectureModalities(t *testing.T) {
 	if !containsStr(models[0].Modalities, "image_out") {
 		t.Fatalf("live image_out: %#v", models[0].Modalities)
 	}
-	if a.Capabilities().ImageOut {
-		t.Fatal("do not advertise a fake image-generation endpoint")
+	if !a.Capabilities().ImageOut {
+		t.Fatal("openai_compat must advertise a real images.generations proxy")
+	}
+}
+
+func TestOpenAICompatGenerateImageProxiesGenerations(t *testing.T) {
+	var gotPath, gotAuth, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "dall-e-3"}}})
+		case "/v1/images/generations":
+			gotPath = r.URL.Path
+			gotAuth = r.Header.Get("Authorization")
+			raw, _ := io.ReadAll(r.Body)
+			gotBody = string(raw)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"created": 1700000000,
+				"data":    []map[string]string{{"url": "https://img.example/cat.png"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	a, err := openai_compat.New(adapter.Options{ID: "oa", BaseURL: srv.URL + "/v1", APIKey: "sk-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen, ok := a.(adapter.ImageGenerator)
+	if !ok {
+		t.Fatal("openai_compat must implement ImageGenerator")
+	}
+	resp, err := gen.GenerateImage(context.Background(), adapter.ImageRequest{
+		Model: "dall-e-3",
+		Raw:   []byte(`{"model":"dall-e-3","prompt":"a cat"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/images/generations" {
+		t.Fatalf("path %s", gotPath)
+	}
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("auth %s", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"prompt":"a cat"`) {
+		t.Fatalf("body %s", gotBody)
+	}
+	if len(resp.URLs) != 1 || resp.URLs[0] != "https://img.example/cat.png" {
+		t.Fatalf("urls %#v", resp.URLs)
+	}
+	if strings.Contains(string(resp.Raw), "hello from") {
+		t.Fatal("must not fake image-out as chat")
 	}
 }
 
@@ -343,6 +396,19 @@ func TestAnthropicListModelsAndMessagesBridge(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), `"content":"hi"`) || !strings.Contains(buf.String(), "[DONE]") {
 		t.Fatalf("openai sse: %s", buf.String())
+	}
+}
+
+func TestOAuthCompatDoesNotProxyImageOut(t *testing.T) {
+	a, err := oauthcompat.Open(adapter.Options{ID: "muse", BaseURL: "http://127.0.0.1:9/v1"}, "meta_oauth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Capabilities().ImageOut {
+		t.Fatal("subscription OAuth must not advertise image-out")
+	}
+	if _, ok := any(a).(adapter.ImageGenerator); ok {
+		t.Fatal("subscription OAuth must not implement ImageGenerator")
 	}
 }
 

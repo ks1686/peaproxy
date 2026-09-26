@@ -39,6 +39,7 @@ func (t *Tagged) Capabilities() adapter.Capabilities {
 	c := t.Inner.Capabilities()
 	c.OAuth = true
 	c.APIKey = false
+	c.ImageOut = false // subscription OAuth does not proxy /images/generations
 	return c
 }
 

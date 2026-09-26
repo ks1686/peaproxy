@@ -7,6 +7,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,16 @@ var ErrNotImplemented = errors.New("not implemented (spike TODO)")
 
 // ErrAuthRequired means the adapter needs login before ListModels/Chat.
 var ErrAuthRequired = errors.New("authentication required")
+
+// ErrImageModelRequired means POST /v1/images/generations omitted model.
+var ErrImageModelRequired = errors.New("image generation requires a model")
+
+// ErrModelNotImageOut means the requested model is not tagged image_out.
+var ErrModelNotImageOut = errors.New("model does not support image generation")
+
+// ErrImageOutUnsupported means the routed adapter cannot proxy image-out
+// (chat-only or subscription OAuth — use an API-key OpenAI-compat path).
+var ErrImageOutUnsupported = errors.New("image generation is not supported by this adapter; use an API-key OpenAI, Google, xAI, or OpenAI-compat account")
 
 // Capabilities is advertised per adapter from live data where possible.
 type Capabilities struct {
@@ -115,6 +126,61 @@ type Options struct {
 	OAuthFlow string
 	// SkipLoopback builds the login URL without binding a callback port (CLI --print-url).
 	SkipLoopback bool
+}
+
+// ImageRequest is a provider-neutral images.generations call.
+type ImageRequest struct {
+	Model  string
+	Prompt string
+	// Raw is the original client body for adapters that pass through OpenAI-compat JSON.
+	Raw []byte
+}
+
+// ImageResponse is a non-streaming images.generations result.
+type ImageResponse struct {
+	Created int64
+	Model   string
+	Raw     []byte
+	URLs    []string
+	B64     []string
+}
+
+// ImageGenerator is optional. API-key OpenAI-compat adapters that can POST
+// /images/generations implement it. Subscription OAuth adapters must not.
+type ImageGenerator interface {
+	GenerateImage(ctx context.Context, req ImageRequest) (ImageResponse, error)
+}
+
+// ParseImageResponse extracts URLs and b64 payloads from an OpenAI-shaped
+// images.generations body without reserializing it.
+func ParseImageResponse(raw []byte, model string) ImageResponse {
+	var parsed struct {
+		Created int64 `json:"created"`
+		Data    []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	out := ImageResponse{Created: parsed.Created, Model: model, Raw: raw}
+	for _, d := range parsed.Data {
+		if d.URL != "" {
+			out.URLs = append(out.URLs, d.URL)
+		}
+		if d.B64JSON != "" {
+			out.B64 = append(out.B64, d.B64JSON)
+		}
+	}
+	return out
+}
+
+// GenerateImageFrom forwards to inner when it implements ImageGenerator.
+func GenerateImageFrom(inner Adapter, ctx context.Context, req ImageRequest) (ImageResponse, error) {
+	gen, ok := inner.(ImageGenerator)
+	if !ok {
+		return ImageResponse{}, ErrImageOutUnsupported
+	}
+	return gen.GenerateImage(ctx, req)
 }
 
 // NativeMessages is implemented by adapters that speak Anthropic /v1/messages natively.

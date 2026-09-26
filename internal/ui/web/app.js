@@ -581,12 +581,13 @@ function showcasePage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Showcase</h2>
-      <p class="muted">Try a live chat. Usage is persisted next to the config file. Models with <code>image_in</code> accept an image URL or upload (OpenAI content parts). Models tagged <code>image_out</code> from the live catalog show a gated notice — PeaProxy does not proxy <code>/v1/images/generations</code> and will not fake a drawing as chat.</p>
+      <p class="muted">Try a live chat or image generation. Usage is persisted next to the config file. Models with <code>image_in</code> accept an image URL or upload (OpenAI content parts). Models tagged <code>image_out</code> one-click generate via <code>POST /v1/images/generations</code> — never faked as chat. Subscription OAuth adapters do not proxy image-out; use an API-key OpenAI / Google / xAI / OpenAI-compat account.</p>
       <div class="row">
         <label>Model
           <select id="show-model"></select>
         </label>
         <button class="btn primary" id="show-send">Send</button>
+        <button class="btn primary" id="show-generate" hidden>Generate image</button>
       </div>
       <label>Prompt <textarea id="show-prompt">Say hello in one short sentence.</textarea></label>
       <div id="show-vision" hidden>
@@ -596,8 +597,9 @@ function showcasePage(root) {
         </div>
       </div>
       <div id="show-image-out" class="warn" hidden>
-        <p><strong>Image generation not yet.</strong> This model is tagged <code>image_out</code> from live capabilities. There is no generation button on purpose — sending chat would fake it.</p>
+        <p id="show-image-out-msg"></p>
       </div>
+      <div id="show-images" hidden></div>
       <pre id="show-out">Pick a model and send.</pre>
     </section>
     <section class="card">
@@ -612,8 +614,21 @@ function showcasePage(root) {
     const mods = m?.modalities || [];
     const hasIn = mods.includes("image_in");
     const hasOut = mods.includes("image_out");
-    document.getElementById("show-vision").hidden = !hasIn;
+    const ready = !!m?.imageOutReady;
+    document.getElementById("show-vision").hidden = !hasIn || hasOut;
     document.getElementById("show-image-out").hidden = !hasOut;
+    document.getElementById("show-send").hidden = hasOut;
+    document.getElementById("show-generate").hidden = !hasOut;
+    document.getElementById("show-generate").disabled = hasOut && !ready;
+    const msg = document.getElementById("show-image-out-msg");
+    if (hasOut && ready) {
+      msg.innerHTML = "<strong>Image generation.</strong> This model is tagged <code>image_out</code>. Generate uses <code>POST /v1/images/generations</code>, not chat.";
+    } else if (hasOut) {
+      msg.innerHTML = "<strong>Image-out not on this adapter.</strong> Tagged <code>image_out</code>, but the connected account cannot proxy generations (subscription OAuth or chat-only). Use an API-key OpenAI / Google / xAI / OpenAI-compat account.";
+    }
+    if (hasOut) {
+      document.getElementById("show-prompt").value = "a simple icon of a pea pod";
+    }
   };
   (async () => {
     try {
@@ -626,6 +641,7 @@ function showcasePage(root) {
           emptyState("Nothing to try yet", "Add a working account, then refresh the catalog.")
         );
         document.getElementById("show-send").disabled = true;
+        document.getElementById("show-generate").disabled = true;
       }
       fillModelSelect(sel, models);
       sel.addEventListener("change", toggleVision);
@@ -640,9 +656,12 @@ function showcasePage(root) {
       document.getElementById("show-usage").textContent = err.message;
     }
   })();
-  document.getElementById("show-send").addEventListener("click", async () => {
+  const runShowcase = async (generateImage) => {
     const out = document.getElementById("show-out");
+    const imgs = document.getElementById("show-images");
     out.textContent = "sending…";
+    imgs.hidden = true;
+    imgs.innerHTML = "";
     try {
       let imageUrl = document.getElementById("show-image-url").value.trim();
       const file = document.getElementById("show-file").files[0];
@@ -653,17 +672,42 @@ function showcasePage(root) {
         model: sel.value,
         prompt: document.getElementById("show-prompt").value,
       };
-      if (!document.getElementById("show-vision").hidden && imageUrl) {
+      if (generateImage) {
+        payload.generateImage = true;
+      } else if (!document.getElementById("show-vision").hidden && imageUrl) {
         payload.imageUrl = imageUrl;
       }
       const data = await sendJSON("/admin/showcase", "POST", payload);
-      out.textContent = data.content || JSON.stringify(data, null, 2);
+      if (data.imageOut) {
+        const urls = data.urls || [];
+        const b64 = data.b64 || [];
+        urls.forEach((u) => {
+          const img = document.createElement("img");
+          img.className = "showcase-image";
+          img.src = u;
+          img.alt = "generated";
+          imgs.appendChild(img);
+        });
+        b64.forEach((b) => {
+          const img = document.createElement("img");
+          img.className = "showcase-image";
+          img.src = "data:image/png;base64," + b;
+          img.alt = "generated";
+          imgs.appendChild(img);
+        });
+        imgs.hidden = imgs.childElementCount === 0;
+        out.textContent = JSON.stringify({ account: data.account, model: data.model, urls, b64Count: b64.length }, null, 2);
+      } else {
+        out.textContent = data.content || JSON.stringify(data, null, 2);
+      }
       document.getElementById("show-usage").innerHTML = usageTables(await getJSON("/admin/usage"));
     } catch (err) {
       out.textContent = err.message;
       toast(err.message);
     }
-  });
+  };
+  document.getElementById("show-send").addEventListener("click", () => runShowcase(false));
+  document.getElementById("show-generate").addEventListener("click", () => runShowcase(true));
 }
 
 function clientsPage(root) {
