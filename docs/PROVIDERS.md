@@ -2,7 +2,9 @@
 
 Live `ListModels` is the source of truth. This page is a **tier map**, not an allowlist of model IDs.
 
-Adapters in this repo today:
+Plan phases and residuals: [PLAN.md](PLAN.md). 1.0 cut: [V1.md](V1.md). Subscription OAuth liability: [OAUTH.md](OAUTH.md). Issue themes vs shipped: [COMPETITOR-WINS.md](COMPETITOR-WINS.md).
+
+Adapters in this repo today (v0.2.6):
 
 | Adapter | Status | Typical auth | Default |
 |---|---|---|---|
@@ -48,9 +50,11 @@ PeaProxy **key** adapters do **not** call `generateContent`. Set `GEMINI_API_KEY
 
 ## Paid / subscription
 
-**P0 OAuth:** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys. Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Devin skipped (not a generic chat upstream).
+**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
-**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`.
+**P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
+
+**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`. Z.AI / others: `openai_compat` + their OpenAI-compat base URL (no first-class preset).
 
 Do **not** advertise Claude Free OAuth (CPA #6016).
 
@@ -97,3 +101,5 @@ Filters: **All | Free | Paid | Local | Subscription OAuth** (persisted in the UI
 - Models tagged `image_out` (live `output_modalities` or id enrichment) are **catalogued only**. Showcase shows a gated “not yet”; PeaProxy does not proxy `/v1/images/generations` and will not send a chat completion pretending to draw.
 
 `FilterFree` includes `free` **and** `freemium`.
+
+Claude subscription OAuth may still **403** on Cloudflare with stock Go TLS (no uTLS) — [OAUTH.md](OAUTH.md) residual gaps. No tray UI — [PLAN.md](PLAN.md) locked decisions.

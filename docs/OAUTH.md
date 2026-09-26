@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. First verticals were Claude Pro/Max and ChatGPT/Codex; v0.2 also includes Gemini/Antigravity, xAI Grok, Kimi, and Meta Muse.
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **v0.2.6**: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, and Meta Muse. Qwen remains **not yet**. 1.0 residuals: [V1.md](V1.md).
 
 ## Liability (read this)
 
@@ -92,11 +92,15 @@ Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it canno
 
 ## Residual gaps
 
-- Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Use `openai_compat` + a Qwen API key.
+These are accepted 0.2.x / 1.0 residuals — [V1.md](V1.md), [PLAN.md](PLAN.md).
+
+- Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Use `openai_compat` + a Qwen API key. Not a 1.0 blocker; do not reverse-engineer a new flow unless a public one exists.
 - Devin and Vertex are intentionally omitted (not generic consumer chat OAuth).
 - **Claude Cloudflare 403:** `platform.claude.com/v1/oauth/token` sits behind Cloudflare. Token requests now send Claude Code’s control-plane `User-Agent` (`axios/1.15.2`). PeaProxy does **not** add uTLS / TLS fingerprint spoofing (heavy dependency; CPA does this with a Firefox hello). Stock Go `crypto/tls` may still get **HTTP 403** on AuthComplete or refresh. If that happens, the error tells you to use an official API key (`adapter: anthropic`, [console keys](https://console.anthropic.com/settings/keys)) or retry from a typical desktop network (home/office, not some datacenter IPs). Chat against `api.anthropic.com` with a key is the supported path.
-- Codex chat from OpenAI-compat clients is still translated internally. Native Codex **`POST /v1/responses`** is a first-class PeaProxy route: `openai_oauth` passes through; other adapters are translated via chat completions.
+- Codex chat from OpenAI-compat clients is still translated internally. Native Codex **`POST /v1/responses`** is a first-class PeaProxy route: `openai_oauth` passes through; other adapters are translated via chat completions (text in / text out; not a full tools surface).
 - Antigravity chat is Cloud Code `generateContent`, translated to OpenAI chat locally. No uTLS / HTTP/2 fingerprint matching vs the native Antigravity binary.
+- Image-out is catalogued and Showcase-gated; there is no image-generations proxy ([PROVIDERS.md](PROVIDERS.md)).
+- No menu-bar / tray app ([PLAN.md](PLAN.md) locked decision).
 
 ## Manual smoke
 

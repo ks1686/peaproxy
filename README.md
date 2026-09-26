@@ -1,22 +1,39 @@
 # PeaProxy
 
-Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse; ToS/ban risk; API keys remain the official path), first-class text + images, a **live auto model catalog** (no hand-maintained allowlist), OpenAI- and Claude-compatible endpoints, a CLI service, and a localhost UI.
+Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **v0.2.0** on main (subscription OAuth + OS keychain / encrypted-file secrets). This slice adds more free/local hosted presets and Codex `/v1/responses`. Qwen consumer OAuth remains stubbed. **ToS/ban risk is unchanged: authors are not liable; prefer official API keys. Do not tag a release from this feature PR.**
+Status: **v0.2.6** on main. Usable 0.2.x product. 1.0 cut: [docs/V1.md](docs/V1.md).
+
+**Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
+
+## Keys vs OAuth
+
+| Path | When | Risk |
+|---|---|---|
+| **API key** (`anthropic`, `openai`, `google`/`gemini`, `xai`, Groq, …) | Official provider console / AI Studio | Supported. Prefer this. |
+| **Local / no key** (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | Software you already run | Supported. |
+| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, or Meta Muse subscription | **ToS/ban risk. At your own risk.** Authors not liable. |
+| **Qwen consumer OAuth** | — | **Not yet** (no CPA flow). Use a Qwen **API key** with `openai_compat`. |
+
+OAuth presets in the UI print the same warning. Tokens and inline keys go to the **OS keychain** (encrypted file fallback), not plaintext YAML.
 
 ## One-liner
 
-Maximize whatever you already pay for (Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse subscription OAuth, **at your own risk**), fall back to keys, and treat Ollama / LM Studio / llama.cpp / vLLM / OpenRouter-free / OpenCode Zen as first-class — then expose one OpenAI-shaped, one Claude-shaped, and one Responses local endpoint that coding tools already speak.
+Point coding tools at one local OpenAI-shaped, Claude-shaped, and Responses endpoint. Use keys and local runtimes first; optionally attach subscription OAuth **at your own risk**; fail over on 429/401.
 
 ## Install
 
+Pin the current release, or follow `main`:
+
 ```bash
+go install github.com/ks1686/peaproxy/cmd/peaproxy@v0.2.6
+# or
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
 peaproxy --version
 peaproxy serve
 ```
 
-Requires Go 1.22+. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser (GitHub Releases).
+Requires Go 1.22+. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)).
 
 ```bash
 go run ./cmd/peaproxy serve   # from a clone
@@ -29,11 +46,38 @@ Open http://127.0.0.1:8317/
 ![Showcase](docs/screenshots/showcase.png)
 ![Health](docs/screenshots/health.png)
 
+Screenshots are from an earlier UI build; Settings, Request log, and first-run Accounts CTAs exist in v0.2.6 even if the images lag.
+
+## Feature matrix (v0.2.6)
+
+| Capability | Status |
+|---|---|
+| Live catalog, hide ≠ route, pin/rename overlays | Shipped |
+| `POST /v1/chat/completions` stream + non-stream | Shipped |
+| `POST /v1/messages` true Anthropic SSE | Shipped |
+| `POST /v1/responses` (Codex native or translated) | Shipped |
+| Vision-in Showcase (URL / upload) | Shipped |
+| Image-out / `POST /v1/images/generations` | **Gated.** Catalogued only; no proxy; no fake chat drawing |
+| API keys + custom OpenAI-compat | Shipped |
+| Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse) | Shipped, **ToS/ban risk** |
+| Qwen consumer OAuth | **Not yet** — use an API key |
+| OS keychain / `secrets.enc` | Shipped |
+| 429/401 failover + cooldown skip + Health | Shipped (round-robin) |
+| Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp) |
+| Settings, onboarding CTAs, `config validate` | Shipped (v0.2.6) |
+| Loopback default; LAN needs token | Shipped |
+| macOS / Windows tray | **No, by design** (CLI + localhost UI) |
+| Claude OAuth through Cloudflare | Stock Go TLS; may **403**. Prefer API key. No uTLS. |
+| Embeddings endpoint | Not shipped |
+
+Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PLAN.md](docs/PLAN.md).
+
 ## Quick start
 
-1. **Accounts** — pick a preset (Ollama local or **Cloud**, LM Studio, **llama.cpp**, **vLLM**, **Jan**, **GPT4All**, Groq, Cerebras, Google AI Studio / Gemini **key**, xAI **key**, Hugging Face, **NVIDIA NIM**, **Cloudflare Workers AI** (account id field or `CLOUDFLARE_ACCOUNT_ID`), **SambaNova**, Anthropic **API key**, OpenAI **API key**, subscription OAuth for Claude / Codex / Gemini-Antigravity / xAI / Kimi / Meta Muse, OpenRouter, OpenCode Zen, or custom OpenAI-compat). Presets show the env var **name** they expect and whether it is set (never the value). OAuth presets show a ban-risk warning; prefer keys.
-2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename overlays. Free/Paid/Local filter is remembered in the UI.
-3. **Showcase** — try a prompt; vision models (`image_in`) accept an image URL or upload. Models tagged `image_out` show a gated **not yet** (no fake image-gen chat).
+1. **Accounts** — pick a preset. Official **API key** and **local** presets first. OAuth presets show a ban-risk warning. Workers AI needs an account id (`CLOUDFLARE_ACCOUNT_ID`). Presets show the env var **name** they expect and whether it is set (never the value).
+2. **Catalog** — live `ListModels`. Hide is listing-only (CPA #5995). Optional pin/rename. Filters persist in the UI.
+3. **Showcase** — try a prompt; `image_in` models accept an image URL or upload. `image_out` shows **not yet**.
 4. **Request log** — opt-in redacted inspector (`requestLog: true` or the UI toggle).
 5. Point Cursor / OpenCode / Claude Code / Pi / Continue / Cline / Amp at the local base URL (`peaproxy clients show …`).
 
@@ -52,20 +96,17 @@ peaproxy clients show pi         # both wires; cloak off
 peaproxy clients show codex      # Responses API (wire_api = responses)
 peaproxy clients show amp        # Custom URL, not amp.url
 peaproxy clients verify cursor --chat
-peaproxy clients verify pi --chat
-peaproxy clients verify amp --chat
-peaproxy clients verify codex --chat
 ```
 
-First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is persisted as `usage.json` next to the config; set `requestLog: true` for a redacted `requests.log`. OAuth tokens and inline API keys are stored in the OS keychain, or an encrypted file next to the YAML when no keychain is available. YAML still lists accounts (email, adapter) without printing secrets.
+First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is `usage.json` next to the config.
 
 | Command | Purpose |
 |---|---|
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` | Build version (`dev` unless a release ldflag) |
-| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta`). Prints a ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen is stubbed not-yet. |
+| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen is **not yet**. |
 | `accounts` | Configured provider accounts |
-| `models` | Live catalog (`--filter free\|paid\|local`) |
+| `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |
 | `status` | Bind / config path / version |
 | `config` | `path` / `show` / `validate` / `init` |
 | `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |
@@ -83,30 +124,14 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |
 | `GET /admin/health` | Bind, **adapter health**, **account cooldowns** with remaining time (token required off loopback) |
 | `POST /admin/health/probe` | Re-run `Validate` on each adapter |
-| `GET /admin/presets` | Account dropdown templates (includes env var **names** and whether they are set; never values) |
+| `GET /admin/presets` | Account dropdown templates (env var **names** and whether they are set; never values) |
 | `GET /admin/usage` | Persisted usage (`usage.json`) |
 | `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |
 | `POST /admin/catalog/overlay` | Pin / rename a live model id (listing overlay only) |
 
 ## Gemini
 
-Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generativelanguage.googleapis.com/v1beta/openai`), not `generateContent`. Adapter ids: `google` and alias `gemini`. Docs: [PROVIDERS.md](docs/PROVIDERS.md).
-
-## What shipped in v0.2.0
-
-- [x] Live catalog, OpenAI + Claude chat (incl. true SSE), vision Showcase
-- [x] Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters
-- [x] Hosted presets: LM Studio, Groq, Cerebras, Google AI Studio, xAI, Hugging Face
-- [x] Multi-account 429/401 failover + persisted usage
-- [x] Clients: Cursor, Claude Code, OpenCode, Pi (both wires, cloak off), Codex, Continue, Cline, Amp + `clients verify`
-- [x] First-run default config on `serve`; example YAML; `PEAPROXY_*` env overlays
-- [x] Refuse `0.0.0.0` without `--allow-lan` + admin token; UI LAN warning
-- [x] Subscription OAuth: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse (ToS/ban risk documented; API keys remain official) — [OAUTH.md](docs/OAUTH.md)
-- [x] Tag **`v0.2.0`** on `main` (GoReleaser publishes binaries)
-
-Post-v0.2 polish in this tree: OS keychain / encrypted-file secrets; Claude token 403 errors point at docs and the official API-key path. Qwen OAuth stays **not yet** (no CPA consumer flow).
-
-This branch (not tagged): catalog pin/rename overlays, opt-in request inspector UI, and adapter health / cooldown remaining. Rebased onto harness-fidelity `main` (image-out gating, cooldown-storm failover).
+Google AI Studio is the **official OpenAI-compat Gemini API** (`https://generativelanguage.googleapis.com/v1beta/openai`), not `generateContent`. Adapter ids: `google` and alias `gemini`. Subscription Gemini/Antigravity OAuth is a **different** adapter (`antigravity`) with ToS risk. Docs: [PROVIDERS.md](docs/PROVIDERS.md).
 
 ## Why this exists
 
@@ -116,13 +141,13 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 2. **Failover that works** — quota/429 → next credential without hand-disabling accounts.
 3. **Harness fidelity** — Pi cloak defaults off, thinking injection, Cursor tools, Amp/Codex `stream_options`, Continue YAML / Cline `/v1`.
 4. **Secure localhost default** — `127.0.0.1:8317`, not `*:8317`.
-5. **UI without a macOS tray** — CLI + browser only.
-6. **Catalog hide ≠ routing** — listing-only exclusion (CPA #5995 still open).
+5. **UI without a macOS tray** — CLI + browser only, **by design**.
+6. **Catalog hide ≠ routing** — listing-only exclusion (CPA #5995 still open upstream).
 7. **Prompt-cache-safe JSON** — never reshuffle keys with Go maps (VibeProxy #292).
 8. **Free + custom providers** — including OpenCode Zen (CPA declined #6018).
 9. **Built-in usage / showcase** — CPA removed usage in v6.10+.
 
-Details: [docs/PLAN.md](docs/PLAN.md), [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md).
+What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md).
 
 ## Security
 

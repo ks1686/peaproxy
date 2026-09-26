@@ -1,5 +1,7 @@
 # Harness presets
 
+Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). Adapters: [PROVIDERS.md](PROVIDERS.md).
+
 `peaproxy clients show <name>` prints copy-ready snippets.
 
 `peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
