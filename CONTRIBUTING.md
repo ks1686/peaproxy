@@ -4,7 +4,7 @@ Public repo: https://github.com/ks1686/peaproxy
 
 ## Scope right now
 
-Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters, hosted OpenAI-compat presets (LM Studio, llama.cpp, vLLM, Groq, Cerebras, Google AI Studio, xAI, Hugging Face, NVIDIA NIM, Cloudflare Workers AI, Ollama Cloud), live catalog (hide/pin/rename), Claude SSE, Responses (`POST /v1/responses`), vision Showcase, opt-in request inspector, multi-account failover, persisted usage, and **subscription OAuth** for Claude, Codex, Gemini/Antigravity, xAI, Kimi, and Meta Muse ([docs/OAUTH.md](docs/OAUTH.md)). Subscription OAuth may violate provider ToS; authors are not liable; prefer official API keys.
+Native Anthropic / OpenAI / OpenRouter / OpenCode Zen adapters, hosted OpenAI-compat presets (LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, Google AI Studio, xAI, Hugging Face, NVIDIA NIM, Cloudflare Workers AI, Ollama Cloud, SambaNova), live catalog (hide/pin/rename), Claude SSE, Responses (`POST /v1/responses`), vision Showcase, opt-in request inspector, multi-account failover, persisted usage, and **subscription OAuth** for Claude, Codex, Gemini/Antigravity, xAI, Kimi, and Meta Muse ([docs/OAUTH.md](docs/OAUTH.md)). Subscription OAuth may violate provider ToS; authors are not liable; prefer official API keys.
 
 ## Dev loop
 

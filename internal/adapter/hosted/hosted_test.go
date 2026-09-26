@@ -25,6 +25,9 @@ func TestKnownSpecsHaveBaseURLAndTier(t *testing.T) {
 		"nim":          {url: "https://integrate.api.nvidia.com/v1", tier: catalog.TierFreemium},
 		"workers_ai":   {url: "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/ai/v1", tier: catalog.TierFreemium},
 		"ollama_cloud": {url: "https://ollama.com/v1", tier: catalog.TierFreemium},
+		"jan":          {url: "http://127.0.0.1:1337/v1", tier: catalog.TierLocal},
+		"gpt4all":      {url: "http://127.0.0.1:4891/v1", tier: catalog.TierLocal},
+		"sambanova":    {url: "https://api.sambanova.ai/v1", tier: catalog.TierFreemium},
 	}
 	for _, spec := range All() {
 		got, ok := want[spec.Name]
@@ -86,5 +89,41 @@ func TestNewHostedPresetsHaveDocsAndKeys(t *testing.T) {
 	}
 	if LlamaCpp.DefaultBaseURL == VLLM.DefaultBaseURL {
 		t.Fatal("llama.cpp and vLLM default ports must differ")
+	}
+	if Jan.DefaultBaseURL == GPT4All.DefaultBaseURL || Jan.DefaultBaseURL == LlamaCpp.DefaultBaseURL {
+		t.Fatal("Jan/GPT4All/llama.cpp default ports must differ")
+	}
+	if SambaNova.EnvKey != "SAMBANOVA_API_KEY" {
+		t.Fatalf("sambanova env %s", SambaNova.EnvKey)
+	}
+	if Groq.Notes == "" || Cerebras.Notes == "" {
+		t.Fatal("groq/cerebras notes must name the documented OpenAI-compat URL and env var")
+	}
+}
+
+func TestWorkersAIFillsAccountIDFromEnv(t *testing.T) {
+	if WorkersAI.AccountIDEnv != "CLOUDFLARE_ACCOUNT_ID" || WorkersAI.URLPlaceholder != "YOUR_ACCOUNT_ID" {
+		t.Fatalf("workers_ai account-id fields: %#v", WorkersAI)
+	}
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "acc_from_env")
+	got := WorkersAI.FillBaseURL("")
+	if got != "https://api.cloudflare.com/client/v4/accounts/acc_from_env/ai/v1" {
+		t.Fatalf("filled url %s", got)
+	}
+}
+
+func TestWorkersAIKeepsPlaceholderWhenAccountIDEnvUnset(t *testing.T) {
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "")
+	got := WorkersAI.FillBaseURL(WorkersAI.DefaultBaseURL)
+	if got != WorkersAI.DefaultBaseURL {
+		t.Fatalf("want placeholder url, got %s", got)
+	}
+}
+
+func TestFillBaseURLLeavesExplicitAccountID(t *testing.T) {
+	t.Setenv("CLOUDFLARE_ACCOUNT_ID", "ignored")
+	explicit := "https://api.cloudflare.com/client/v4/accounts/already_set/ai/v1"
+	if got := WorkersAI.FillBaseURL(explicit); got != explicit {
+		t.Fatalf("got %s", got)
 	}
 }
