@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
@@ -22,6 +23,40 @@ const (
 
 // ErrNoAccount means every candidate failed or none matched.
 var ErrNoAccount = errors.New("no account available for model")
+
+// CooldownError is returned when every matching account is in the 429/401 skip
+// window. Callers should fail closed (no immediate re-hit) and honour RetryAfter.
+type CooldownError struct {
+	RetryAfter time.Duration
+	Err        error
+}
+
+func (e CooldownError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("all matching accounts in cooldown: %v", e.Err)
+	}
+	return "all matching accounts in cooldown"
+}
+
+func (e CooldownError) Unwrap() error {
+	if e.Err != nil {
+		return e.Err
+	}
+	return ErrNoAccount
+}
+
+// RetryAfterSeconds returns the Retry-After header value for cooldown errors.
+func RetryAfterSeconds(err error) int {
+	var ce CooldownError
+	if !errors.As(err, &ce) {
+		return 0
+	}
+	sec := int(ce.RetryAfter.Seconds())
+	if sec < 1 {
+		return 1
+	}
+	return sec
+}
 
 // RouteError is a terminal or retryable upstream failure.
 type RouteError struct {

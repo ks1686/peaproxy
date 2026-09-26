@@ -63,6 +63,7 @@ func (a *Adapter) Capabilities() adapter.Capabilities {
 		Chat:       true,
 		Stream:     true,
 		VisionIn:   true,
+		ImageOut:   false, // catalog may tag image_out; /v1/images/generations is not proxied yet
 		ListModels: true,
 		APIKey:     a.apiKey != "",
 		Local:      a.tier == catalog.TierLocal,
@@ -100,7 +101,11 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	}
 	var list struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID           string `json:"id"`
+			Architecture *struct {
+				InputModalities  []string `json:"input_modalities"`
+				OutputModalities []string `json:"output_modalities"`
+			} `json:"architecture"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
@@ -108,12 +113,17 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	}
 	out := make([]catalog.Model, 0, len(list.Data))
 	for _, m := range list.Data {
+		var input, output []string
+		if m.Architecture != nil {
+			input = m.Architecture.InputModalities
+			output = m.Architecture.OutputModalities
+		}
 		out = append(out, catalog.Model{
 			ID:         m.ID,
 			Provider:   a.provider,
 			AccountID:  a.id,
 			Tier:       inferTier(m.ID, a.tier),
-			Modalities: catalog.InferModalities(m.ID),
+			Modalities: catalog.ModalitiesFromLive(m.ID, input, output),
 			Status:     "ready",
 			Exposed:    true,
 			Routable:   true,

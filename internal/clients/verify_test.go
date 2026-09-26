@@ -64,6 +64,32 @@ func TestVerifyModelsAndChat(t *testing.T) {
 	if len(res4.Wires) != 2 || res4.Wires[0].Wire != WireChat || res4.Wires[1].Wire != WireMessages {
 		t.Fatalf("pi wires %#v", res4.Wires)
 	}
+
+	res5, err := Verify(context.Background(), "amp", srv.URL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatPath != "/v1/chat/completions" || !res5.ChatOK {
+		t.Fatalf("amp wire path=%s %#v", chatPath, res5)
+	}
+}
+
+func TestWiresForCoverage(t *testing.T) {
+	if got := wiresFor("pi"); len(got) != 2 {
+		t.Fatalf("pi verify must cover both wires: %v", got)
+	}
+	if got := wiresFor("amp"); len(got) != 1 || got[0] != WireChat {
+		t.Fatalf("amp: %v", got)
+	}
+	if got := wiresFor("cline"); len(got) != 1 || got[0] != WireChat {
+		t.Fatalf("cline: %v", got)
+	}
+	if got := wiresFor("continue"); got[0] != WireChat {
+		t.Fatalf("continue: %v", got)
+	}
+	if got := wiresFor("codex"); got[0] != WireResponses {
+		t.Fatalf("codex: %v", got)
+	}
 }
 
 func TestVerifyUnknownClient(t *testing.T) {

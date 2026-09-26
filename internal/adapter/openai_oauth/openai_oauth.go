@@ -515,14 +515,14 @@ func (a *Adapter) Responses(ctx context.Context, raw []byte) ([]byte, error) {
 	if err := a.ensureToken(ctx); err != nil {
 		return nil, err
 	}
-	return a.postResponses(ctx, jsonx.SetStream(raw, false), false)
+	return a.postResponses(ctx, prepareResponses(raw, false), false)
 }
 
 func (a *Adapter) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) error {
 	if err := a.ensureToken(ctx); err != nil {
 		return err
 	}
-	resp, err := a.doResponses(ctx, jsonx.SetStream(raw, true), true)
+	resp, err := a.doResponses(ctx, prepareResponses(raw, true), true)
 	if err != nil {
 		return err
 	}
@@ -606,7 +606,7 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 		return nil, nil
 	}
 	if bytes.Contains(raw, []byte(`"input"`)) && !bytes.Contains(raw, []byte(`"messages"`)) {
-		return jsonx.SetStream(raw, stream), nil
+		return prepareResponses(raw, stream), nil
 	}
 	var parsed struct {
 		Model    string `json:"model"`
@@ -626,6 +626,12 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 		msgs = append(msgs, adapter.Message{Role: m.Role, Content: messageContentString(m.Content)})
 	}
 	return chatToResponsesFromMessages(model, msgs, stream)
+}
+
+func prepareResponses(raw []byte, stream bool) []byte {
+	// Amp / Codex clients send stream_options; chatgpt.com Codex OAuth returns 400.
+	raw = jsonx.DropTopLevelKeys(raw, "stream_options")
+	return jsonx.SetStream(raw, stream)
 }
 
 func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bool) ([]byte, error) {

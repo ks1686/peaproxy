@@ -78,7 +78,7 @@ func TestClientsListIncludesClineAndContinue(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, name := range []string{"cline", "continue", "pi", "cursor"} {
+	for _, name := range []string{"cline", "continue", "pi", "cursor", "amp"} {
 		if !strings.Contains(got, name) {
 			t.Fatalf("missing %s in %s", name, got)
 		}

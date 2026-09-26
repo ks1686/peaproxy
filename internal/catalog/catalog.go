@@ -191,11 +191,60 @@ func ToOpenAIList(models []Model) OpenAIModelList {
 	return OpenAIModelList{Object: "list", Data: data}
 }
 
-// InferModalities tags text and optional image_in from well-known model id patterns.
-// This is enrichment only — live ListModels remains the source of IDs.
+// InferModalities tags text and optional image_in / image_out from well-known
+// model id patterns. This is enrichment only — live ListModels remains the
+// source of IDs. Prefer ModalitiesFromLive when the provider sends architecture.
 func InferModalities(id string) []string {
+	return ModalitiesFromLive(id, nil, nil)
+}
+
+// ModalitiesFromLive merges provider architecture arrays (OpenRouter-style
+// input_modalities / output_modalities) with id-pattern enrichment.
+func ModalitiesFromLive(id string, input, output []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, 3)
+	add := func(tag string) {
+		if tag == "" || seen[tag] {
+			return
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+	add("text")
+	for _, m := range input {
+		switch strings.ToLower(strings.TrimSpace(m)) {
+		case "image", "image_url", "vision":
+			add("image_in")
+		}
+	}
+	for _, m := range output {
+		switch strings.ToLower(strings.TrimSpace(m)) {
+		case "image":
+			add("image_out")
+		}
+	}
 	lower := strings.ToLower(id)
-	out := []string{"text"}
+	if imageOutID(lower) {
+		add("image_out")
+	} else if imageInID(lower) {
+		add("image_in")
+	}
+	return out
+}
+
+func imageOutID(lower string) bool {
+	for _, h := range []string{
+		"dall-e", "dalle", "gpt-image", "flux", "imagen", "stable-diffusion",
+		"sdxl", "grok-imagine", "image-generation", "imagegen",
+	} {
+		if strings.Contains(lower, h) {
+			return true
+		}
+	}
+	return false
+}
+
+func imageInID(lower string) bool {
 	for _, h := range []string{
 		"gpt-4o", "gpt-4.1", "gpt-5", "gpt-4-turbo", "o1", "o3", "o4",
 		"claude-3", "claude-sonnet", "claude-opus", "claude-haiku",
@@ -203,8 +252,8 @@ func InferModalities(id string) []string {
 		"qwen-vl", "llama-4", "grok-2-vision",
 	} {
 		if strings.Contains(lower, h) {
-			return []string{"text", "image_in"}
+			return true
 		}
 	}
-	return out
+	return false
 }

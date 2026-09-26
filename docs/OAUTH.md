@@ -86,7 +86,7 @@ Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it canno
 ## Architecture notes
 
 - Adapters implement `Authenticator` (`AuthStart` / `AuthComplete`) plus `ListModels` / `Chat` / `ChatStream`. Claude OAuth also implements `NativeMessages`.
-- JSON bodies used for Anthropic token exchange are structs (fixed key order), not `map[string]any`. Chat bodies still go through `jsonx.SetStream` (prompt-cache-safe).
+- JSON bodies used for Anthropic token exchange are structs (fixed key order), not `map[string]any`. Chat and Responses bodies use `jsonx.SetStream` / `jsonx.DropTopLevelKeys` (top-level only; nested `"stream"` and quoted text stay put). Codex OAuth drops Amp `stream_options` without reshuffling remaining keys.
 - Failover, hide≠route, and catalog filters (`subscription_oauth`) are unchanged.
 - PeaProxy does **not** vendor CLIProxyAPI. Public CLI client ids (Claude Code, Codex CLI, Antigravity IDE, Grok CLI, Kimi Code, Muse CLI) are used because those are the clients the subscription tokens are issued for.
 

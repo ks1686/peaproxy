@@ -65,6 +65,10 @@ func wiresFor(name string) []ClientWire {
 		return []ClientWire{WireResponses}
 	case "pi":
 		return []ClientWire{WireChat, WireMessages}
+	case "amp":
+		return []ClientWire{WireChat}
+	case "cursor", "opencode", "continue", "cline":
+		return []ClientWire{WireChat}
 	default:
 		return []ClientWire{WireChat}
 	}

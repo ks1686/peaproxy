@@ -290,7 +290,7 @@ func configCmd(configPath *string) *cobra.Command {
 func clientsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clients",
-		Short: "Harness presets (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline)",
+		Short: "Harness presets (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp)",
 		Long: `Examples:
   peaproxy clients list
   peaproxy clients show cursor
@@ -299,6 +299,7 @@ func clientsCmd() *cobra.Command {
   peaproxy clients show pi
   peaproxy clients show continue
   peaproxy clients show cline
+  peaproxy clients show amp
   peaproxy clients verify cursor
   peaproxy clients verify cursor --chat
 `,

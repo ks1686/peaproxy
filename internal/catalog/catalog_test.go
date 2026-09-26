@@ -157,6 +157,39 @@ func TestInferModalitiesVision(t *testing.T) {
 	}
 }
 
+func TestInferModalitiesImageOut(t *testing.T) {
+	for _, id := range []string{"dall-e-3", "gpt-image-1", "black-forest-labs/flux-schnell"} {
+		got := InferModalities(id)
+		if !contains(got, "image_out") {
+			t.Fatalf("%s: %v", id, got)
+		}
+		if contains(got, "image_in") {
+			t.Fatalf("%s should not be tagged vision-in: %v", id, got)
+		}
+	}
+}
+
+func TestModalitiesFromLiveArchitecture(t *testing.T) {
+	got := ModalitiesFromLive("openrouter/foo", []string{"text", "image"}, []string{"text", "image"})
+	if !contains(got, "text") || !contains(got, "image_in") || !contains(got, "image_out") {
+		t.Fatalf("%v", got)
+	}
+	// No live architecture → id inference.
+	got = ModalitiesFromLive("dall-e-3", nil, nil)
+	if !contains(got, "image_out") {
+		t.Fatalf("%v", got)
+	}
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAccountsForModelIncludesHidden(t *testing.T) {
 	models := []Model{
 		{ID: "gpt-4o", Provider: "openai", AccountID: "a", Tier: TierPaid},

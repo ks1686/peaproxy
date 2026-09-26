@@ -25,4 +25,4 @@ Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows,
 - No AI authorship trailers on commits or PRs.
 - Live `ListModels` per adapter — never a hand-maintained model allowlist as source of truth.
 - Secrets stay in the OS keychain (encrypted file fallback). Never log tokens.
-- Prompt-cache-safe JSON: structs + `jsonx.SetStream`, never `map[string]any` for Anthropic bodies.
+- Prompt-cache-safe JSON: structs + `jsonx.SetStream` / `jsonx.DropTopLevelKeys`, never `map[string]any` for Anthropic or Codex request bodies.
