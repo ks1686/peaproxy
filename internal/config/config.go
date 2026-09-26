@@ -1,5 +1,7 @@
 // Package config loads versioned YAML plus defaults.
-// Secrets belong in the OS keychain (encrypted file fallback) — not this file.
+// OAuth tokens and inline API keys are stored via internal/secretstore
+// (OS keychain, or an AES-GCM file next to this YAML). The YAML still lists
+// accounts and non-secret OAuth metadata (email, expiry).
 package config
 
 import (
@@ -55,14 +57,16 @@ type Provider struct {
 	BaseURL string `yaml:"baseURL,omitempty"`
 	// APIKeyEnv names an env var; preferred over apiKey when set.
 	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
-	// APIKey may be stored locally (file mode 0600). Prefer APIKeyEnv.
+	// APIKey is an inline key. Save persists it in the secret store, not YAML.
+	// Prefer APIKeyEnv.
 	APIKey string `yaml:"apiKey,omitempty"`
 	// SessionID is used by OpenCode Zen (x-session-id). Fragile vs API key.
 	SessionID string `yaml:"sessionId,omitempty"`
 	// Label is a user-facing tier override (free|freemium|paid|local).
 	Label    string `yaml:"label,omitempty"`
 	Disabled bool   `yaml:"disabled,omitempty"`
-	// OAuth holds subscription tokens (file mode 0600). Prefer env/API keys.
+	// OAuth holds subscription tokens in memory. Save writes tokens to the
+	// secret store and keeps only non-secret metadata in YAML.
 	OAuth *OAuthToken `yaml:"oauth,omitempty"`
 }
 
@@ -263,18 +267,27 @@ func Load(path string) (Config, error) {
 	if cfg.SchemaVersion == 0 {
 		cfg.SchemaVersion = SchemaVersion
 	}
+	if err := hydrateSecrets(path, &cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, cfg.Validate()
 }
 
-// Save writes YAML with mode 0600.
+// Save writes YAML with mode 0600. OAuth tokens and inline API keys go to the
+// secret store (OS keychain or encrypted file); YAML keeps account metadata.
 func Save(path string, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil && filepath.Dir(path) != "." {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil && dir != "." {
 		return err
 	}
-	b, err := yaml.Marshal(cfg)
+	disk, err := persistSecrets(path, cfg)
+	if err != nil {
+		return err
+	}
+	b, err := yaml.Marshal(disk)
 	if err != nil {
 		return err
 	}

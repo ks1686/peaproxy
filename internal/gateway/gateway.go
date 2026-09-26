@@ -652,7 +652,7 @@ func (g *Gateway) AdapterByID(id string) (adapter.Adapter, bool) {
 	return nil, false
 }
 
-// SaveOAuth persists refreshed subscription tokens (0600 YAML).
+// SaveOAuth persists refreshed subscription tokens via the secret store.
 func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
 	ct := config.OAuthFromRuntime(tok)
 	g.mu.Lock()

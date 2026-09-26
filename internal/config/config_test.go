@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ks1686/peaproxy/internal/config"
@@ -54,15 +55,22 @@ providers:
 	if len(cfg.Providers) != 1 || cfg.Providers[0].Adapter != "ollama" {
 		t.Fatalf("providers: %#v", cfg.Providers)
 	}
-	cfg.Providers[0].APIKey = "sk-test"
+	cfg.Providers[0].APIKey = "sk-test-secret-value"
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(onDisk), "sk-test-secret-value") {
+		t.Fatalf("apiKey leaked into YAML:\n%s", onDisk)
 	}
 	again, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Providers[0].APIKey != "sk-test" {
+	if again.Providers[0].APIKey != "sk-test-secret-value" {
 		t.Fatalf("save lost apiKey")
 	}
 }
@@ -76,15 +84,28 @@ func TestOAuthTokenRoundTrip(t *testing.T) {
 		Adapter: "anthropic_oauth",
 		Tier:    "paid",
 		OAuth: &config.OAuthToken{
-			AccessToken:  "at",
-			RefreshToken: "rt",
+			AccessToken:  "access-token-secret",
+			RefreshToken: "refresh-token-secret",
 			ExpiresAt:    "2026-09-26T12:00:00Z",
 			Email:        "a@b.c",
-			Extra:        map[string]string{"project_id": "proj-1"},
+			Extra:        map[string]string{"project_id": "proj-1", "dca_token": "dca-secret"},
 		},
 	})
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(onDisk)
+	for _, secret := range []string{"access-token-secret", "refresh-token-secret", "dca-secret"} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("oauth secret %q leaked into YAML:\n%s", secret, raw)
+		}
+	}
+	if !strings.Contains(raw, "a@b.c") || !strings.Contains(raw, "proj-1") {
+		t.Fatalf("public oauth metadata missing from YAML:\n%s", raw)
 	}
 	again, err := config.Load(path)
 	if err != nil {
@@ -96,11 +117,14 @@ func TestOAuthTokenRoundTrip(t *testing.T) {
 			found = p.OAuth
 		}
 	}
-	if found == nil || found.AccessToken != "at" || found.RefreshToken != "rt" || found.Email != "a@b.c" {
+	if found == nil || found.AccessToken != "access-token-secret" || found.RefreshToken != "refresh-token-secret" || found.Email != "a@b.c" {
 		t.Fatalf("%#v", found)
 	}
 	if found.Extra["project_id"] != "proj-1" {
 		t.Fatalf("extra %#v", found.Extra)
+	}
+	if found.Extra["dca_token"] != "dca-secret" {
+		t.Fatalf("dca_token not hydrated: %#v", found.Extra)
 	}
 	if !found.Runtime().Valid() {
 		t.Fatal("runtime token should be valid")
@@ -171,6 +195,66 @@ func TestApplyEnvOverlaysFile(t *testing.T) {
 	config.ApplyEnv(&cfg)
 	if cfg.Port != 9001 || cfg.AdminToken != "secret-token" || !cfg.AllowNonLoopback || !cfg.RequestLog {
 		t.Fatalf("%#v", cfg)
+	}
+}
+
+func TestLegacyYAMLSecretsMigrateOnSave(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	src := []byte(`schemaVersion: 1
+bind: 127.0.0.1
+port: 8317
+providers:
+  - id: anthropic-key
+    adapter: anthropic
+    tier: paid
+    apiKey: sk-legacy-inline
+  - id: anthropic-oauth
+    adapter: anthropic_oauth
+    tier: paid
+    oauth:
+      accessToken: legacy-access
+      refreshToken: legacy-refresh
+      email: old@example.com
+`)
+	if err := os.WriteFile(path, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Providers[0].APIKey != "sk-legacy-inline" {
+		t.Fatalf("legacy apiKey: %#v", cfg.Providers[0])
+	}
+	if !cfg.Providers[1].HasOAuth() || cfg.Providers[1].OAuth.AccessToken != "legacy-access" {
+		t.Fatalf("legacy oauth: %#v", cfg.Providers[1].OAuth)
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := string(onDisk)
+	for _, secret := range []string{"sk-legacy-inline", "legacy-access", "legacy-refresh"} {
+		if strings.Contains(raw, secret) {
+			t.Fatalf("legacy secret %q still in YAML:\n%s", secret, raw)
+		}
+	}
+	if !strings.Contains(raw, "old@example.com") {
+		t.Fatalf("email should remain in YAML:\n%s", raw)
+	}
+	again, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Providers[0].APIKey != "sk-legacy-inline" {
+		t.Fatalf("migrated apiKey lost: %#v", again.Providers[0])
+	}
+	if again.Providers[1].OAuth == nil || again.Providers[1].OAuth.AccessToken != "legacy-access" {
+		t.Fatalf("migrated oauth lost: %#v", again.Providers[1].OAuth)
 	}
 }
 

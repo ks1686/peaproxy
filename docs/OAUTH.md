@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. First verticals were Claude Pro/Max and ChatGPT/Codex; this tree also includes Gemini/Antigravity, xAI Grok, Kimi, and Meta Muse.
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. First verticals were Claude Pro/Max and ChatGPT/Codex; v0.2 also includes Gemini/Antigravity, xAI Grok, Kimi, and Meta Muse.
 
 ## Liability (read this)
 
@@ -40,7 +40,7 @@ Live `ListModels` is still the catalog source of truth. If a subscription token 
 
 ## Login
 
-CLI (preferred; completes the browser/device flow and writes `~/.config/peaproxy/config.yaml` mode 0600):
+CLI (preferred; completes the browser/device flow and writes `~/.config/peaproxy/config.yaml` plus secrets):
 
 ```bash
 peaproxy auth login --provider anthropic
@@ -76,7 +76,12 @@ xAI, Kimi, and Meta Muse use **device code** (no loopback port). If a PKCE port 
 
 ## Storage and secrets
 
-Tokens live under `providers[].oauth` in the YAML config (file mode **0600**), including optional `extra` keys (`project_id`, `device_id`, `dca_token`, `token_endpoint`). Refresh updates the same fields. The UI redacts tokens; request logs redact `bearer`, `sk-`, `x-api-key`, `access_token`, `refresh_token`, and `id_token`. Never log tokens.
+Accounts stay in YAML (`providers[]` with adapter, email, expiry, non-secret `extra` like `project_id`). **OAuth tokens and inline API keys are not stored in plaintext YAML.**
+
+1. **OS keychain** (default when it works): macOS Keychain, Windows Credential Manager, or Linux Secret Service via [zalando/go-keyring](https://github.com/zalando/go-keyring). Service name `peaproxy`.
+2. **Encrypted file fallback:** AES-256-GCM blob `secrets.enc` next to the config, keyed by `secret.key` (32 random bytes, mode 0600). Used when no keychain is available (typical Linux CI / headless), during `go test`, or when `PEAPROXY_SECRET_BACKEND=file`.
+
+Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it cannot probe). Windows Credential Manager has a per-item size limit; if a token write fails, set `PEAPROXY_SECRET_BACKEND=file`. Existing YAML that still has `accessToken` / `apiKey` is loaded, then migrated into the secret store on the next `Save` (auth login, token refresh, or any config write). The UI and `peaproxy accounts list` redact tokens. Request logs redact `bearer`, `sk-`, `x-api-key`, `access_token`, `refresh_token`, and `id_token`. Never log tokens.
 
 ## Architecture notes
 
@@ -87,18 +92,18 @@ Tokens live under `providers[].oauth` in the YAML config (file mode **0600**), i
 
 ## Residual gaps
 
-- Qwen consumer OAuth is stubbed **not yet** (no CPA flow).
+- Qwen consumer OAuth is stubbed **not yet** (no CPA flow). Use `openai_compat` + a Qwen API key.
 - Devin and Vertex are intentionally omitted (not generic consumer chat OAuth).
-- Claude token endpoints sit behind Cloudflare; a stock `net/http` TLS fingerprint may get **403**. If login fails that way, use an official API key or retry from a normal desktop network.
+- **Claude Cloudflare 403:** `platform.claude.com/v1/oauth/token` sits behind Cloudflare. Token requests now send Claude Code’s control-plane `User-Agent` (`axios/1.15.2`). PeaProxy does **not** add uTLS / TLS fingerprint spoofing (heavy dependency; CPA does this with a Firefox hello). Stock Go `crypto/tls` may still get **HTTP 403** on AuthComplete or refresh. If that happens, the error tells you to use an official API key (`adapter: anthropic`, [console keys](https://console.anthropic.com/settings/keys)) or retry from a typical desktop network (home/office, not some datacenter IPs). Chat against `api.anthropic.com` with a key is the supported path.
 - Codex chat is the **Responses** API, translated to OpenAI chat/completions locally. Native Codex `/responses` passthrough from clients is not a first-class PeaProxy route (OpenAI + Claude wires still are).
 - Antigravity chat is Cloud Code `generateContent`, translated to OpenAI chat locally. No uTLS / HTTP/2 fingerprint matching vs the native Antigravity binary.
-- No OS keychain yet (same as v0.1 keys: YAML 0600).
 
 ## Manual smoke
 
-1. `peaproxy auth login --provider anthropic` — complete browser login.
+1. `peaproxy auth login --provider anthropic` — complete browser login. If this returns HTTP 403/Cloudflare, use an API key instead (see Residual gaps).
 2. `peaproxy serve` and Catalog filter **Subscription OAuth**.
 3. Showcase a listed Claude model (short prompt).
 4. Repeat for `--provider openai` (Plus/Pro/Codex). Confirm `Chatgpt-Account-Id` is not logged.
 5. Repeat for `--provider gemini`, then `--provider xai` (device code).
 6. Confirm `peaproxy auth login --provider anthropic --print-url` prints a PKCE URL without waiting.
+7. Confirm `config.yaml` lists the account (email/adapter) but does not contain `accessToken` / `refreshToken`; secrets live in the keychain or `secrets.enc`.

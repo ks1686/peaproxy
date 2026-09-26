@@ -36,6 +36,9 @@ const (
 	APIVersion     = "2023-06-01"
 	OAuthBetas     = "claude-code-20250219,oauth-2025-04-20"
 	callbackPort   = "54545"
+	// TokenUserAgent matches Claude Code's OAuth control-plane client (axios).
+	TokenUserAgent = "axios/1.15.2"
+	cloudflare403  = "Cloudflare/WAF likely blocked stock Go TLS on the Claude token endpoint. PeaProxy does not spoof TLS fingerprints. Use an official API key (adapter anthropic, https://console.anthropic.com/settings/keys) or retry from a typical desktop network. See docs/OAUTH.md."
 )
 
 // Adapter is a Claude subscription OAuth client (Messages API + PKCE login).
@@ -283,6 +286,7 @@ func (a *Adapter) postJSON(ctx context.Context, endpoint string, body []byte) ([
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", TokenUserAgent)
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -293,9 +297,20 @@ func (a *Adapter) postJSON(ctx context.Context, endpoint string, body []byte) ([
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return nil, tokenStatusError(resp.StatusCode, raw)
 	}
 	return raw, nil
+}
+
+func tokenStatusError(status int, raw []byte) error {
+	body := truncate(raw)
+	if status == http.StatusForbidden {
+		if body != "" {
+			return adapter.HTTPError{Status: status, Body: cloudflare403 + " Upstream: " + body}
+		}
+		return adapter.HTTPError{Status: status, Body: cloudflare403}
+	}
+	return adapter.HTTPError{Status: status, Body: body}
 }
 
 func (a *Adapter) ensureToken(ctx context.Context) error {
