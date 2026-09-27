@@ -558,6 +558,7 @@ func (a *Adapter) postResponses(ctx context.Context, raw []byte, stream bool) ([
 }
 
 func (a *Adapter) doResponses(ctx context.Context, raw []byte, stream bool) (*http.Response, error) {
+	raw = prepareResponses(raw, stream)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiBase+"/responses", bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
@@ -698,9 +699,11 @@ func chatMessagesHaveTools(msgs []chatInboundMessage) bool {
 }
 
 func prepareResponses(raw []byte, stream bool) []byte {
-	// Amp / Codex clients send stream_options; chatgpt.com Codex OAuth returns 400.
-	raw = jsonx.DropTopLevelKeys(raw, "stream_options")
-	return jsonx.SetStream(raw, stream)
+	// chatgpt.com Codex OAuth rejects stream_options, max_output_tokens, and
+	// any store value other than false (omit or true → HTTP 400).
+	raw = jsonx.DropTopLevelKeys(raw, "stream_options", "max_output_tokens", "store")
+	raw = jsonx.SetStream(raw, stream)
+	return jsonx.SetBool(raw, "store", false)
 }
 
 func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bool) ([]byte, error) {
@@ -728,12 +731,16 @@ func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bo
 			input = append(input, raw)
 		}
 	}
-	return json.Marshal(responsesBody{
+	raw, err := json.Marshal(responsesBody{
 		Model:        model,
 		Instructions: instr.String(),
 		Input:        input,
 		Stream:       stream,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return prepareResponses(raw, stream), nil
 }
 
 func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, toolChoice json.RawMessage, stream bool) ([]byte, error) {
@@ -801,7 +808,11 @@ func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, to
 		Tools:        chatToolsToResponses(tools),
 		ToolChoice:   chatToolChoiceToResponses(toolChoice),
 	}
-	return json.Marshal(body)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return prepareResponses(raw, stream), nil
 }
 
 func marshalResponsesMessage(role, partType, text string) (json.RawMessage, error) {

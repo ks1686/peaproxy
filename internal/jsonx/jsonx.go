@@ -23,18 +23,27 @@ func PeekBody(raw []byte) Peek {
 
 // SetStream surgically patches the top-level stream flag, preserving key order
 // and all other bytes (including nested "stream" keys and quoted text).
+func SetStream(raw []byte, stream bool) []byte {
+	return SetBool(raw, "stream", stream)
+}
+
+// SetBool surgically patches a top-level boolean key, preserving key order
+// and all other bytes (including nested keys and quoted text).
 // If the key is already the requested bool, the input is returned unchanged.
 // If the key is missing it is inserted immediately before the final closing brace.
-func SetStream(raw []byte, stream bool) []byte {
+func SetBool(raw []byte, key string, val bool) []byte {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		raw = []byte(`{}`)
 	}
+	if key == "" {
+		return raw
+	}
 	lit := []byte("false")
-	if stream {
+	if val {
 		lit = []byte("true")
 	}
-	span, ok := findTopLevelBool(raw, "stream")
+	span, ok := findTopLevelBool(raw, key)
 	if ok {
 		if bytes.Equal(raw[span.valueStart:span.valueEnd], lit) {
 			return raw
@@ -50,7 +59,7 @@ func SetStream(raw []byte, stream bool) []byte {
 		return raw
 	}
 	inner := bytes.TrimRight(raw[:end], " \t\r\n")
-	insert := append([]byte(`"stream":`), lit...)
+	insert := append([]byte(`"`+key+`":`), lit...)
 	if len(inner) > 1 && inner[len(inner)-1] != '{' {
 		insert = append([]byte{','}, insert...)
 	}
