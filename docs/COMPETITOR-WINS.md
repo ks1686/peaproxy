@@ -22,7 +22,7 @@ CLIProxyAPI repeatedly gets "add model X" issues (Opus 4.6/4.7, Fable, GPT Daybr
 
 - Claude cloak defaults break Pi / non-Claude-Code (#6120) — **client-preset** cloak defaults **off**. `anthropic_oauth` Messages still apply a **non-strict** Claude Code system cloak upstream (caller system relocated, never deleted)
 - Thinking/clear_thinking injection breaks plain Claude (#509 VibeProxy) — not injected
-- Tool-result adjacency / translator bugs (#6129, #4112) — still a translation risk on non-native wires
+- Tool-result adjacency / translator bugs (#6129, #4112) — function tools round-trip. Cross-wire thinking and reasoning use chat `reasoning_opaque` (kinds stay distinct; a client that drops unknown assistant fields loses the signature)
 - Cursor tool blocks on OpenAI wire (#411 VibeProxy)
 - Codex Responses vs Messages quirks; image_gen tool conflicts (#456) — `POST /v1/responses` exists; image-gen tool is **not** a generations proxy
 - Amp WebSocket / stream_options failures — Custom URL only; **no** Amp WebSocket; Codex OAuth drops `stream_options`

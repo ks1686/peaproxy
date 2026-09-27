@@ -67,10 +67,11 @@ type openAIIn struct {
 }
 
 type openAIInMsg struct {
-	Role       string           `json:"role"`
-	Content    json.RawMessage  `json:"content"`
-	ToolCalls  []openAIToolCall `json:"tool_calls"`
-	ToolCallID string           `json:"tool_call_id"`
+	Role            string           `json:"role"`
+	Content         json.RawMessage  `json:"content"`
+	ToolCalls       []openAIToolCall `json:"tool_calls"`
+	ToolCallID      string           `json:"tool_call_id"`
+	ReasoningOpaque json.RawMessage  `json:"reasoning_opaque"`
 }
 
 // CanonicalClaudeModel strips a provider prefix (anthropic/…) and rewrites
@@ -174,7 +175,26 @@ type claudeToolResultBlock struct {
 }
 
 func assistantOpenAIToClaude(m openAIInMsg) (json.RawMessage, error) {
-	blocks := make([]any, 0, 1+len(m.ToolCalls))
+	entries, err := parseOpaque(m.ReasoningOpaque)
+	if err != nil {
+		return nil, err
+	}
+	blocks := make([]any, 0, 1+len(m.ToolCalls)+len(entries))
+	for _, e := range entries {
+		switch e.Kind {
+		case kindAnthropicThinking:
+			blocks = append(blocks, struct {
+				Type      string `json:"type"`
+				Thinking  string `json:"thinking"`
+				Signature string `json:"signature,omitempty"`
+			}{Type: "thinking", Thinking: e.Thinking, Signature: e.Signature})
+		case kindAnthropicRedacted:
+			blocks = append(blocks, struct {
+				Type string `json:"type"`
+				Data string `json:"data"`
+			}{Type: "redacted_thinking", Data: e.Data})
+		}
+	}
 	text, _ := contentText(m.Content)
 	if text != "" {
 		blocks = append(blocks, claudeContent{Type: "text", Text: text})
@@ -278,11 +298,14 @@ type claudeNative struct {
 }
 
 type claudeNativeBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text"`
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
+	Signature string          `json:"signature"`
+	Data      string          `json:"data"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
 }
 
 type openAIOut struct {
@@ -292,9 +315,10 @@ type openAIOut struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role      string           `json:"role"`
-			Content   json.RawMessage  `json:"content"`
-			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+			Role            string           `json:"role"`
+			Content         json.RawMessage  `json:"content"`
+			ToolCalls       []openAIToolCall `json:"tool_calls,omitempty"`
+			ReasoningOpaque json.RawMessage  `json:"reasoning_opaque,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -312,17 +336,25 @@ func FromClaude(raw []byte) ([]byte, error) {
 	}
 	text := ClaudeText(raw)
 	var calls []openAIToolCall
+	var opaque []opaqueEntry
 	for _, c := range in.Content {
-		if c.Type != "tool_use" {
-			continue
+		switch c.Type {
+		case "tool_use":
+			tc := openAIToolCall{ID: c.ID, Type: "function"}
+			tc.Function.Name = c.Name
+			tc.Function.Arguments = toolUseArguments(c.Input)
+			calls = append(calls, tc)
+		case "thinking":
+			opaque = append(opaque, opaqueEntry{Kind: kindAnthropicThinking, Thinking: c.Thinking, Signature: c.Signature})
+		case "redacted_thinking":
+			opaque = append(opaque, opaqueEntry{Kind: kindAnthropicRedacted, Data: c.Data})
 		}
-		tc := openAIToolCall{ID: c.ID, Type: "function"}
-		tc.Function.Name = c.Name
-		tc.Function.Arguments = toolUseArguments(c.Input)
-		calls = append(calls, tc)
+	}
+	opaqueRaw, err := marshalOpaque(opaque)
+	if err != nil {
+		return nil, err
 	}
 	var content json.RawMessage
-	var err error
 	if len(calls) > 0 {
 		content, err = assistantOpenAIContent(text)
 	} else {
@@ -335,15 +367,17 @@ func FromClaude(raw []byte) ([]byte, error) {
 	out.Choices = make([]struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role      string           `json:"role"`
-			Content   json.RawMessage  `json:"content"`
-			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+			Role            string           `json:"role"`
+			Content         json.RawMessage  `json:"content"`
+			ToolCalls       []openAIToolCall `json:"tool_calls,omitempty"`
+			ReasoningOpaque json.RawMessage  `json:"reasoning_opaque,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	}, 1)
 	out.Choices[0].Message.Role = "assistant"
 	out.Choices[0].Message.Content = content
 	out.Choices[0].Message.ToolCalls = calls
+	out.Choices[0].Message.ReasoningOpaque = opaqueRaw
 	out.Choices[0].FinishReason = openAIChatFinishReason(len(calls) > 0 || in.StopReason == "tool_use")
 	if in.StopReason == "max_tokens" && len(calls) == 0 {
 		out.Choices[0].FinishReason = "length"

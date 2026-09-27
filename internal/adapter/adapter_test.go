@@ -107,6 +107,34 @@ func TestOAuthAdaptersImplementAuthenticator(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatStripsReasoningOpaque(t *testing.T) {
+	var got []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a, err := openai_compat.New(adapter.Options{ID: "x", BaseURL: srv.URL + "/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "m",
+		Raw:   []byte(`{"model":"m","messages":[{"role":"assistant","content":"hello","reasoning_opaque":[{"kind":"anthropic_thinking","signature":"sig"}]}],"temperature":0}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("reasoning_opaque")) || bytes.Contains(got, []byte("sig")) {
+		t.Fatalf("upstream saw opaque carry: %s", got)
+	}
+	if !bytes.Contains(got, []byte(`"content":"hello"`)) || !bytes.Contains(got, []byte(`"temperature":0`)) {
+		t.Fatalf("body %s", got)
+	}
+}
+
 func TestOpenAICompatChatAndStream(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {

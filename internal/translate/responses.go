@@ -33,12 +33,16 @@ type responsesOutput struct {
 }
 
 type responsesOutMsg struct {
-	Type      string             `json:"type"`
-	Role      string             `json:"role,omitempty"`
-	Content   []responsesOutPart `json:"content,omitempty"`
-	CallID    string             `json:"call_id,omitempty"`
-	Name      string             `json:"name,omitempty"`
-	Arguments string             `json:"arguments,omitempty"`
+	Type             string             `json:"type"`
+	Role             string             `json:"role,omitempty"`
+	Content          []responsesOutPart `json:"content,omitempty"`
+	CallID           string             `json:"call_id,omitempty"`
+	Name             string             `json:"name,omitempty"`
+	Arguments        string             `json:"arguments,omitempty"`
+	ID               string             `json:"id,omitempty"`
+	EncryptedContent string             `json:"encrypted_content,omitempty"`
+	Summary          json.RawMessage    `json:"summary,omitempty"`
+	Status           string             `json:"status,omitempty"`
 }
 
 type responsesOutPart struct {
@@ -142,6 +146,30 @@ func responsesInputToMessages(instructions string, input json.RawMessage) ([]ope
 		return nil, fmt.Errorf("responses input: %w", err)
 	}
 	var pendingCalls []json.RawMessage
+	var pendingOpaque []opaqueEntry
+	flushOpaque := func(msg *openAIMessage) error {
+		if len(pendingOpaque) == 0 {
+			return nil
+		}
+		raw, err := marshalOpaque(pendingOpaque)
+		if err != nil {
+			return err
+		}
+		msg.ReasoningOpaque = raw
+		pendingOpaque = nil
+		return nil
+	}
+	emitOpaqueCarrier := func() error {
+		if len(pendingOpaque) == 0 {
+			return nil
+		}
+		msg := openAIMessage{Role: "assistant", Content: json.RawMessage("null")}
+		if err := flushOpaque(&msg); err != nil {
+			return err
+		}
+		msgs = append(msgs, msg)
+		return nil
+	}
 	flushCalls := func() error {
 		if len(pendingCalls) == 0 {
 			return nil
@@ -150,7 +178,11 @@ func responsesInputToMessages(instructions string, input json.RawMessage) ([]ope
 		if err != nil {
 			return err
 		}
-		msgs = append(msgs, openAIMessage{Role: "assistant", Content: json.RawMessage("null"), ToolCalls: raw})
+		msg := openAIMessage{Role: "assistant", Content: json.RawMessage("null"), ToolCalls: raw}
+		if err := flushOpaque(&msg); err != nil {
+			return err
+		}
+		msgs = append(msgs, msg)
 		pendingCalls = nil
 		return nil
 	}
@@ -173,8 +205,11 @@ func responsesInputToMessages(instructions string, input json.RawMessage) ([]ope
 			}
 			msgs = append(msgs, msg)
 		case "reasoning":
-			// Chat completions have no reasoning item; skip rather than invent text.
-			continue
+			entry, err := opaqueFromReasoningItem(item)
+			if err != nil {
+				return nil, err
+			}
+			pendingOpaque = append(pendingOpaque, entry)
 		default:
 			if err := flushCalls(); err != nil {
 				return nil, err
@@ -183,12 +218,23 @@ func responsesInputToMessages(instructions string, input json.RawMessage) ([]ope
 			if err != nil {
 				return nil, err
 			}
-			if ok {
-				msgs = append(msgs, msg)
+			if !ok {
+				continue
 			}
+			if msg.Role == "assistant" {
+				if err := flushOpaque(&msg); err != nil {
+					return nil, err
+				}
+			} else if err := emitOpaqueCarrier(); err != nil {
+				return nil, err
+			}
+			msgs = append(msgs, msg)
 		}
 	}
 	if err := flushCalls(); err != nil {
+		return nil, err
+	}
+	if err := emitOpaqueCarrier(); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -374,6 +420,7 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 		Name      string
 		Arguments string
 	}
+	var reasoning []responsesOutMsg
 	if len(in.Choices) > 0 {
 		text = in.Choices[0].Message.Content
 		for _, tc := range in.Choices[0].Message.ToolCalls {
@@ -383,6 +430,23 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 				Arguments string
 			}{ID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments})
 		}
+		items, err := ResponsesReasoningItems(in.Choices[0].Message.ReasoningOpaque)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			var wire responsesReasoningWire
+			if err := json.Unmarshal(item, &wire); err != nil {
+				return nil, err
+			}
+			reasoning = append(reasoning, responsesOutMsg{
+				Type:             "reasoning",
+				ID:               wire.ID,
+				EncryptedContent: wire.EncryptedContent,
+				Summary:          wire.Summary,
+				Status:           wire.Status,
+			})
+		}
 	}
 	id := in.ID
 	if id == "" {
@@ -391,7 +455,8 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 	if in.Model != "" {
 		model = in.Model
 	}
-	var output []responsesOutMsg
+	output := make([]responsesOutMsg, 0, len(reasoning)+len(calls)+1)
+	output = append(output, reasoning...)
 	for _, tc := range calls {
 		output = append(output, responsesOutMsg{
 			Type:      "function_call",

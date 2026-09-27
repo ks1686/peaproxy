@@ -26,8 +26,8 @@ func TestResponsesChatToolsRoundTripFixtures(t *testing.T) {
 					{"type":"reasoning","summary":[{"type":"summary_text","text":"skip me"}]}
 				]
 			}`,
-			want: []string{`"tools"`, `"tool_choice"`, `"tool_calls"`, `"call_1"`, `"role":"tool"`, `"tool_call_id":"call_1"`, `"found"`, `"lookup"`},
-			deny: []string{"skip me", `"input"`},
+			want: []string{`"tools"`, `"tool_choice"`, `"tool_calls"`, `"call_1"`, `"role":"tool"`, `"tool_call_id":"call_1"`, `"found"`, `"lookup"`, `"reasoning_opaque"`, `"responses_reasoning"`, "skip me"},
+			deny: []string{`"input"`},
 		},
 		{
 			name: "string input stays a user message",

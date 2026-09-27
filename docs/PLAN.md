@@ -82,7 +82,7 @@ Each free adapter still uses **live ListModels** — new local pulls appear with
 - CLI: `serve | auth | accounts | models | catalog | requests | health | status | config | clients` (`catalog pin|rename|hide`, `requests tail`, `health`, `accounts add`)
 - Localhost UI: Accounts (onboarding CTAs), Catalog (filters/hide/pin/rename), Showcase, Clients (harness presets + verify copy), Health (adapter probe + quota remaining + cooldowns), Request log (opt-in), Settings (bind/LAN/secret backend)
 - HTTP: OpenAI `/v1/chat/completions`, `/v1/models`, `/v1/images/generations`, `/v1/embeddings`; Claude `/v1/messages`; Codex `/v1/responses`; admin loopback routes
-- OAuth wire details (1.6.x): `anthropic_oauth` Messages send Claude Code fingerprint + **system cloak** (billing header + CLI identity; caller system relocated, never deleted). `openai_oauth` Codex Responses force `store: false`, omit `max_output_tokens` / `stream_options`. Translated chat SSE emits `finish_reason` before `[DONE]`.
+- OAuth wire details (1.6.x): `anthropic_oauth` Messages send Claude Code fingerprint + **system cloak** (billing header + CLI identity; caller system relocated, never deleted). `openai_oauth` Codex Responses force `store: false`, omit `max_output_tokens` / `stream_options`. Translated chat SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is chat `reasoning_opaque` (Anthropic and Responses kinds stay distinct; OpenAI-compat upstreams strip the field).
 
 ## 7. Showcase
 

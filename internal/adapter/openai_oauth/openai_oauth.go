@@ -634,10 +634,11 @@ type chatToolCall struct {
 }
 
 type chatInboundMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	ToolCalls  []chatToolCall  `json:"tool_calls"`
-	ToolCallID string          `json:"tool_call_id"`
+	Role            string          `json:"role"`
+	Content         json.RawMessage `json:"content"`
+	ToolCalls       []chatToolCall  `json:"tool_calls"`
+	ToolCallID      string          `json:"tool_call_id"`
+	ReasoningOpaque json.RawMessage `json:"reasoning_opaque"`
 }
 
 type chatStreamToolCall struct {
@@ -656,9 +657,10 @@ type chatStreamDelta struct {
 }
 
 type chatChoiceMessage struct {
-	Role      string          `json:"role"`
-	Content   json.RawMessage `json:"content"`
-	ToolCalls []chatToolCall  `json:"tool_calls,omitempty"`
+	Role            string          `json:"role"`
+	Content         json.RawMessage `json:"content"`
+	ToolCalls       []chatToolCall  `json:"tool_calls,omitempty"`
+	ReasoningOpaque json.RawMessage `json:"reasoning_opaque,omitempty"`
 }
 
 func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
@@ -680,7 +682,7 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 	if parsed.Model != "" {
 		model = parsed.Model
 	}
-	if len(parsed.Tools) > 0 || len(parsed.ToolChoice) > 0 || chatMessagesHaveTools(parsed.Messages) {
+	if len(parsed.Tools) > 0 || len(parsed.ToolChoice) > 0 || chatMessagesHaveTools(parsed.Messages) || chatMessagesHaveOpaque(parsed.Messages) {
 		return chatToResponsesWithTools(model, parsed.Messages, parsed.Tools, parsed.ToolChoice, stream)
 	}
 	msgs := make([]adapter.Message, 0, len(parsed.Messages))
@@ -688,6 +690,16 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 		msgs = append(msgs, adapter.Message{Role: m.Role, Content: messageContentString(m.Content)})
 	}
 	return chatToResponsesFromMessages(model, msgs, stream)
+}
+
+func chatMessagesHaveOpaque(msgs []chatInboundMessage) bool {
+	for _, m := range msgs {
+		raw := bytes.TrimSpace(m.ReasoningOpaque)
+		if len(raw) > 0 && string(raw) != "null" && string(raw) != "[]" {
+			return true
+		}
+	}
+	return false
 }
 
 func chatMessagesHaveTools(msgs []chatInboundMessage) bool {
@@ -766,6 +778,11 @@ func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, to
 			}
 			input = append(input, item)
 		case "assistant":
+			items, err := translate.ResponsesReasoningItems(m.ReasoningOpaque)
+			if err != nil {
+				return nil, err
+			}
+			input = append(input, items...)
 			text := messageContentString(m.Content)
 			if text != "" {
 				raw, err := marshalResponsesMessage("assistant", "output_text", text)
@@ -786,7 +803,7 @@ func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, to
 				}
 				input = append(input, item)
 			}
-			if text == "" && len(m.ToolCalls) == 0 {
+			if text == "" && len(m.ToolCalls) == 0 && len(items) == 0 {
 				raw, err := marshalResponsesMessage("assistant", "output_text", "")
 				if err != nil {
 					return nil, err
@@ -949,6 +966,23 @@ func responsesToChatCompletion(model string, body []byte) ([]byte, string, error
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil, "", err
 	}
+	var outputRaw struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	_ = json.Unmarshal(body, &outputRaw)
+	var reasoningItems []json.RawMessage
+	for _, item := range outputRaw.Output {
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(item, &kind) == nil && kind.Type == "reasoning" {
+			reasoningItems = append(reasoningItems, item)
+		}
+	}
+	opaque, err := translate.CarryResponsesReasoning(reasoningItems)
+	if err != nil {
+		return nil, "", err
+	}
 	var text strings.Builder
 	if parsed.OutputText != "" {
 		text.WriteString(parsed.OutputText)
@@ -956,6 +990,8 @@ func responsesToChatCompletion(model string, body []byte) ([]byte, string, error
 	var calls []chatToolCall
 	for _, o := range parsed.Output {
 		switch o.Type {
+		case "reasoning":
+			continue
 		case "function_call":
 			tc := chatToolCall{ID: o.CallID, Type: "function"}
 			tc.Function.Name = o.Name
@@ -980,6 +1016,7 @@ func responsesToChatCompletion(model string, body []byte) ([]byte, string, error
 	content := text.String()
 	finish := "stop"
 	msg := chatChoiceMessage{Role: "assistant"}
+	msg.ReasoningOpaque = opaque
 	if len(calls) > 0 {
 		msg.ToolCalls = calls
 		finish = "tool_calls"
@@ -1030,6 +1067,7 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	nextIndex := 0
 	wroteRole := false
 	hadToolCalls := false
+	var reasoningRaw []json.RawMessage
 	const id = "peaproxy-codex"
 	for sc.Scan() {
 		line := sc.Text()
@@ -1039,6 +1077,9 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
 			break
+		}
+		if items := reasoningItemsFromResponsesEvent(payload); len(items) > 0 {
+			reasoningRaw = items
 		}
 		chunk, ok, tools, err := responsesStreamChunkToChat(payload, model, callIndex, &nextIndex)
 		if err != nil {
@@ -1067,7 +1108,59 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	if hadToolCalls {
 		reason = "tool_calls"
 	}
+	if len(reasoningRaw) > 0 {
+		opaque, err := translate.CarryResponsesReasoning(reasoningRaw)
+		if err != nil {
+			return err
+		}
+		if len(opaque) > 0 {
+			if !wroteRole {
+				if err := translate.WriteOpenAIChatSSERole(w, id, model); err != nil {
+					return err
+				}
+			}
+			if err := translate.WriteOpenAIChatSSEOpaque(w, id, model, opaque); err != nil {
+				return err
+			}
+		}
+	}
 	return translate.WriteOpenAIChatSSEFinish(w, id, model, reason)
+}
+
+func reasoningItemsFromResponsesEvent(payload string) []json.RawMessage {
+	var ev struct {
+		Type     string          `json:"type"`
+		Item     json.RawMessage `json:"item"`
+		Response struct {
+			Output []json.RawMessage `json:"output"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(payload), &ev) != nil {
+		return nil
+	}
+	var fromOutput []json.RawMessage
+	for _, item := range ev.Response.Output {
+		if responsesEventItemType(item) == "reasoning" {
+			fromOutput = append(fromOutput, item)
+		}
+	}
+	if len(fromOutput) > 0 {
+		return fromOutput
+	}
+	if strings.Contains(ev.Type, "output_item.added") && responsesEventItemType(ev.Item) == "reasoning" {
+		return []json.RawMessage{ev.Item}
+	}
+	return nil
+}
+
+func responsesEventItemType(item json.RawMessage) string {
+	var kind struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(item, &kind) != nil {
+		return ""
+	}
+	return kind.Type
 }
 
 func responsesStreamChunkToChat(payload, model string, callIndex map[string]int, nextIndex *int) ([]byte, bool, bool, error) {
