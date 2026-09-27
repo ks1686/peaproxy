@@ -224,13 +224,13 @@ func (g *Gateway) Models() []catalog.Model {
 	return out
 }
 
-// Listed applies hide/expose for /v1/models.
+// Listed applies hide/expose for /v1/models, then adds stable route names.
 func (g *Gateway) Listed(filter catalog.Filter) []catalog.Model {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	q := g.queryLocked()
 	q.Filter = filter
-	return catalog.List(g.models, q)
+	return catalog.ApplyRoutes(catalog.List(g.models, q), g.models, q, g.cfg.Routes)
 }
 
 // Annotated is the UI catalog (hidden rows included).
@@ -240,10 +240,36 @@ func (g *Gateway) Annotated(filter catalog.Filter) []catalog.Model {
 	q := g.queryLocked()
 	q.Filter = filter
 	q.ForClients = false
-	out := catalog.AllAnnotated(g.models, q)
+	out := catalog.ApplyRoutes(catalog.AllAnnotated(g.models, q), g.models, q, g.cfg.Routes)
 	g.stampImageOutReadyLocked(out)
 	g.stampEmbeddingsReadyLocked(out)
 	return out
+}
+
+// resolveBody maps a stable route name onto its live catalog id and rewrites
+// the top-level model field without reordering other keys. A name that is not
+// a route is returned unchanged. A route whose target is not routable errors
+// before any upstream call.
+func (g *Gateway) resolveBody(raw []byte) (string, []byte, error) {
+	peek := jsonx.PeekBody(raw)
+	clientModel := strings.TrimSpace(peek.Model)
+	g.mu.RLock()
+	target, ok := g.cfg.Routes[clientModel]
+	models := g.models
+	q := g.queryLocked()
+	g.mu.RUnlock()
+	if !ok {
+		return clientModel, raw, nil
+	}
+	target = strings.TrimSpace(target)
+	if _, found := catalog.FindRoutable(models, q, target); !found {
+		return "", nil, fmt.Errorf("route %q targets %q which is not in the live catalog", clientModel, target)
+	}
+	quoted, err := json.Marshal(target)
+	if err != nil {
+		return "", nil, err
+	}
+	return target, jsonx.SetTopLevelRaw(raw, "model", quoted), nil
 }
 
 func (g *Gateway) stampImageOutReadyLocked(models []catalog.Model) {
@@ -270,19 +296,22 @@ func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, string, error) {
-	peek := jsonx.PeekBody(raw)
-	cands, err := g.route(peek.Model)
+	model, raw, err := g.resolveBody(raw)
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
-	req := adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: false}
+	cands, err := g.route(model)
+	if err != nil {
+		return adapter.ChatResponse{}, "", err
+	}
+	req := adapter.ChatRequest{Model: model, Raw: raw, Stream: false}
 	var last error
 	var lastAccount string
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		resp, err := inst.Adapter.Chat(ctx, req)
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -297,20 +326,23 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 
 // ChatStream proxies SSE with failover before any bytes are written.
 func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
-	peek := jsonx.PeekBody(raw)
-	cands, err := g.route(peek.Model)
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return "", err
+	}
+	cands, err := g.route(model)
 	if err != nil {
 		return "", err
 	}
 	cw := &countWriter{w: w}
-	req := adapter.ChatRequest{Model: peek.Model, Raw: raw, Stream: true}
+	req := adapter.ChatRequest{Model: model, Raw: raw, Stream: true}
 	var last error
 	var lastAccount string
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		err := inst.Adapter.ChatStream(ctx, req, cw)
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 			return lastAccount, nil
 		}
 		last = err
@@ -330,14 +362,17 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 // Upstream is only called when the model is tagged image_out and the adapter
 // implements ImageGenerator with Capabilities.ImageOut.
 func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageResponse, string, error) {
-	peek := jsonx.PeekBody(raw)
-	if strings.TrimSpace(peek.Model) == "" {
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return adapter.ImageResponse{}, "", err
+	}
+	if model == "" {
 		return adapter.ImageResponse{}, "", adapter.ErrImageModelRequired
 	}
-	if !g.supportsImageOut(peek.Model) {
+	if !g.supportsImageOut(model) {
 		return adapter.ImageResponse{}, "", adapter.ErrModelNotImageOut
 	}
-	cands, err := g.route(peek.Model)
+	cands, err := g.route(model)
 	if err != nil {
 		return adapter.ImageResponse{}, "", err
 	}
@@ -352,9 +387,9 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 			continue
 		}
 		tried = true
-		resp, err := gen.GenerateImage(ctx, adapter.ImageRequest{Model: peek.Model, Raw: raw})
+		resp, err := gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -387,14 +422,17 @@ func (g *Gateway) supportsImageOut(id string) bool {
 // Upstream is only called when the model is tagged embeddings and the adapter
 // implements Embedder with Capabilities.Embeddings.
 func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.EmbeddingResponse, string, error) {
-	peek := jsonx.PeekBody(raw)
-	if strings.TrimSpace(peek.Model) == "" {
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return adapter.EmbeddingResponse{}, "", err
+	}
+	if model == "" {
 		return adapter.EmbeddingResponse{}, "", adapter.ErrEmbeddingModelRequired
 	}
-	if !g.supportsEmbeddings(peek.Model) {
+	if !g.supportsEmbeddings(model) {
 		return adapter.EmbeddingResponse{}, "", adapter.ErrModelNotEmbeddings
 	}
-	cands, err := g.route(peek.Model)
+	cands, err := g.route(model)
 	if err != nil {
 		return adapter.EmbeddingResponse{}, "", err
 	}
@@ -409,9 +447,9 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 			continue
 		}
 		tried = true
-		resp, err := emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: peek.Model, Raw: raw})
+		resp, err := emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: model, Raw: raw})
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -442,8 +480,11 @@ func (g *Gateway) supportsEmbeddings(id string) bool {
 
 // Responses uses native Responses when available, otherwise OpenAI chat translation.
 func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, error) {
-	peek := jsonx.PeekBody(raw)
-	cands, err := g.route(peek.Model)
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	cands, err := g.route(model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -459,7 +500,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
-				g.rememberSticky(peek.Model, lastAccount)
+				g.rememberSticky(model, lastAccount)
 				return out, lastAccount, nil
 			}
 			last = err
@@ -485,13 +526,13 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if len(resp.Raw) > 0 {
 			out, ferr := translate.FromOpenAIChat(resp.Raw, oaReq.Model)
 			if ferr == nil {
-				g.rememberSticky(peek.Model, lastAccount)
+				g.rememberSticky(model, lastAccount)
 				return out, lastAccount, nil
 			}
 		}
 		out, err := translate.FromChatContent(resp.ID, oaReq.Model, resp.Content)
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 		}
 		return out, lastAccount, err
 	}
@@ -509,8 +550,11 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 
 // ResponsesStream writes Responses SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
-	peek := jsonx.PeekBody(raw)
-	cands, err := g.route(peek.Model)
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return "", err
+	}
+	cands, err := g.route(model)
 	if err != nil {
 		return "", err
 	}
@@ -527,7 +571,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), cw)
 			if err == nil {
-				g.rememberSticky(peek.Model, lastAccount)
+				g.rememberSticky(model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -547,14 +591,14 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- translate.OpenAISSEToResponses(pr, cw, peek.Model)
+			errCh <- translate.OpenAISSEToResponses(pr, cw, model)
 			_ = pr.Close()
 		}()
 		err := inst.Adapter.ChatStream(ctx, oaReq, pw)
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -581,8 +625,11 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 
 // ClaudeChat uses native Messages when available, otherwise OpenAI translation.
 func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, error) {
-	peek := jsonx.PeekBody(raw)
-	cands, err := g.route(peek.Model)
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return nil, "", err
+	}
+	cands, err := g.route(model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -598,7 +645,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			out, err := nm.Messages(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
-				g.rememberSticky(peek.Model, lastAccount)
+				g.rememberSticky(model, lastAccount)
 				return out, lastAccount, nil
 			}
 			last = err
@@ -637,7 +684,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		}
 		out, err := translate.FromOpenAI(oaRaw, oaReq.Model)
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 		}
 		return out, lastAccount, err
 	}
@@ -655,8 +702,11 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 
 // ClaudeChatStream writes true Anthropic SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
-	peek := jsonx.PeekBody(raw)
-	cands, err := g.route(peek.Model)
+	model, raw, err := g.resolveBody(raw)
+	if err != nil {
+		return "", err
+	}
+	cands, err := g.route(model)
 	if err != nil {
 		return "", err
 	}
@@ -673,7 +723,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			err := nm.MessagesStream(ctx, jsonx.SetStream(raw, true), cw)
 			if err == nil {
-				g.rememberSticky(peek.Model, lastAccount)
+				g.rememberSticky(model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -693,14 +743,14 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- translate.OpenAISSEToClaude(pr, cw, peek.Model)
+			errCh <- translate.OpenAISSEToClaude(pr, cw, model)
 			_ = pr.Close()
 		}()
 		err := inst.Adapter.ChatStream(ctx, oaReq, pw)
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
-			g.rememberSticky(peek.Model, lastAccount)
+			g.rememberSticky(model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err

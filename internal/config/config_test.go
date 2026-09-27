@@ -352,6 +352,29 @@ func TestValidateRejectsEmptyAdapterAndBadTier(t *testing.T) {
 	}
 }
 
+func TestValidateRoutes(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routes = map[string]string{" code": "llama3.2"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routes") {
+		t.Fatalf("padded name: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Routes = map[string]string{"code": "  "}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routes") {
+		t.Fatalf("empty target: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Routes = map[string]string{"code": "code"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routes") {
+		t.Fatalf("name equals target: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Routes = map[string]string{"code": "llama3.2"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateCatalogOverlays(t *testing.T) {
 	cfg := config.Default()
 	cfg.Catalog.Pin = []string{"llama3.2", "llama3.2"}
