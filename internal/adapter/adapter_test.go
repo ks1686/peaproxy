@@ -269,6 +269,32 @@ func TestOpenAICompatUsesLiveArchitectureModalities(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatEditImageForwardsContentType(t *testing.T) {
+	var gotPath, gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotCT = r.Header.Get("Content-Type")
+		_, _ = w.Write([]byte(`{"data":[{"url":"https://img.example/e.png"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	a, err := openai_compat.New(adapter.Options{ID: "oa", BaseURL: srv.URL + "/v1", APIKey: "sk-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ed := a.(adapter.ImageEditor)
+	resp, err := ed.EditImage(context.Background(), adapter.ImageRequest{
+		Model:       "dall-e-3",
+		Raw:         []byte(`{"model":"dall-e-3","prompt":"fix"}`),
+		ContentType: "application/json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/images/edits" || gotCT != "application/json" || len(resp.URLs) != 1 {
+		t.Fatalf("path %s ct %s resp %#v", gotPath, gotCT, resp)
+	}
+}
+
 func TestOpenAICompatGenerateImageProxiesGenerations(t *testing.T) {
 	var gotPath, gotAuth, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

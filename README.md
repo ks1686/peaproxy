@@ -86,7 +86,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | `POST /v1/messages` true Anthropic SSE | Shipped |
 | `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |
-| Image-out / `POST /v1/images/generations` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
+| Image-out / `POST /v1/images/generations` and `/v1/images/edits` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
 | Embeddings / `POST /v1/embeddings` | **Shipped** for API-key OpenAI-compat when the catalog tags `embeddings`. Showcase can try. OAuth / Messages-only adapters refuse clearly (no fake vectors) |
 | Quota remaining | **Shipped** when the provider reports it (rate-limit headers; OpenRouter `GET /key`). Unknown remaining is omitted, never invented as 0 or unlimited |
 | API keys + custom OpenAI-compat | Shipped |
@@ -166,7 +166,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `POST /v1/chat/completions` | Stream + non-stream; failover on retryable status/bodies; cooled accounts are not re-hit (503 + Retry-After); translated SSE emits `finish_reason` before `[DONE]` |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
 | `POST /v1/responses` | Codex / OpenAI Responses: native tools pass-through for Codex OAuth (`store: false`; omit `stream_options` / `max_output_tokens`); other adapters round-trip function tools via chat |
-| `POST /v1/images/generations` | OpenAI Images API for models tagged `image_out`; refused (no chat fake) otherwise |
+| `POST /v1/images/generations` and `/v1/images/edits` | OpenAI Images API for models tagged `image_out`; refused (no chat fake) otherwise |
 | `POST /v1/embeddings` | OpenAI Embeddings API for models tagged `embeddings`; refused (no chat fake) otherwise |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
 | `GET /healthz` | Liveness (includes LAN warning flags; no admin token) |

@@ -72,7 +72,7 @@ routes:
   code: llama3.2
 ```
 
-A client that sends `model: code` is routed like `llama3.2`, and the upstream body is rewritten to that live id. `/v1/models` lists `code` while the target is in the live catalog. If the target is missing, the request fails and no upstream is called. A route name wins over a live model id with the same string. Names must be non-empty, without spaces, and different from their target. When `expose.models` is a non-empty subset, the route name has to be in that list to appear in `/v1/models`; it still routes if the client sends it.
+A client that sends `model: code` is routed like `llama3.2`, and the upstream body is rewritten to that live id. The response `model` field is written back to `code`. A suffix `-thinking-4000` on the requested name sets an Anthropic thinking budget and raises `max_tokens` above it. The suffix is not a client-preset cloak. `POST /v1/images/edits` is proxied for the same `image_out` accounts as generations. A 502 or 504 is tried once more on that account before it is cooled. A 403 is returned as-is. `/v1/models` lists `code` while the target is in the live catalog. If the target is missing, the request fails and no upstream is called. A route name wins over a live model id with the same string. Names must be non-empty, without spaces, and different from their target. When `expose.models` is a non-empty subset, the route name has to be in that list to appear in `/v1/models`; it still routes if the client sends it.
 
 The UI Catalog page, `POST /admin/catalog/overlay`, and `peaproxy catalog pin|rename|hide` write the same fields. Settings shows pin/rename/hide counts (edit them on Catalog).
 
