@@ -19,3 +19,9 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build ./...
+      - name: GoReleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check

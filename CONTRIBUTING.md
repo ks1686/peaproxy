@@ -19,7 +19,7 @@ go run ./cmd/peaproxy --version
 
 Default listen address is `127.0.0.1:8317`. Non-loopback bind requires `allowNonLoopback: true` and a non-empty `adminToken`.
 
-Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows, amd64+arm64) and stamps `internal/version.Version` into `--version`. Stable tags also push a Homebrew cask to `ks1686/homebrew-tap` when `HOMEBREW_TAP_GITHUB_TOKEN` is set (GitHub Release assets still publish if it is missing). `go install github.com/ks1686/peaproxy/cmd/peaproxy@vX.Y.Z` reads the module version from `runtime/debug.ReadBuildInfo()` when ldflags are unset.
+Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows, amd64+arm64) and stamps `internal/version.Version` into `--version`. Darwin archives are Developer ID signed and notarized when the `MACOS_SIGN_*` / `MACOS_NOTARY_*` secrets are set (see [docs/RELEASING.md](docs/RELEASING.md)); Homebrew cask consumers get those Gatekeeper-clean binaries. Stable tags also push a Homebrew cask to `ks1686/homebrew-tap` when `HOMEBREW_TAP_GITHUB_TOKEN` is set (GitHub Release assets still publish if it is missing). `go install github.com/ks1686/peaproxy/cmd/peaproxy@vX.Y.Z` reads the module version from `runtime/debug.ReadBuildInfo()` when ldflags are unset. Local `go install` builds are unsigned.
 
 ## Conventions
 
@@ -27,4 +27,5 @@ Releases: push a `v*` tag. GitHub Actions runs GoReleaser (linux/darwin/windows,
 - No AI authorship trailers on commits or PRs.
 - Live `ListModels` per adapter — never a hand-maintained model allowlist as source of truth.
 - Secrets stay in the OS keychain (encrypted file fallback). Never log tokens.
+- Never commit `.p8` / `.p12` / passphrases. Release signing secrets belong in GitHub Actions only.
 - Prompt-cache-safe JSON: structs + `jsonx.SetStream` / `jsonx.DropTopLevelKeys`, never `map[string]any` for Anthropic or Codex request bodies.

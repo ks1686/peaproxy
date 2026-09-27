@@ -43,7 +43,7 @@ peaproxy --version
 peaproxy serve
 ```
 
-Requires Go 1.22+ for `go install`. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)).
+Requires Go 1.22+ for `go install`. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)). macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
 
 ```bash
 go run ./cmd/peaproxy serve   # from a clone
@@ -193,7 +193,7 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 8. **Free + custom providers** — including OpenCode Zen (CPA declined #6018).
 9. **Built-in usage / showcase** — CPA removed usage in v6.10+.
 
-What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md).
+What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md), [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Security
 
