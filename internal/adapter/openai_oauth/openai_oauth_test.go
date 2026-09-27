@@ -167,6 +167,7 @@ func TestChatPostsResponsesWithBearerAndAccountHeader(t *testing.T) {
 	if !bytes.Contains(body, []byte(`"input"`)) {
 		t.Fatalf("missing input: %s", body)
 	}
+	assertCodexResponsesBody(t, body, false)
 }
 
 func TestResponsesPassthroughKeepsInput(t *testing.T) {
@@ -229,7 +230,7 @@ func TestResponsesDropsStreamOptionsForCodexOAuth(t *testing.T) {
 		{
 			name: "quoted stream_options in input kept",
 			raw:  `{"model":"gpt-5","input":"mention stream_options please","stream_options":{"include_usage":true},"max_output_tokens":16}`,
-			keep: []string{`"input":"mention stream_options please"`, `"max_output_tokens":16`},
+			keep: []string{`"input":"mention stream_options please"`},
 		},
 		{
 			name: "nested stream_options in tools kept",
@@ -246,6 +247,10 @@ func TestResponsesDropsStreamOptionsForCodexOAuth(t *testing.T) {
 			if bytes.Contains(gotBody, []byte(`"stream_options":{"include_usage":true}`)) {
 				t.Fatalf("Codex OAuth must drop top-level stream_options: %s", gotBody)
 			}
+			if bytes.Contains(gotBody, []byte(`"max_output_tokens"`)) {
+				t.Fatalf("Codex OAuth must omit max_output_tokens: %s", gotBody)
+			}
+			assertCodexResponsesBody(t, gotBody, false)
 			for _, k := range tc.keep {
 				if !bytes.Contains(gotBody, []byte(k)) {
 					t.Fatalf("must keep %s: %s", k, gotBody)
@@ -310,6 +315,7 @@ func TestResponsesForwardsToolsAndFunctionCallOutput(t *testing.T) {
 	if bytes.Contains(gotBody, []byte("stream_options")) {
 		t.Fatalf("must drop stream_options: %s", gotBody)
 	}
+	assertCodexResponsesBody(t, gotBody, false)
 	for _, key := range []string{`"tools"`, `"tool_choice"`, `"function_call_output"`, `"function_call"`, `"reasoning"`, `"lookup"`} {
 		if !bytes.Contains(gotBody, []byte(key)) {
 			t.Fatalf("forwarded body missing %s: %s", key, gotBody)
@@ -347,6 +353,7 @@ func TestResponsesStreamForwardsTools(t *testing.T) {
 	if bytes.Contains(gotBody, []byte("stream_options")) {
 		t.Fatalf("must drop stream_options: %s", gotBody)
 	}
+	assertCodexResponsesBody(t, gotBody, true)
 	if !bytes.Contains(gotBody, []byte(`"tools"`)) || !bytes.Contains(gotBody, []byte(`"function_call_output"`)) {
 		t.Fatalf("stream body %s", gotBody)
 	}
@@ -467,6 +474,131 @@ func TestChatStreamMapsFunctionCallEvents(t *testing.T) {
 	}
 	if !strings.Contains(got, `[DONE]`) {
 		t.Fatalf("%s", got)
+	}
+}
+
+func TestPrepareResponsesForcesStoreFalseAndDropsMaxOutputTokens(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		stream bool
+	}{
+		{name: "omitted store", in: `{"model":"gpt-5","input":"hi"}`},
+		{name: "store true", in: `{"model":"gpt-5","input":"hi","store":true}`},
+		{name: "store false", in: `{"model":"gpt-5","input":"hi","store":false}`},
+		{name: "max_output_tokens stripped", in: `{"model":"gpt-5","input":"hi","max_output_tokens":16,"store":true}`, stream: true},
+		{name: "quoted max_output_tokens in input kept", in: `{"model":"gpt-5","input":"mention max_output_tokens please","max_output_tokens":16}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := prepareResponses([]byte(tc.in), tc.stream)
+			assertCodexResponsesBody(t, out, tc.stream)
+			if bytes.Contains(out, []byte(`"max_output_tokens":16`)) {
+				t.Fatalf("max_output_tokens must be omitted: %s", out)
+			}
+			if strings.Contains(tc.in, `mention max_output_tokens please`) &&
+				!bytes.Contains(out, []byte(`"input":"mention max_output_tokens please"`)) {
+				t.Fatalf("quoted max_output_tokens in input rewritten: %s", out)
+			}
+		})
+	}
+}
+
+func TestChatToResponsesForcesStoreFalse(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		stream bool
+	}{
+		{name: "omitted store on chat", in: `{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`},
+		{name: "store true on chat", in: `{"model":"gpt-5","store":true,"max_output_tokens":32,"messages":[{"role":"user","content":"hi"}]}`},
+		{name: "store true on native input", in: `{"model":"gpt-5","store":true,"max_output_tokens":16,"input":"hi"}`},
+		{name: "omitted store on native input", in: `{"model":"gpt-5","input":"hi"}`},
+		{
+			name:   "tools path store true",
+			in:     `{"model":"gpt-5","store":true,"max_output_tokens":8,"tools":[{"type":"function","function":{"name":"lookup"}}],"messages":[{"role":"user","content":"hi"}]}`,
+			stream: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := chatToResponses([]byte(tc.in), "gpt-5", tc.stream)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertCodexResponsesBody(t, out, tc.stream)
+			if bytes.Contains(out, []byte(`"max_output_tokens"`)) {
+				t.Fatalf("max_output_tokens must be omitted: %s", out)
+			}
+		})
+	}
+}
+
+func TestChatPostsResponsesForcesStoreFalse(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":          "resp_1",
+			"output_text": "ok",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	if _, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gpt-5",
+		Raw:   []byte(`{"model":"gpt-5","store":true,"max_output_tokens":64,"messages":[{"role":"user","content":"hi"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCodexResponsesBody(t, gotBody, false)
+	if bytes.Contains(gotBody, []byte(`"max_output_tokens"`)) {
+		t.Fatalf("posted max_output_tokens: %s", gotBody)
+	}
+
+	gotBody = nil
+	raw := []byte(`{"model":"gpt-5","store":true,"max_output_tokens":16,"input":"codex ping"}`)
+	if _, err := a.Responses(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	assertCodexResponsesBody(t, gotBody, false)
+	if bytes.Contains(gotBody, []byte(`"max_output_tokens"`)) {
+		t.Fatalf("posted max_output_tokens: %s", gotBody)
+	}
+}
+
+func TestChatToResponsesFromMessagesForcesStoreFalse(t *testing.T) {
+	out, err := chatToResponsesFromMessages("gpt-5", []adapter.Message{
+		{Role: "user", Content: "hi"},
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCodexResponsesBody(t, out, false)
+}
+
+func assertCodexResponsesBody(t *testing.T, body []byte, stream bool) {
+	t.Helper()
+	var parsed struct {
+		Store  *bool `json:"store"`
+		Stream *bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("unmarshal %s: %v", body, err)
+	}
+	if parsed.Store == nil || *parsed.Store {
+		t.Fatalf("store must be false, got %s", body)
+	}
+	if bytes.Contains(body, []byte(`"store":true`)) {
+		t.Fatalf("store true leaked: %s", body)
+	}
+	if parsed.Stream == nil || *parsed.Stream != stream {
+		t.Fatalf("stream want %v, got %s", stream, body)
 	}
 }
 

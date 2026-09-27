@@ -25,6 +25,26 @@ func TestSetStreamReplacesExistingWithoutShuffle(t *testing.T) {
 	}
 }
 
+func TestSetBoolForcesStoreFalseWithoutShuffle(t *testing.T) {
+	in := []byte(`{"a":1,"store":true,"z":2}`)
+	out := SetBool(in, "store", false)
+	want := []byte(`{"a":1,"store":false,"z":2}`)
+	if !bytes.Equal(out, want) {
+		t.Fatalf("got %s want %s", out, want)
+	}
+}
+
+func TestSetBoolInsertsMissingStore(t *testing.T) {
+	in := []byte(`{"model":"gpt-5","input":"hi"}`)
+	out := SetBool(in, "store", false)
+	if !bytes.Contains(out, []byte(`"store":false`)) {
+		t.Fatalf("missing store: %s", out)
+	}
+	if !bytes.HasPrefix(out, []byte(`{"model":"gpt-5","input":"hi"`)) {
+		t.Fatalf("prefix shuffled: %s", out)
+	}
+}
+
 func TestPeekBody(t *testing.T) {
 	p := PeekBody([]byte(`{"model":"llama3.2","stream":true}`))
 	if p.Model != "llama3.2" || !p.Stream {
