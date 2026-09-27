@@ -31,6 +31,27 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# ── macOS Developer ID signing + notarization (anchore/quill) ─────────────────
+# Signs and notarizes Darwin binaries on any OS (including ubuntu-latest CI).
+# Identity: Developer ID Application: KARIM SMIRES (7R2VPW8GH4)
+# Apple Development identities are local-only and must not be used here.
+# Enabled only when MACOS_SIGN_P12 is set so local snapshots still work
+# without Apple credentials. See docs/RELEASING.md for secrets setup.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - peaproxy
+      sign:
+        certificate: '{{ if isEnvSet "MACOS_SIGN_P12" }}{{ .Env.MACOS_SIGN_P12 }}{{ end }}'
+        password: '{{ if isEnvSet "MACOS_SIGN_PASSWORD" }}{{ .Env.MACOS_SIGN_PASSWORD }}{{ end }}'
+      notarize:
+        issuer_id: '{{ if isEnvSet "MACOS_NOTARY_ISSUER_ID" }}{{ .Env.MACOS_NOTARY_ISSUER_ID }}{{ end }}'
+        key_id: '{{ if isEnvSet "MACOS_NOTARY_KEY_ID" }}{{ .Env.MACOS_NOTARY_KEY_ID }}{{ end }}'
+        key: '{{ if isEnvSet "MACOS_NOTARY_KEY" }}{{ .Env.MACOS_NOTARY_KEY }}{{ end }}'
+        wait: true
+        timeout: 20m
+
 # ── Homebrew tap ──────────────────────────────────────────────────────────────
 # Publishes a cask to ks1686/homebrew-tap on every non-prerelease tag.
 # Requires secret: HOMEBREW_TAP_GITHUB_TOKEN (fine-grained PAT with

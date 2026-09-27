@@ -30,6 +30,10 @@ go.work.sum
 .env.*
 *.pem
 *.key
+*.p8
+*.p12
+*.cer
+*.csr
 secrets.enc
 secrets.index
 peaproxy.yaml
