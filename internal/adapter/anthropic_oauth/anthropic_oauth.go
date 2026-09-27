@@ -2,18 +2,23 @@
 //
 // Flow is a clean-room reimplementation inspired by CLIProxyAPI (MIT,
 // router-for-me/CLIProxyAPI): loopback PKCE against claude.ai / platform.claude.com,
-// then Messages API with a Bearer token. Not an official third-party API;
-// see docs/OAUTH.md for liability.
+// then Messages API with a Bearer token and Claude Code's inference fingerprint
+// (User-Agent, Stainless headers, OAuth betas, metadata.user_id). Not an
+// official third-party API; see docs/OAUTH.md for liability.
 package anthropic_oauth
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,12 +39,26 @@ const (
 	RedirectURI    = "http://localhost:54545/callback"
 	Scope          = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	APIVersion     = "2023-06-01"
-	OAuthBetas     = "claude-code-20250219,oauth-2025-04-20"
 	callbackPort   = "54545"
+	defaultMaxTok  = 4096
 	// TokenUserAgent matches Claude Code's OAuth control-plane client (axios).
 	TokenUserAgent = "axios/1.15.2"
-	cloudflare403  = "Cloudflare/WAF likely blocked stock Go TLS on the Claude token endpoint. PeaProxy does not spoof TLS fingerprints. Use an official API key (adapter anthropic, https://console.anthropic.com/settings/keys) or retry from a typical desktop network. See docs/OAUTH.md."
+	// MessagesUserAgent is Claude Code 2.1.280's inference User-Agent. Stock
+	// Go's "Go-http-client/1.1" is treated as a bot signature; Anthropic then
+	// answers OAuth /v1/messages with HTTP 429 rate_limit_error / "Error".
+	MessagesUserAgent = "claude-cli/2.1.280 (external, cli)"
+	// Stainless* match @anthropic-ai/sdk 0.112.1 as captured by CLIProxyAPI.
+	StainlessPackageVersion = "0.112.1"
+	StainlessRuntimeVersion = "v26.3.0"
+	cloudflare403           = "Cloudflare/WAF likely blocked stock Go TLS on the Claude token endpoint. PeaProxy does not spoof TLS fingerprints. Use an official API key (adapter anthropic, https://console.anthropic.com/settings/keys) or retry from a typical desktop network. See docs/OAUTH.md."
 )
+
+// OAuthBetas is the Claude Code 2.1.280 OAuth Messages baseline (cli
+// entrypoint, no thinking.display). oauth-2025-04-20 and
+// extended-cache-ttl-2025-04-11 are credential betas; a Bearer token that
+// omits them is not a real OAuth CLI client. mid-conversation-tool-changes is
+// appended by oauthBetas except for claude-sonnet-5.
+const OAuthBetas = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,extended-cache-ttl-2025-04-11"
 
 // Adapter is a Claude subscription OAuth client (Messages API + PKCE login).
 type Adapter struct {
@@ -52,6 +71,14 @@ type Adapter struct {
 	token        oauth.Token
 	pending      *pendingAuth
 	skipLoopback bool
+	deviceID     string
+	sessionID    string
+}
+
+type claudeMetadataUserID struct {
+	DeviceID    string `json:"device_id"`
+	AccountUUID string `json:"account_uuid"`
+	SessionID   string `json:"session_id"`
 }
 
 type pendingAuth struct {
@@ -79,6 +106,8 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		persist:      opts.PersistOAuth,
 		token:        opts.OAuth,
 		skipLoopback: opts.SkipLoopback,
+		deviceID:     newDeviceID(),
+		sessionID:    randomUUID(),
 	}, nil
 }
 
@@ -356,7 +385,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.headers(req)
+	a.headers(req, "", a.sessionID)
 	c := *a.httpClient
 	c.Timeout = 8 * time.Second
 	resp, err := c.Do(req)
@@ -438,13 +467,14 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 	if err := a.ensureToken(ctx); err != nil {
 		return nil, err
 	}
+	raw = a.shapeOAuthBody(raw)
 	raw = jsonx.SetStream(raw, false)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1/messages", bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.messagesURL(), bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	a.headers(httpReq)
+	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw))
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -464,14 +494,14 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	if err := a.ensureToken(ctx); err != nil {
 		return err
 	}
+	raw = a.shapeOAuthBody(raw)
 	raw = jsonx.SetStream(raw, true)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/v1/messages", bytes.NewReader(raw))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.messagesURL(), bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	a.headers(httpReq)
+	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw))
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return err
@@ -503,16 +533,198 @@ func (a *Adapter) claudeBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	return translate.ToClaude(oa, stream)
 }
 
-func (a *Adapter) headers(req *http.Request) {
+func (a *Adapter) messagesURL() string {
+	return a.baseURL + "/v1/messages?beta=true"
+}
+
+func (a *Adapter) headers(req *http.Request, model, sessionID string) {
 	a.mu.Lock()
 	tok := a.token.AccessToken
 	a.mu.Unlock()
+	if sessionID == "" {
+		sessionID = a.sessionID
+	}
 	req.Header.Set("anthropic-version", APIVersion)
-	req.Header.Set("anthropic-beta", OAuthBetas)
+	req.Header.Set("anthropic-beta", oauthBetas(model))
+	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	req.Header.Set("x-app", "cli")
+	req.Header.Set("User-Agent", MessagesUserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Stainless-Retry-Count", "0")
+	req.Header.Set("X-Stainless-Timeout", "600")
+	req.Header.Set("X-Stainless-Runtime", "node")
+	req.Header.Set("X-Stainless-Lang", "js")
+	req.Header.Set("X-Stainless-Package-Version", StainlessPackageVersion)
+	req.Header.Set("X-Stainless-Runtime-Version", StainlessRuntimeVersion)
+	req.Header.Set("X-Stainless-Os", stainlessOS())
+	req.Header.Set("X-Stainless-Arch", stainlessArch())
+	req.Header.Set("X-Claude-Code-Session-Id", sessionID)
+	req.Header.Set("x-client-request-id", randomUUID())
 	if tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
+}
+
+func (a *Adapter) shapeOAuthBody(raw []byte) []byte {
+	raw = rewriteClaudeModel(raw)
+	raw = ensureMaxTokens(raw, defaultMaxTok)
+	if !hasValidClaudeUserID(raw) {
+		raw = jsonx.SetTopLevelRaw(raw, "metadata", a.metadataJSON())
+	}
+	return raw
+}
+
+func (a *Adapter) metadataJSON() []byte {
+	a.mu.Lock()
+	account := a.token.AccountID
+	device := a.deviceID
+	session := a.sessionID
+	a.mu.Unlock()
+	ident, err := json.Marshal(claudeMetadataUserID{
+		DeviceID:    device,
+		AccountUUID: account,
+		SessionID:   session,
+	})
+	if err != nil {
+		ident = []byte(`{}`)
+	}
+	userID, err := json.Marshal(string(ident))
+	if err != nil {
+		userID = []byte(`""`)
+	}
+	return []byte(`{"user_id":` + string(userID) + `}`)
+}
+
+func oauthBetas(model string) string {
+	if isClaudeSonnet5(translate.CanonicalClaudeModel(model)) {
+		return OAuthBetas
+	}
+	const trailer = ",extended-cache-ttl-2025-04-11"
+	return strings.TrimSuffix(OAuthBetas, trailer) + ",mid-conversation-tool-changes-2026-07-01" + trailer
+}
+
+func isClaudeSonnet5(model string) bool {
+	return model == "claude-sonnet-5" || strings.HasPrefix(model, "claude-sonnet-5-") || strings.HasPrefix(model, "claude-sonnet-5[")
+}
+
+func rewriteClaudeModel(raw []byte) []byte {
+	cur := jsonx.PeekBody(raw).Model
+	next := translate.CanonicalClaudeModel(cur)
+	if next == "" || next == cur {
+		return raw
+	}
+	b, err := json.Marshal(next)
+	if err != nil {
+		return raw
+	}
+	return jsonx.SetTopLevelRaw(raw, "model", b)
+}
+
+func ensureMaxTokens(raw []byte, def int) []byte {
+	var probe struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	_ = json.Unmarshal(raw, &probe)
+	if probe.MaxTokens > 0 {
+		return raw
+	}
+	return jsonx.SetTopLevelRaw(raw, "max_tokens", []byte(strconv.Itoa(def)))
+}
+
+func hasValidClaudeUserID(raw []byte) bool {
+	var probe struct {
+		Metadata struct {
+			UserID string `json:"user_id"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || probe.Metadata.UserID == "" {
+		return false
+	}
+	var ident claudeMetadataUserID
+	if json.Unmarshal([]byte(probe.Metadata.UserID), &ident) != nil {
+		return false
+	}
+	if len(ident.DeviceID) != 64 {
+		return false
+	}
+	return looksLikeUUID(ident.SessionID)
+}
+
+func claudeSessionID(raw []byte) string {
+	var probe struct {
+		Metadata struct {
+			UserID string `json:"user_id"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || probe.Metadata.UserID == "" {
+		return ""
+	}
+	var ident claudeMetadataUserID
+	if json.Unmarshal([]byte(probe.Metadata.UserID), &ident) != nil {
+		return ""
+	}
+	return ident.SessionID
+}
+
+func stainlessOS() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "MacOS"
+	case "windows":
+		return "Windows"
+	case "linux":
+		return "Linux"
+	case "freebsd":
+		return "FreeBSD"
+	default:
+		return "Other::" + runtime.GOOS
+	}
+}
+
+func stainlessArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x64"
+	case "arm64":
+		return "arm64"
+	case "386":
+		return "x86"
+	default:
+		return "other::" + runtime.GOARCH
+	}
+}
+
+func newDeviceID() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func randomUUID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func truncate(b []byte) string {

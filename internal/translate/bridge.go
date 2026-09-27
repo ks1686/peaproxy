@@ -67,6 +67,19 @@ type openAIIn struct {
 	} `json:"messages"`
 }
 
+// CanonicalClaudeModel strips a provider prefix (anthropic/…) and rewrites
+// dotted version aliases (claude-sonnet-4.5 → claude-sonnet-4-5) that harnesses
+// send and Anthropic OAuth rejects. Live ListModels remains the catalog source
+// of truth; this is wire-id cleanup, not an allowlist.
+func CanonicalClaudeModel(model string) string {
+	model = strings.TrimSpace(model)
+	if i := strings.LastIndexByte(model, '/'); i >= 0 {
+		model = model[i+1:]
+	}
+	model = strings.ToLower(model)
+	return strings.ReplaceAll(model, ".", "-")
+}
+
 // ToClaude converts an OpenAI chat.completions request into Anthropic Messages JSON (structs).
 func ToClaude(raw []byte, stream bool) ([]byte, error) {
 	var in openAIIn
@@ -77,7 +90,7 @@ func ToClaude(raw []byte, stream bool) ([]byte, error) {
 	if maxTok <= 0 {
 		maxTok = 4096
 	}
-	out := claudePost{Model: in.Model, MaxTokens: maxTok, Stream: stream}
+	out := claudePost{Model: CanonicalClaudeModel(in.Model), MaxTokens: maxTok, Stream: stream}
 	for _, m := range in.Messages {
 		if m.Role == "system" {
 			text, _ := contentText(m.Content)
