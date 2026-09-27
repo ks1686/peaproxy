@@ -41,6 +41,37 @@ func TestResponsesChatToolsRoundTripFixtures(t *testing.T) {
 			want: []string{`"role":"system"`, `"sys"`, `"role":"user"`, `"hi"`},
 			deny: []string{`"developer"`},
 		},
+		{
+			name: "parallel function_calls stay one assistant then adjacent tool results",
+			in: `{
+				"model":"m",
+				"input":[
+					{"role":"user","content":[{"type":"input_text","text":"look"}]},
+					{"type":"function_call","call_id":"call_a","name":"lookup","arguments":"{\"q\":\"a\"}"},
+					{"type":"function_call","call_id":"call_b","name":"ping","arguments":"{}"},
+					{"type":"function_call_output","call_id":"call_a","output":"A"},
+					{"type":"function_call_output","call_id":"call_b","output":"B"},
+					{"role":"user","content":[{"type":"input_text","text":"thanks"}]}
+				]
+			}`,
+			want: []string{`"tool_calls"`, `"call_a"`, `"call_b"`, `"role":"tool"`, `"A"`, `"B"`, `"thanks"`},
+			deny: []string{`"output":"executed"`},
+		},
+		{
+			name: "second function_call round stays adjacent after prior tool results",
+			in: `{
+				"model":"m",
+				"input":[
+					{"role":"user","content":[{"type":"input_text","text":"one"}]},
+					{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"},
+					{"type":"function_call_output","call_id":"c1","output":"first"},
+					{"type":"function_call","call_id":"c2","name":"lookup","arguments":"{\"q\":\"2\"}"},
+					{"type":"function_call_output","call_id":"c2","output":"second"}
+				]
+			}`,
+			want: []string{`"c1"`, `"c2"`, `"first"`, `"second"`},
+			deny: []string{`"reasoning"`},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,6 +170,56 @@ func TestFromOpenAIChatToolCallFixtures(t *testing.T) {
 				t.Fatalf("%s", out)
 			}
 		})
+	}
+}
+
+func TestResponsesToOpenAIToolRoleAdjacency(t *testing.T) {
+	in := `{
+		"model":"m",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"look"}]},
+			{"type":"function_call","call_id":"call_a","name":"lookup","arguments":"{\"q\":\"a\"}"},
+			{"type":"function_call","call_id":"call_b","name":"ping","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_a","output":"A"},
+			{"type":"function_call_output","call_id":"call_b","output":"B"},
+			{"role":"user","content":[{"type":"input_text","text":"next"}]}
+		]
+	}`
+	body, _, err := ResponsesToOpenAI([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := parseChatMessages(t, body)
+	assertRoles(t, msgs, "user", "assistant", "tool", "tool", "user")
+	assertToolAdjacent(t, msgs)
+	if len(msgs[1].ToolCalls) == 0 {
+		t.Fatalf("assistant missing batched tool_calls: %s", body)
+	}
+	if msgs[2].ToolCallID != "call_a" || msgs[3].ToolCallID != "call_b" {
+		t.Fatalf("tool_call_id order: %#v", msgs)
+	}
+}
+
+func TestResponsesToOpenAISecondRoundAdjacency(t *testing.T) {
+	in := `{
+		"model":"m",
+		"input":[
+			{"role":"user","content":[{"type":"input_text","text":"one"}]},
+			{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":"first"},
+			{"type":"function_call","call_id":"c2","name":"lookup","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c2","output":"second"}
+		]
+	}`
+	body, _, err := ResponsesToOpenAI([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := parseChatMessages(t, body)
+	assertRoles(t, msgs, "user", "assistant", "tool", "assistant", "tool")
+	assertToolAdjacent(t, msgs)
+	if msgs[2].ToolCallID != "c1" || msgs[4].ToolCallID != "c2" {
+		t.Fatalf("tool ids: %#v", msgs)
 	}
 }
 

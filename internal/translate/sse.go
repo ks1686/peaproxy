@@ -92,8 +92,19 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 }
 
 type openAIChatDelta struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string                 `json:"role,omitempty"`
+	Content   string                 `json:"content,omitempty"`
+	ToolCalls []openAIStreamToolCall `json:"tool_calls,omitempty"`
+}
+
+type openAIStreamToolCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function"`
 }
 
 type openAIChatSSEChunk struct {
@@ -177,6 +188,7 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		var ev struct {
 			Type  string `json:"type"`
+			Index int    `json:"index"`
 			Delta struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
@@ -189,6 +201,8 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 			} `json:"message"`
 			ContentBlock *struct {
 				Type string `json:"type"`
+				ID   string `json:"id"`
+				Name string `json:"name"`
 			} `json:"content_block"`
 		}
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
@@ -206,11 +220,27 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
 				hadToolCalls = true
 				wrote = true
+				if err := writeRole(); err != nil {
+					return err
+				}
+				tc := openAIStreamToolCall{Index: ev.Index, ID: ev.ContentBlock.ID, Type: "function"}
+				tc.Function.Name = ev.ContentBlock.Name
+				if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{ToolCalls: []openAIStreamToolCall{tc}}, ""); err != nil {
+					return err
+				}
 			}
 		case "content_block_delta":
 			if ev.Delta.Type == "input_json_delta" || ev.Delta.PartialJSON != "" {
 				hadToolCalls = true
 				wrote = true
+				if err := writeRole(); err != nil {
+					return err
+				}
+				tc := openAIStreamToolCall{Index: ev.Index}
+				tc.Function.Arguments = ev.Delta.PartialJSON
+				if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{ToolCalls: []openAIStreamToolCall{tc}}, ""); err != nil {
+					return err
+				}
 				continue
 			}
 			if ev.Delta.Text == "" {
