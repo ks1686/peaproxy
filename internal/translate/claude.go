@@ -3,6 +3,7 @@
 package translate
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -45,21 +46,23 @@ type openAIMessage struct {
 	Name       string          `json:"name,omitempty"`
 }
 
+type openAIToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
 type openAIResponse struct {
 	ID      string `json:"id"`
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Role      string `json:"role"`
-			Content   string `json:"content"`
-			ToolCalls []struct {
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
+			Role      string           `json:"role"`
+			Content   string           `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -70,18 +73,26 @@ type openAIResponse struct {
 }
 
 type claudeResponse struct {
-	ID         string          `json:"id"`
-	Type       string          `json:"type"`
-	Role       string          `json:"role"`
-	Model      string          `json:"model"`
-	Content    []claudeContent `json:"content"`
-	StopReason string          `json:"stop_reason"`
-	Usage      claudeUsage     `json:"usage"`
+	ID         string             `json:"id"`
+	Type       string             `json:"type"`
+	Role       string             `json:"role"`
+	Model      string             `json:"model"`
+	Content    []claudeContentOut `json:"content"`
+	StopReason string             `json:"stop_reason"`
+	Usage      claudeUsage        `json:"usage"`
 }
 
 type claudeContent struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
+}
+
+type claudeContentOut struct {
+	Type  string          `json:"type"`
+	Text  string          `json:"text,omitempty"`
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 }
 
 type claudeUsage struct {
@@ -106,17 +117,11 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 		}
 		msgs = append(msgs, openAIMessage{Role: "system", Content: rawSys})
 	}
-	for _, m := range in.Messages {
-		content, err := claudeContentToOpenAI(m.Content)
-		if err != nil {
-			return nil, adapter.ChatRequest{}, err
-		}
-		role := m.Role
-		if role == "human" {
-			role = "user"
-		}
-		msgs = append(msgs, openAIMessage{Role: role, Content: content})
+	converted, err := claudeMessagesToOpenAI(in.Messages)
+	if err != nil {
+		return nil, adapter.ChatRequest{}, err
 	}
+	msgs = append(msgs, converted...)
 	out := openAIRequest{
 		Model:     in.Model,
 		Messages:  msgs,
@@ -148,9 +153,13 @@ func FromOpenAI(raw []byte, model string) ([]byte, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	text := ""
+	var text string
+	var calls []openAIToolCall
+	finish := ""
 	if len(in.Choices) > 0 {
 		text = in.Choices[0].Message.Content
+		calls = in.Choices[0].Message.ToolCalls
+		finish = in.Choices[0].FinishReason
 	}
 	id := in.ID
 	if id == "" {
@@ -159,22 +168,204 @@ func FromOpenAI(raw []byte, model string) ([]byte, error) {
 	if in.Model != "" {
 		model = in.Model
 	}
-	stop := "end_turn"
-	if len(in.Choices) > 0 && in.Choices[0].FinishReason == "length" {
-		stop = "max_tokens"
+	content := make([]claudeContentOut, 0, 1+len(calls))
+	if text != "" || len(calls) == 0 {
+		content = append(content, claudeContentOut{Type: "text", Text: text})
+	}
+	for _, tc := range calls {
+		content = append(content, claudeContentOut{
+			Type:  "tool_use",
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: toolUseInput(tc.Function.Arguments),
+		})
 	}
 	out := claudeResponse{
 		ID:         id,
 		Type:       "message",
 		Role:       "assistant",
 		Model:      model,
-		Content:    []claudeContent{{Type: "text", Text: text}},
-		StopReason: stop,
+		Content:    content,
+		StopReason: claudeStopReason(finish, len(calls) > 0),
 	}
 	if in.Usage != nil {
 		out.Usage = claudeUsage{InputTokens: in.Usage.PromptTokens, OutputTokens: in.Usage.CompletionTokens}
 	}
 	return json.Marshal(out)
+}
+
+func claudeStopReason(finish string, hadToolCalls bool) string {
+	if hadToolCalls || finish == "tool_calls" {
+		return "tool_use"
+	}
+	if finish == "length" {
+		return "max_tokens"
+	}
+	return "end_turn"
+}
+
+func toolUseInput(arguments string) json.RawMessage {
+	raw := bytes.TrimSpace([]byte(arguments))
+	if len(raw) == 0 || !json.Valid(raw) {
+		return json.RawMessage("{}")
+	}
+	return json.RawMessage(raw)
+}
+
+func toolUseArguments(input json.RawMessage) string {
+	input = bytes.TrimSpace(input)
+	if len(input) == 0 || string(input) == "null" {
+		return "{}"
+	}
+	return string(input)
+}
+
+func toolResultText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	text, err := contentText(raw)
+	if err != nil {
+		return strings.TrimSpace(string(raw))
+	}
+	return text
+}
+
+type claudeBlock struct {
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	Source    *struct {
+		Type      string `json:"type"`
+		URL       string `json:"url"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+	} `json:"source"`
+}
+
+func claudeMessagesToOpenAI(in []ClaudeMessage) ([]openAIMessage, error) {
+	out := make([]openAIMessage, 0, len(in))
+	for _, m := range in {
+		role := m.Role
+		if role == "human" {
+			role = "user"
+		}
+		msgs, err := claudeMessageToOpenAI(role, m.Content)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, msgs...)
+	}
+	return out, nil
+}
+
+func claudeMessageToOpenAI(role string, raw json.RawMessage) ([]openAIMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		content, err := json.Marshal("")
+		if err != nil {
+			return nil, err
+		}
+		return []openAIMessage{{Role: role, Content: content}}, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		content, err := json.Marshal(s)
+		if err != nil {
+			return nil, err
+		}
+		return []openAIMessage{{Role: role, Content: content}}, nil
+	}
+	var blocks []claudeBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return nil, fmt.Errorf("unsupported Claude content: %w", err)
+	}
+	var text strings.Builder
+	var parts []oaContentPart
+	var calls []openAIToolCall
+	var results []openAIMessage
+	hasImage := false
+	hasUnknown := false
+	for _, bl := range blocks {
+		switch bl.Type {
+		case "text", "":
+			text.WriteString(bl.Text)
+			parts = append(parts, oaContentPart{Type: "text", Text: bl.Text})
+		case "image":
+			hasImage = true
+			url, err := claudeImageURL(bl.Source)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, oaContentPart{Type: "image_url", ImageURL: &oaImagePart{URL: url}})
+		case "tool_use":
+			tc := openAIToolCall{ID: bl.ID, Type: "function"}
+			tc.Function.Name = bl.Name
+			tc.Function.Arguments = toolUseArguments(bl.Input)
+			calls = append(calls, tc)
+		case "tool_result":
+			content, err := json.Marshal(toolResultText(bl.Content))
+			if err != nil {
+				return nil, err
+			}
+			results = append(results, openAIMessage{Role: "tool", Content: content, ToolCallID: bl.ToolUseID})
+		default:
+			hasUnknown = true
+		}
+	}
+	if hasUnknown && text.Len() == 0 && !hasImage && len(calls) == 0 && len(results) == 0 {
+		return nil, fmt.Errorf("refusing to drop non-text Claude content into an empty message")
+	}
+	if len(results) > 0 {
+		if text.Len() == 0 && !hasImage {
+			return results, nil
+		}
+		userContent, err := openAIUserContent(text.String(), parts, hasImage)
+		if err != nil {
+			return nil, err
+		}
+		return append(results, openAIMessage{Role: "user", Content: userContent}), nil
+	}
+	if len(calls) > 0 {
+		rawCalls, err := json.Marshal(calls)
+		if err != nil {
+			return nil, err
+		}
+		content, err := assistantOpenAIContent(text.String())
+		if err != nil {
+			return nil, err
+		}
+		return []openAIMessage{{Role: "assistant", Content: content, ToolCalls: rawCalls}}, nil
+	}
+	content, err := openAIUserContent(text.String(), parts, hasImage)
+	if err != nil {
+		return nil, err
+	}
+	return []openAIMessage{{Role: role, Content: content}}, nil
+}
+
+func assistantOpenAIContent(text string) (json.RawMessage, error) {
+	if text == "" {
+		return json.RawMessage("null"), nil
+	}
+	return json.Marshal(text)
+}
+
+func openAIUserContent(text string, parts []oaContentPart, hasImage bool) (json.RawMessage, error) {
+	if hasImage {
+		if len(parts) == 0 {
+			return nil, fmt.Errorf("empty multimodal content")
+		}
+		return json.Marshal(parts)
+	}
+	return json.Marshal(text)
 }
 
 func systemText(raw json.RawMessage) string {
@@ -228,57 +419,6 @@ type oaContentPart struct {
 	Type     string       `json:"type"`
 	Text     string       `json:"text,omitempty"`
 	ImageURL *oaImagePart `json:"image_url,omitempty"`
-}
-
-func claudeContentToOpenAI(raw json.RawMessage) (json.RawMessage, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return json.Marshal("")
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return json.Marshal(s)
-	}
-	var blocks []struct {
-		Type   string `json:"type"`
-		Text   string `json:"text"`
-		Source *struct {
-			Type      string `json:"type"`
-			URL       string `json:"url"`
-			MediaType string `json:"media_type"`
-			Data      string `json:"data"`
-		} `json:"source"`
-	}
-	if err := json.Unmarshal(raw, &blocks); err != nil {
-		return nil, fmt.Errorf("unsupported Claude content: %w", err)
-	}
-	var parts []oaContentPart
-	var textOnly strings.Builder
-	hasImage := false
-	for _, bl := range blocks {
-		switch bl.Type {
-		case "text", "":
-			textOnly.WriteString(bl.Text)
-			parts = append(parts, oaContentPart{Type: "text", Text: bl.Text})
-		case "image":
-			hasImage = true
-			url, err := claudeImageURL(bl.Source)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, oaContentPart{Type: "image_url", ImageURL: &oaImagePart{URL: url}})
-		default:
-			if textOnly.Len() == 0 && !hasImage {
-				return nil, fmt.Errorf("refusing to drop non-text Claude content into an empty message")
-			}
-		}
-	}
-	if hasImage {
-		if len(parts) == 0 {
-			return nil, fmt.Errorf("empty multimodal content")
-		}
-		return json.Marshal(parts)
-	}
-	return json.Marshal(textOnly.String())
 }
 
 func claudeImageURL(src *struct {

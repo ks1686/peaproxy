@@ -50,6 +50,7 @@ type claudePost struct {
 	Messages  []claudePostMsg `json:"messages"`
 	System    string          `json:"system,omitempty"`
 	Stream    bool            `json:"stream"`
+	Tools     json.RawMessage `json:"tools,omitempty"`
 }
 
 type claudePostMsg struct {
@@ -58,13 +59,18 @@ type claudePostMsg struct {
 }
 
 type openAIIn struct {
-	Model     string `json:"model"`
-	Stream    bool   `json:"stream"`
-	MaxTokens int    `json:"max_tokens"`
-	Messages  []struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
-	} `json:"messages"`
+	Model     string          `json:"model"`
+	Stream    bool            `json:"stream"`
+	MaxTokens int             `json:"max_tokens"`
+	Tools     json.RawMessage `json:"tools"`
+	Messages  []openAIInMsg   `json:"messages"`
+}
+
+type openAIInMsg struct {
+	Role       string           `json:"role"`
+	Content    json.RawMessage  `json:"content"`
+	ToolCalls  []openAIToolCall `json:"tool_calls"`
+	ToolCallID string           `json:"tool_call_id"`
 }
 
 // CanonicalClaudeModel strips a provider prefix (anthropic/…) and rewrites
@@ -91,23 +97,114 @@ func ToClaude(raw []byte, stream bool) ([]byte, error) {
 		maxTok = 4096
 	}
 	out := claudePost{Model: CanonicalClaudeModel(in.Model), MaxTokens: maxTok, Stream: stream}
+	if len(in.Tools) > 0 && string(in.Tools) != "null" {
+		converted, err := toolsToClaude(in.Tools)
+		if err != nil {
+			return nil, err
+		}
+		out.Tools = converted
+	}
+	var pendingResults []claudeToolResultBlock
+	flushResults := func() error {
+		if len(pendingResults) == 0 {
+			return nil
+		}
+		raw, err := json.Marshal(pendingResults)
+		if err != nil {
+			return err
+		}
+		out.Messages = append(out.Messages, claudePostMsg{Role: "user", Content: raw})
+		pendingResults = nil
+		return nil
+	}
 	for _, m := range in.Messages {
-		if m.Role == "system" {
+		role := strings.ToLower(m.Role)
+		switch role {
+		case "system":
 			text, _ := contentText(m.Content)
 			if out.System != "" {
 				out.System += "\n"
 			}
 			out.System += text
-			continue
-		}
-		role := m.Role
-		if role == "assistant" || role == "user" {
+		case "tool":
+			pendingResults = append(pendingResults, claudeToolResultBlock{
+				Type:      "tool_result",
+				ToolUseID: m.ToolCallID,
+				Content:   toolResultText(m.Content),
+			})
+		case "assistant":
+			if err := flushResults(); err != nil {
+				return nil, err
+			}
+			content, err := assistantOpenAIToClaude(m)
+			if err != nil {
+				return nil, err
+			}
+			out.Messages = append(out.Messages, claudePostMsg{Role: "assistant", Content: content})
+		case "user":
+			if err := flushResults(); err != nil {
+				return nil, err
+			}
 			content, err := openAIContentToClaude(m.Content)
 			if err != nil {
 				return nil, err
 			}
 			out.Messages = append(out.Messages, claudePostMsg{Role: role, Content: content})
+		default:
+			// skip unknown roles rather than invent Claude turns
 		}
+	}
+	if err := flushResults(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(out)
+}
+
+type claudeToolUseBlock struct {
+	Type  string          `json:"type"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+type claudeToolResultBlock struct {
+	Type      string `json:"type"`
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+}
+
+func assistantOpenAIToClaude(m openAIInMsg) (json.RawMessage, error) {
+	blocks := make([]any, 0, 1+len(m.ToolCalls))
+	text, _ := contentText(m.Content)
+	if text != "" {
+		blocks = append(blocks, claudeContent{Type: "text", Text: text})
+	}
+	for _, tc := range m.ToolCalls {
+		blocks = append(blocks, claudeToolUseBlock{
+			Type:  "tool_use",
+			ID:    tc.ID,
+			Name:  tc.Function.Name,
+			Input: toolUseInput(tc.Function.Arguments),
+		})
+	}
+	if len(blocks) == 0 {
+		return json.Marshal([]claudeContent{{Type: "text", Text: ""}})
+	}
+	return json.Marshal(blocks)
+}
+
+func toolsToClaude(raw json.RawMessage) (json.RawMessage, error) {
+	var tools []openAITool
+	if err := json.Unmarshal(raw, &tools); err != nil {
+		return nil, fmt.Errorf("openai tools: %w", err)
+	}
+	out := make([]claudeTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, claudeTool{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+		})
 	}
 	return json.Marshal(out)
 }
@@ -170,17 +267,22 @@ func openAIContentToClaude(raw json.RawMessage) (json.RawMessage, error) {
 }
 
 type claudeNative struct {
-	ID      string `json:"id"`
-	Model   string `json:"model"`
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	StopReason string `json:"stop_reason"`
+	ID         string              `json:"id"`
+	Model      string              `json:"model"`
+	Content    []claudeNativeBlock `json:"content"`
+	StopReason string              `json:"stop_reason"`
 	Usage      *struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
+}
+
+type claudeNativeBlock struct {
+	Type  string          `json:"type"`
+	Text  string          `json:"text"`
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
 }
 
 type openAIOut struct {
@@ -190,8 +292,9 @@ type openAIOut struct {
 	Choices []struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string           `json:"role"`
+			Content   json.RawMessage  `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -208,22 +311,43 @@ func FromClaude(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	text := ClaudeText(raw)
-	stop := "stop"
-	if in.StopReason == "max_tokens" {
-		stop = "length"
+	var calls []openAIToolCall
+	for _, c := range in.Content {
+		if c.Type != "tool_use" {
+			continue
+		}
+		tc := openAIToolCall{ID: c.ID, Type: "function"}
+		tc.Function.Name = c.Name
+		tc.Function.Arguments = toolUseArguments(c.Input)
+		calls = append(calls, tc)
+	}
+	var content json.RawMessage
+	var err error
+	if len(calls) > 0 {
+		content, err = assistantOpenAIContent(text)
+	} else {
+		content, err = json.Marshal(text)
+	}
+	if err != nil {
+		return nil, err
 	}
 	out := openAIOut{ID: in.ID, Object: "chat.completion", Model: in.Model}
 	out.Choices = make([]struct {
 		Index   int `json:"index"`
 		Message struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string           `json:"role"`
+			Content   json.RawMessage  `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	}, 1)
 	out.Choices[0].Message.Role = "assistant"
-	out.Choices[0].Message.Content = text
-	out.Choices[0].FinishReason = stop
+	out.Choices[0].Message.Content = content
+	out.Choices[0].Message.ToolCalls = calls
+	out.Choices[0].FinishReason = openAIChatFinishReason(len(calls) > 0 || in.StopReason == "tool_use")
+	if in.StopReason == "max_tokens" && len(calls) == 0 {
+		out.Choices[0].FinishReason = "length"
+	}
 	if in.Usage != nil {
 		out.Usage = &struct {
 			PromptTokens     int `json:"prompt_tokens"`

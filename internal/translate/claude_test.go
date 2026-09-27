@@ -33,10 +33,10 @@ func TestToOpenAIUsesStructsNotMaps(t *testing.T) {
 }
 
 func TestRefusesEmptyAfterDroppingNonText(t *testing.T) {
-	in := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"tool_use","id":"x"}]}]}`)
+	in := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"thinking","thinking":"x"}]}]}`)
 	_, _, err := ToOpenAI(in)
 	if err == nil {
-		t.Fatal("expected error for silent tool_use drop")
+		t.Fatal("expected error for silent unknown-block drop")
 	}
 }
 
