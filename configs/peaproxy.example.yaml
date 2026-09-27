@@ -24,6 +24,11 @@ hide:
 expose:
   models: []
 
+# Stable route names. Clients send the local name; PeaProxy rewrites model to
+# the live catalog id. Pin and rename stay listing-only.
+# routes:
+#   code: llama3.2
+
 # Optional overlays. Live ListModels remains the source of IDs.
 # catalog:
 #   pin:

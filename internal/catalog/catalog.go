@@ -53,6 +53,9 @@ type Model struct {
 	// EmbeddingsReady is true when this row is tagged embeddings and the
 	// account's adapter can proxy POST /v1/embeddings. Listing overlay only.
 	EmbeddingsReady bool `json:"embeddingsReady,omitempty"`
+	// AliasOf is the live catalog id a stable route name forwards to.
+	// Empty on rows that came from ListModels.
+	AliasOf string `json:"aliasOf,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.
@@ -218,6 +221,53 @@ type OpenAIModel struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
 	OwnedBy string `json:"owned_by"`
+}
+
+// ApplyRoutes appends stable route names whose targets are currently routable.
+// A listed row whose id equals a route name is dropped so the alias is the
+// only client-facing id. When ForClients is set and expose is a non-empty
+// subset that omits the route name, that alias is left off the list.
+// Missing targets are omitted. Pin and rename on the target are not copied.
+func ApplyRoutes(listed, all []Model, q Query, routes map[string]string) []Model {
+	if len(routes) == 0 {
+		return listed
+	}
+	names := make([]string, 0, len(routes))
+	for name := range routes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	skip := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		skip[name] = struct{}{}
+	}
+	out := make([]Model, 0, len(listed)+len(names))
+	for _, m := range listed {
+		if _, ok := skip[m.ID]; ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	for _, name := range names {
+		target := strings.TrimSpace(routes[name])
+		src, ok := FindRoutable(all, q, target)
+		if !ok {
+			continue
+		}
+		if q.ForClients && len(q.ExposeModels) > 0 && !slices.Contains(q.ExposeModels, name) {
+			continue
+		}
+		alias := src
+		alias.ID = name
+		alias.DisplayName = name
+		alias.AliasOf = target
+		alias.Pinned = false
+		alias.Hidden = false
+		alias.Exposed = true
+		alias.Routable = true
+		out = append(out, alias)
+	}
+	return out
 }
 
 // ToOpenAIList converts filtered catalog models into the OpenAI list shape.

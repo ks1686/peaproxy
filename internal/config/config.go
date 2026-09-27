@@ -25,17 +25,18 @@ const (
 
 // Config is the on-disk schema. schemaVersion must be bumped on breaking changes.
 type Config struct {
-	SchemaVersion    int           `yaml:"schemaVersion"`
-	Bind             string        `yaml:"bind"`
-	Port             int           `yaml:"port"`
-	AdminToken       string        `yaml:"adminToken,omitempty"`
-	AllowNonLoopback bool          `yaml:"allowNonLoopback,omitempty"`
-	RequestLog       bool          `yaml:"requestLog,omitempty"`
-	Hide             HideList      `yaml:"hide"`
-	Expose           ExposeList    `yaml:"expose"`
-	Catalog          CatalogPrefs  `yaml:"catalog,omitempty"`
-	Failover         FailoverPrefs `yaml:"failover,omitempty"`
-	Providers        []Provider    `yaml:"providers"`
+	SchemaVersion    int               `yaml:"schemaVersion"`
+	Bind             string            `yaml:"bind"`
+	Port             int               `yaml:"port"`
+	AdminToken       string            `yaml:"adminToken,omitempty"`
+	AllowNonLoopback bool              `yaml:"allowNonLoopback,omitempty"`
+	RequestLog       bool              `yaml:"requestLog,omitempty"`
+	Hide             HideList          `yaml:"hide"`
+	Expose           ExposeList        `yaml:"expose"`
+	Catalog          CatalogPrefs      `yaml:"catalog,omitempty"`
+	Failover         FailoverPrefs     `yaml:"failover,omitempty"`
+	Routes           map[string]string `yaml:"routes,omitempty"`
+	Providers        []Provider        `yaml:"providers"`
 }
 
 // HideList drops providers or model IDs from /v1/models and UI pickers.
@@ -370,6 +371,17 @@ func (c Config) Validate() error {
 		}
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("catalog.rename %q has an empty display name", id)
+		}
+	}
+	for name, target := range c.Routes {
+		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || strings.ContainsAny(name, " \t\r\n") {
+			return fmt.Errorf("routes name %q must be a non-empty id without spaces", name)
+		}
+		if strings.TrimSpace(target) == "" {
+			return fmt.Errorf("routes %q has an empty target", name)
+		}
+		if strings.TrimSpace(target) == name {
+			return fmt.Errorf("routes %q must target a different live model id", name)
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Failover.Policy)) {

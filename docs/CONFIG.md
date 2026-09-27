@@ -62,8 +62,17 @@ Rules (`peaproxy config validate`):
 - Pin ids must be non-empty and unique.
 - Rename keys (live model ids) and display names must be non-empty.
 - Hide/expose lists must not contain empty ids or duplicates.
-- Pin/rename never become routing aliases — clients must use the live provider id.
+- Pin/rename never become routing aliases — clients must use the live provider id, or a name from `routes`.
 - Hidden pinned models stay off `/v1/models` and remain routable by id unless `hide.blockRouting` is true.
+
+## Stable route names
+
+```yaml
+routes:
+  code: llama3.2
+```
+
+A client that sends `model: code` is routed like `llama3.2`, and the upstream body is rewritten to that live id. `/v1/models` lists `code` while the target is in the live catalog. If the target is missing, the request fails and no upstream is called. A route name wins over a live model id with the same string. Names must be non-empty, without spaces, and different from their target. When `expose.models` is a non-empty subset, the route name has to be in that list to appear in `/v1/models`; it still routes if the client sends it.
 
 The UI Catalog page, `POST /admin/catalog/overlay`, and `peaproxy catalog pin|rename|hide` write the same fields. Settings shows pin/rename/hide counts (edit them on Catalog).
 

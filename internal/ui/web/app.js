@@ -520,13 +520,18 @@ function catalogPage(root) {
           const hideLabel = m.hidden ? "Unhide" : "Hide from /v1/models";
           const pinLabel = m.pinned ? "Unpin" : "Pin";
           const shown = m.displayName || m.id;
+          const alias = m.aliasOf
+            ? `<div class="muted">routes to ${escapeHtml(m.aliasOf)}</div>`
+            : `<div class="row tight">
+              <input data-rename-input="${escapeHtml(m.id)}" value="${escapeHtml(m.displayName || "")}" placeholder="Display name" size="18" />
+              <button class="btn" data-rename="${escapeHtml(m.id)}">Save name</button>
+            </div>`;
+          const pinBtn = m.aliasOf ? "" : `<button class="btn" data-pin="${escapeHtml(m.id)}" data-on="${m.pinned ? "0" : "1"}">${pinLabel}</button>`;
+          const hideBtn = m.aliasOf ? "" : `<button class="btn" data-hide="${escapeHtml(m.id)}" data-on="${m.hidden ? "0" : "1"}">${hideLabel}</button>`;
           return `<tr>
           <td>${m.pinned ? `<span class="pill accent">pin</span> ` : ""}${escapeHtml(shown)}
             <div class="muted">${escapeHtml(m.id)}</div>
-            <div class="row tight">
-              <input data-rename-input="${escapeHtml(m.id)}" value="${escapeHtml(m.displayName || "")}" placeholder="Display name" size="18" />
-              <button class="btn" data-rename="${escapeHtml(m.id)}">Save name</button>
-            </div>
+            ${alias}
           </td>
           <td><span class="pill">${escapeHtml(m.tier)}</span></td>
           <td>${escapeHtml(m.provider)}</td>
@@ -535,8 +540,8 @@ function catalogPage(root) {
           <td>${m.exposed ? "listed" : "hidden"} / ${m.routable ? "routable" : "blocked"}</td>
           <td>${m.privacyNote ? `<span class="warn">${escapeHtml(m.privacyNote)}</span>` : ""}</td>
           <td>
-            <button class="btn" data-pin="${escapeHtml(m.id)}" data-on="${m.pinned ? "0" : "1"}">${pinLabel}</button>
-            <button class="btn" data-hide="${escapeHtml(m.id)}" data-on="${m.hidden ? "0" : "1"}">${hideLabel}</button>
+            ${pinBtn}
+            ${hideBtn}
           </td>
         </tr>`;
         })
