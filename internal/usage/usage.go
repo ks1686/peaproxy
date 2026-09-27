@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +15,27 @@ import (
 
 const (
 	capEvents       = 200
+	keepDays        = 90
 	defaultMaxLog   = 1 << 20
 	maxPreview      = 240
 	maxTailRead     = 256 << 10
 	keepAfterRotate = 80
 )
+
+// DayRollup is one UTC day for one account. It outlives the 200-event ring.
+// Token totals count only calls that published a usage object. CostUSD is the
+// sum of published usage.cost values and stays nil when none of the calls had one.
+type DayRollup struct {
+	Day              string   `json:"day"`
+	AccountID        string   `json:"accountId"`
+	Provider         string   `json:"provider,omitempty"`
+	Calls            int      `json:"calls"`
+	Errors           int      `json:"errors"`
+	PromptTokens     int      `json:"promptTokens,omitempty"`
+	CompletionTokens int      `json:"completionTokens,omitempty"`
+	CostUSD          *float64 `json:"costUSD,omitempty"`
+	CostCalls        int      `json:"costCalls,omitempty"`
+}
 
 // Event is one completed (or failed) proxy call. Secrets must never be stored.
 type Event struct {
@@ -31,6 +48,8 @@ type Event struct {
 	Stream           bool      `json:"stream"`
 	PromptTokens     int       `json:"promptTokens,omitempty"`
 	CompletionTokens int       `json:"completionTokens,omitempty"`
+	TokensKnown      bool      `json:"tokensKnown,omitempty"`
+	CostUSD          *float64  `json:"costUSD,omitempty"`
 	Status           int       `json:"status"`
 	Error            string    `json:"error,omitempty"`
 	Preview          string    `json:"preview,omitempty"`
@@ -57,13 +76,15 @@ type ProviderRollup struct {
 }
 
 type diskFile struct {
-	Events []Event `json:"events"`
+	Events []Event     `json:"events"`
+	Days   []DayRollup `json:"days,omitempty"`
 }
 
 // Store is a ring buffer persisted as JSON when Path is set.
 type Store struct {
 	mu         sync.Mutex
 	events     []Event
+	days       []DayRollup
 	path       string
 	requestLog string
 	maxLog     int64
@@ -85,6 +106,8 @@ func Open(path string) *Store {
 		if len(s.events) > capEvents {
 			s.events = s.events[len(s.events)-capEvents:]
 		}
+		s.days = disk.Days
+		s.pruneDaysLocked(time.Now())
 	}
 	return s
 }
@@ -134,6 +157,7 @@ func (s *Store) Add(e Event) {
 	} else {
 		s.events = append(s.events, e)
 	}
+	s.noteDayLocked(e)
 	s.flushLocked()
 	s.appendLogLocked(e)
 }
@@ -143,7 +167,7 @@ func (s *Store) flushLocked() {
 		return
 	}
 	_ = os.MkdirAll(filepath.Dir(s.path), 0o700)
-	b, err := json.MarshalIndent(diskFile{Events: s.events}, "", "  ")
+	b, err := json.MarshalIndent(diskFile{Events: s.events, Days: s.days}, "", "  ")
 	if err != nil {
 		return
 	}
@@ -302,6 +326,71 @@ func newestFirst(events []Event) []Event {
 		out[len(events)-1-i] = events[i]
 	}
 	return out
+}
+
+// ByDay returns UTC day rollups, newest day first. The slice is a copy.
+func (s *Store) ByDay() []DayRollup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := append([]DayRollup(nil), s.days...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Day != out[j].Day {
+			return out[i].Day > out[j].Day
+		}
+		return out[i].AccountID < out[j].AccountID
+	})
+	if out == nil {
+		out = []DayRollup{}
+	}
+	return out
+}
+
+func (s *Store) noteDayLocked(e Event) {
+	day := e.Time.UTC().Format("2006-01-02")
+	for i := range s.days {
+		if s.days[i].Day == day && s.days[i].AccountID == e.AccountID {
+			bumpDay(&s.days[i], e)
+			s.pruneDaysLocked(e.Time)
+			return
+		}
+	}
+	row := DayRollup{Day: day, AccountID: e.AccountID, Provider: e.Provider}
+	bumpDay(&row, e)
+	s.days = append(s.days, row)
+	s.pruneDaysLocked(e.Time)
+}
+
+func bumpDay(row *DayRollup, e Event) {
+	if row.Provider == "" {
+		row.Provider = e.Provider
+	}
+	row.Calls++
+	if e.Status >= 400 || e.Error != "" {
+		row.Errors++
+	}
+	if e.TokensKnown {
+		row.PromptTokens += e.PromptTokens
+		row.CompletionTokens += e.CompletionTokens
+	}
+	if e.CostUSD != nil {
+		if row.CostUSD == nil {
+			zero := 0.0
+			row.CostUSD = &zero
+		}
+		*row.CostUSD += *e.CostUSD
+		row.CostCalls++
+	}
+}
+
+func (s *Store) pruneDaysLocked(now time.Time) {
+	cutoff := now.UTC().AddDate(0, 0, -keepDays).Format("2006-01-02")
+	kept := s.days[:0]
+	for _, d := range s.days {
+		if d.Day >= cutoff {
+			kept = append(kept, d)
+		}
+	}
+	s.days = append([]DayRollup(nil), kept...)
 }
 
 // ByAccount rolls up counts.

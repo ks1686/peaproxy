@@ -141,7 +141,7 @@ peaproxy clients show droid      # Factory Droid BYOK client
 peaproxy clients verify cursor --chat
 ```
 
-First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is `usage.json` next to the config.
+First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [configs/peaproxy.example.yaml](configs/peaproxy.example.yaml). Env overlays: [docs/CONFIG.md](docs/CONFIG.md). Usage is `usage.json` next to the config: a 200-event ring plus 90 UTC days of per-account totals. Tokens and price are recorded only when the provider publishes them.
 
 | Command | Purpose |
 |---|---|
@@ -174,7 +174,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `GET /admin/quota` | Per-account quota remaining plus the provider honesty matrix |
 | `POST /admin/health/probe` | Re-run `Validate` on each adapter and documented quota probes |
 | `GET /admin/presets` | Account dropdown templates (env var **names** and whether they are set; never values) |
-| `GET /admin/usage` | Persisted usage (`usage.json`) |
+| `GET /admin/usage` | Persisted usage (`usage.json`): recent ring plus daily rollups |
 | `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |
 | `POST /admin/catalog/overlay` | Pin / rename a live model id (listing overlay only) |
 
