@@ -78,6 +78,23 @@ func TestSetStreamDoesNotTouchNestedOrQuotedStream(t *testing.T) {
 	}
 }
 
+func TestSetTopLevelRawInsertAndReplace(t *testing.T) {
+	in := []byte(`{"model":"m","messages":[]}`)
+	out := SetTopLevelRaw(in, "max_tokens", []byte("4096"))
+	want := []byte(`{"model":"m","messages":[],"max_tokens":4096}`)
+	if !bytes.Equal(out, want) {
+		t.Fatalf("insert got %s want %s", out, want)
+	}
+	replaced := SetTopLevelRaw(out, "model", []byte(`"n"`))
+	if !bytes.Equal(replaced, []byte(`{"model":"n","messages":[],"max_tokens":4096}`)) {
+		t.Fatalf("replace got %s", replaced)
+	}
+	same := SetTopLevelRaw(out, "max_tokens", []byte("4096"))
+	if !bytes.Equal(same, out) {
+		t.Fatalf("noop mutated bytes")
+	}
+}
+
 func TestSetStreamIgnoresStreamOptionsKey(t *testing.T) {
 	in := []byte(`{"model":"m","stream_options":{"include_usage":true},"messages":[]}`)
 	out := SetStream(in, true)

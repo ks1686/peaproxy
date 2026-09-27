@@ -32,6 +32,23 @@ func SetStream(raw []byte, stream bool) []byte {
 // If the key is already the requested bool, the input is returned unchanged.
 // If the key is missing it is inserted immediately before the final closing brace.
 func SetBool(raw []byte, key string, val bool) []byte {
+	if key == "" {
+		raw = bytes.TrimSpace(raw)
+		if len(raw) == 0 {
+			return []byte(`{}`)
+		}
+		return raw
+	}
+	lit := []byte("false")
+	if val {
+		lit = []byte("true")
+	}
+	return SetTopLevelRaw(raw, key, lit)
+}
+
+// SetTopLevelRaw inserts or replaces a top-level object member with a raw JSON
+// value, preserving the order of every other key (prompt-cache safe).
+func SetTopLevelRaw(raw []byte, key string, value []byte) []byte {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
 		raw = []byte(`{}`)
@@ -39,19 +56,17 @@ func SetBool(raw []byte, key string, val bool) []byte {
 	if key == "" {
 		return raw
 	}
-	lit := []byte("false")
-	if val {
-		lit = []byte("true")
-	}
-	span, ok := findTopLevelBool(raw, key)
-	if ok {
-		if bytes.Equal(raw[span.valueStart:span.valueEnd], lit) {
+	for _, s := range topLevelMembers(raw) {
+		if s.key != key {
+			continue
+		}
+		if bytes.Equal(raw[s.valueStart:s.valueEnd], value) {
 			return raw
 		}
-		out := make([]byte, 0, len(raw)-span.valueEnd+span.valueStart+len(lit))
-		out = append(out, raw[:span.valueStart]...)
-		out = append(out, lit...)
-		out = append(out, raw[span.valueEnd:]...)
+		out := make([]byte, 0, len(raw)-s.valueEnd+s.valueStart+len(value))
+		out = append(out, raw[:s.valueStart]...)
+		out = append(out, value...)
+		out = append(out, raw[s.valueEnd:]...)
 		return out
 	}
 	end := lastTopLevelClose(raw)
@@ -59,7 +74,11 @@ func SetBool(raw []byte, key string, val bool) []byte {
 		return raw
 	}
 	inner := bytes.TrimRight(raw[:end], " \t\r\n")
-	insert := append([]byte(`"`+key+`":`), lit...)
+	insert := make([]byte, 0, 3+len(key)+len(value))
+	insert = append(insert, '"')
+	insert = append(insert, key...)
+	insert = append(insert, '"', ':')
+	insert = append(insert, value...)
 	if len(inner) > 1 && inner[len(inner)-1] != '{' {
 		insert = append([]byte{','}, insert...)
 	}
@@ -129,24 +148,6 @@ type memberSpan struct {
 	keyStart   int // index of opening quote of the key
 	valueStart int
 	valueEnd   int // exclusive
-}
-
-func findTopLevelBool(raw []byte, key string) (memberSpan, bool) {
-	for _, s := range topLevelMembers(raw) {
-		if s.key != key {
-			continue
-		}
-		v := bytes.TrimSpace(raw[s.valueStart:s.valueEnd])
-		if bytes.Equal(v, []byte("true")) || bytes.Equal(v, []byte("false")) {
-			idx := bytes.Index(raw[s.valueStart:s.valueEnd], v)
-			if idx >= 0 {
-				s.valueStart += idx
-				s.valueEnd = s.valueStart + len(v)
-			}
-			return s, true
-		}
-	}
-	return memberSpan{}, false
 }
 
 func topLevelMembers(raw []byte) []memberSpan {

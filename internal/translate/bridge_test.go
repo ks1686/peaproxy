@@ -35,6 +35,35 @@ func TestToClaudeVisionDataURL(t *testing.T) {
 	}
 }
 
+func TestToClaudeDefaultsMaxTokensAndCanonicalModel(t *testing.T) {
+	out, err := ToClaude([]byte(`{"model":"anthropic/claude-sonnet-4.5","messages":[{"role":"user","content":"hi"}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"model":"claude-sonnet-4-5"`)) {
+		t.Fatalf("canonical model: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"max_tokens":4096`)) {
+		t.Fatalf("default max_tokens: %s", out)
+	}
+}
+
+func TestCanonicalClaudeModel(t *testing.T) {
+	cases := map[string]string{
+		"claude-sonnet-5":           "claude-sonnet-5",
+		"anthropic/claude-sonnet-5": "claude-sonnet-5",
+		"claude-sonnet-4.5":         "claude-sonnet-4-5",
+		"claude-opus-4.5":           "claude-opus-4-5",
+		"  Claude-Haiku-4.5  ":      "claude-haiku-4-5",
+		"anthropic/claude-opus-4-1": "claude-opus-4-1",
+	}
+	for in, want := range cases {
+		if got := CanonicalClaudeModel(in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestFromClaude(t *testing.T) {
 	in := []byte(`{"id":"msg_1","model":"c","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}`)
 	out, err := FromClaude(in)
