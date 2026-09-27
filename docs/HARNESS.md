@@ -8,17 +8,19 @@ Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). A
 
 Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log tail, and richer health also live on the CLI (`peaproxy catalog pin|rename|hide`, `peaproxy requests tail`, `peaproxy health` matching `GET /admin/health` including quota remaining; `peaproxy accounts add <preset>` for Jan/GPT4All/SambaNova/Workers AI).
 
-**PeaProxy cloak defaults are off.** Unlike CLIProxyAPI (#6120), PeaProxy never injects Claude-Code cloak headers or `clear_thinking`. Claude Code may enable cloak itself (`cloak: opt-in` on that preset only).
+**Harness cloak defaults stay off.** Unlike CLIProxyAPI (#6120), PeaProxy does **not** inject Claude-Code thinking / `clear_thinking` into client presets (Pi, Cursor, OpenCode, …). Claude Code may enable cloak itself (`cloak: opt-in` on that preset only).
+
+**Separate (adapter, not a client preset):** `anthropic_oauth` Messages to Anthropic **do** inject Claude Code’s billing header + CLI identity system blocks (v1.6.8/v1.6.9) so subscription OAuth is not 429’d as a non-CLI client. Caller system text is relocated, never deleted. Official `adapter: anthropic` API keys are not cloaked this way.
 
 **OpenCode and Claude Code do not share the same Anthropic base URL.** Claude Code typically wants `ANTHROPIC_BASE_URL` *without* `/v1` (it appends `/v1/messages`). OpenCode's Anthropic provider often wants `baseURL` *including* `/v1` ([anomalyco/opencode#35005](https://github.com/anomalyco/opencode/issues/35005)).
 
 | Client | Wire | Base URL | Cloak | Gotchas |
 |---|---|---|---|---|
 | Cursor | OpenAI chat completions | `http://127.0.0.1:8317/v1` | off | Override OpenAI Base URL |
-| Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | opt-in (client-side only) | PeaProxy does not inject thinking/cloak |
+| Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | opt-in (client-side only) | Preset does not inject thinking. `anthropic_oauth` upstream still applies system cloak |
 | OpenCode | OpenAI-compat **and** Anthropic | both use `.../v1` | off | Separate snippet from Claude Code |
-| Pi | Anthropic **and** OpenAI (both documented) | Anthropic: no `/v1`; OpenAI: includes `/v1` | off | Do not apply Claude-Code cloak defaults |
-| Codex | OpenAI **Responses** (`POST /v1/responses`) | `.../v1` | off | `wire_api = "responses"` only. Codex OAuth strips `stream_options` |
+| Pi | Anthropic **and** OpenAI (both documented) | Anthropic: no `/v1`; OpenAI: includes `/v1` | off | Do not apply Claude-Code cloak defaults to the Pi preset |
+| Codex | OpenAI **Responses** (`POST /v1/responses`) | `.../v1` | off | `wire_api = "responses"` only. Codex OAuth forces `store: false`; omits `stream_options` / `max_output_tokens` |
 | Continue | OpenAI-compat | `.../v1` | off | `apiBase` in `~/.continue/config.yaml` |
 | Cline | OpenAI Compatible provider | `.../v1` | off | Must include `/v1`; Cline sends `stream_options` (forwarded) |
 | Amp | Custom URL `chat-completions` | `.../v1` | off | **Do not** set `amp.url` / `AMP_URL` to PeaProxy. No Amp WebSocket |
@@ -67,7 +69,7 @@ export OPENAI_BASE_URL=http://127.0.0.1:8317/v1
 export OPENAI_API_KEY=peaproxy
 ```
 
-PeaProxy cloak defaults are **off** (CLIProxyAPI #6120). Do not inject Claude-Code cloak / `clear_thinking` for Pi. `peaproxy clients verify pi --chat` covers both wires.
+Client-preset cloak defaults are **off** (CLIProxyAPI #6120). Do not inject Claude-Code thinking / `clear_thinking` for Pi. `anthropic_oauth` still applies a non-strict upstream system cloak (caller system kept). `peaproxy clients verify pi --chat` covers both wires.
 
 ## Continue
 
@@ -121,7 +123,7 @@ Format: chat-completions
 # Format: anthropic-messages
 ```
 
-Amp may send `stream_options`. Chat Completions forwards it. Codex OAuth (`openai_oauth`) drops `stream_options` because `chatgpt.com` Codex `/responses` rejects it. PeaProxy does not speak Amp WebSocket or `/api/provider/*` namespaced routes.
+Amp may send `stream_options`. Chat Completions forwards it. Codex OAuth (`openai_oauth`) drops `stream_options` and `max_output_tokens` and forces `store: false` because `chatgpt.com` Codex `/responses` rejects the rest. PeaProxy does not speak Amp WebSocket or `/api/provider/*` namespaced routes.
 
 ## Factory Droid (BYOK client)
 
@@ -172,7 +174,7 @@ wire_api = "responses"
 export OPENAI_API_KEY=peaproxy
 ```
 
-`POST /v1/responses` is first-class. ChatGPT/Codex subscription OAuth (`openai_oauth`) passes the body through to Codex `/responses` after a surgical `stream_options` drop — including `tools`, `tool_choice`, and input items (`function_call`, `function_call_output`, `reasoning`). Chat Completions clients on a Codex OAuth account map tools / `tool_calls` / `tool` messages into those items (and map function_call outputs back to `tool_calls`). Other adapters translate via chat completions and round-trip function tools one level (request `tools` + `tool_calls` → Responses `function_call` items). That path does **not** execute tools or synthesize a full Responses tool event stream. `image_gen` is not a `/v1/images/generations` proxy.
+`POST /v1/responses` is first-class. ChatGPT/Codex subscription OAuth (`openai_oauth`) passes the body through to Codex `/responses` after forcing `store: false` and dropping `stream_options` / `max_output_tokens` — including `tools`, `tool_choice`, and input items (`function_call`, `function_call_output`, `reasoning`). Chat Completions clients on a Codex OAuth account map tools / `tool_calls` / `tool` messages into those items (and map function_call outputs back to `tool_calls`). Translated chat SSE emits `finish_reason` before `[DONE]`. Other adapters translate via chat completions and round-trip function tools one level (request `tools` + `tool_calls` → Responses `function_call` items). That path does **not** execute tools or synthesize a full Responses tool event stream. `image_gen` is not a `/v1/images/generations` proxy.
 
 ## Verify
 

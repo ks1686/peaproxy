@@ -1,6 +1,6 @@
 # Competitor issue wins → PeaProxy design goals
 
-Sources: open/recent issues on automazeio/vibeproxy and router-for-me/CLIProxyAPI (sampled 2026-09-26). Originally **product goals**. Status below is **v0.2.6 on main**, not a claim that every upstream issue is closed.
+Sources: open/recent issues on automazeio/vibeproxy and router-for-me/CLIProxyAPI (sampled 2026-09-26). Originally **product goals**. Status below is **1.6.x on main** (latest GitHub Release **v1.6.9**), not a claim that every upstream issue is closed.
 
 Cross-links: [PLAN.md](PLAN.md) (phases), [PROVIDERS.md](PROVIDERS.md) (adapters), [HARNESS.md](HARNESS.md) (client presets), [OAUTH.md](OAUTH.md) (liability), [V1.md](V1.md) (1.0 cut).
 
@@ -20,7 +20,7 @@ CLIProxyAPI repeatedly gets "add model X" issues (Opus 4.6/4.7, Fable, GPT Daybr
 
 ### 3. Protocol fidelity for coding harnesses — shipped (documented limits)
 
-- Claude cloak defaults break Pi / non-Claude-Code (#6120) — PeaProxy cloak defaults **off**
+- Claude cloak defaults break Pi / non-Claude-Code (#6120) — **client-preset** cloak defaults **off**. `anthropic_oauth` Messages still apply a **non-strict** Claude Code system cloak upstream (caller system relocated, never deleted)
 - Thinking/clear_thinking injection breaks plain Claude (#509 VibeProxy) — not injected
 - Tool-result adjacency / translator bugs (#6129, #4112) — still a translation risk on non-native wires
 - Cursor tool blocks on OpenAI wire (#411 VibeProxy)
@@ -65,7 +65,7 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 
 **PeaProxy:** first-class free/local tier (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, OpenRouter free, OpenCode Zen, HF, Groq, Cerebras, NIM, Workers AI, Ollama Cloud, SambaNova) + filters + listing-only hide. GitHub Models is retired. See [PROVIDERS.md](PROVIDERS.md).
 
-## Must-have differentiators (v0.2.6)
+## Must-have differentiators (1.6.x)
 
 1. Auto model discovery — **yes**
 2. Free + paid providers with catalog filters/hide — **yes**
@@ -74,7 +74,7 @@ Custom provider FR (#347 VibeProxy); local-model flag exists upstream but not pr
 5. Reliable multi-account failover with visible cooldowns — **yes** (`round-robin` / `fill-first` / `sticky`)
 6. Per-provider usage showcase (text + vision-in + image-out) — **yes**
 7. Cross-platform CLI + localhost UI (no tray) — **yes, by design**
-8. Protocol profiles that don't break thinking/tools/cloak for non-official clients — **defaults off**; not a full translator golden-test suite
+8. Protocol profiles that don't break thinking/tools/cloak for non-official clients — **client-preset defaults off**; `anthropic_oauth` system cloak is non-strict (caller system kept)
 
 ## Nice-to-have (not 1.0 blockers)
 
