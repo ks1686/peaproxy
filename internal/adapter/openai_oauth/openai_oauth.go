@@ -34,7 +34,8 @@ const (
 	Scope          = "openid email profile offline_access"
 	DefaultAPIBase = "https://chatgpt.com/backend-api/codex"
 	Originator     = "codex_cli_rs"
-	UserAgent      = "codex_cli_rs/0.155.0"
+	ClientVersion  = "0.155.0"
+	UserAgent      = Originator + "/" + ClientVersion
 	callbackPort   = "1455"
 	deviceUserURL  = "https://auth.openai.com/api/accounts/deviceauth/usercode"
 	devicePollURL  = "https://auth.openai.com/api/accounts/deviceauth/token"
@@ -393,6 +394,12 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Official Codex CLI always appends client_version (openai/codex
+	// ModelsClient::append_client_version_query). chatgpt.com rejects
+	// GET /models without it: HTTP 400 "Field required: query client_version".
+	q := req.URL.Query()
+	q.Set("client_version", ClientVersion)
+	req.URL.RawQuery = q.Encode()
 	a.headers(req, false)
 	c := *a.httpClient
 	c.Timeout = 8 * time.Second
