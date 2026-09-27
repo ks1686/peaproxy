@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **v0.2.8** on main (CLI parity with Catalog / Health / Request log / `accounts add`). Usable 0.2.x product. 1.0 cut: [docs/V1.md](docs/V1.md) — that tag is not cut yet.
+Status: **1.6.x** on main (latest GitHub Release **v1.6.9**). Formal **v1.0.0** is an honesty/marketing tag the coordinator cuts from `main` after [docs/V1.md](docs/V1.md) — not from a feature branch, and not a second 1.6 release. Subsequent work stays 1.x.y.
 
 **Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
@@ -34,11 +34,11 @@ peaproxy --version
 peaproxy serve
 ```
 
-Alternatively, follow `main` with Go `@latest`, or pin a tagged 0.2.x:
+Alternatively, follow `main` with Go `@latest`, or pin a tagged 1.6.x:
 
 ```bash
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
-# or pin a tagged 0.2.x, e.g. @v0.2.8
+# or pin a tagged 1.6.x, e.g. @v1.6.9
 peaproxy --version
 peaproxy serve
 ```
@@ -77,12 +77,12 @@ First-run **Accounts** — local / API-key onboarding CTAs first. Subscription O
 
 Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/capture-readme-screenshots.mjs`). No API keys or OAuth tokens appear in the images.
 
-## Feature matrix (v0.2.8)
+## Feature matrix (1.6.x)
 
 | Capability | Status |
 |---|---|
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped |
-| `POST /v1/chat/completions` stream + non-stream | Shipped |
+| `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]` |
 | `POST /v1/messages` true Anthropic SSE | Shipped |
 | `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |
@@ -92,6 +92,8 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk** |
+| Claude OAuth Messages cloak | **Shipped** — `anthropic_oauth` injects Claude Code billing header + CLI identity (caller system relocated, never deleted). Client-preset cloak defaults stay **off** |
+| Codex OAuth `store` / token limits | **Shipped** — `openai_oauth` forces `store: false` and omits `max_output_tokens` / `stream_options` |
 | Qwen consumer OAuth | **Not yet** — use an API key |
 | Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
 | OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
@@ -99,7 +101,8 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`) |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped |
-| CLI `catalog` / `health` / `requests` / `accounts add` | Shipped (v0.2.8) |
+| CLI `catalog` / `health` / `requests` / `accounts add` | Shipped |
+| Homebrew cask + signed/notarized macOS binaries | Shipped (`brew tap ks1686/tap`) |
 | Loopback default; LAN needs token | Shipped |
 | macOS / Windows tray | **No, by design** (CLI + localhost UI) |
 | Claude OAuth through Cloudflare | Stock Go TLS; may **403**. Prefer API key. No uTLS. |
@@ -160,9 +163,9 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `GET /v1/models` | Live list; hide/expose affect **listing only** |
 | `GET /v0/catalog` | Rich catalog (tier, modalities, privacy, hidden/routable) |
-| `POST /v1/chat/completions` | Stream + non-stream; failover on retryable status/bodies; cooled accounts are not re-hit (503 + Retry-After) |
+| `POST /v1/chat/completions` | Stream + non-stream; failover on retryable status/bodies; cooled accounts are not re-hit (503 + Retry-After); translated SSE emits `finish_reason` before `[DONE]` |
 | `POST /v1/messages` | Native Anthropic SSE or translated OpenAI stream (true events, not a single-event wrapper) |
-| `POST /v1/responses` | Codex / OpenAI Responses: native tools pass-through for Codex OAuth (minus `stream_options`); other adapters round-trip function tools via chat |
+| `POST /v1/responses` | Codex / OpenAI Responses: native tools pass-through for Codex OAuth (`store: false`; omit `stream_options` / `max_output_tokens`); other adapters round-trip function tools via chat |
 | `POST /v1/images/generations` | OpenAI Images API for models tagged `image_out`; refused (no chat fake) otherwise |
 | `POST /v1/embeddings` | OpenAI Embeddings API for models tagged `embeddings`; refused (no chat fake) otherwise |
 | `GET /` | UI: Accounts, Catalog, Showcase, Clients, Health, Request log, Settings |
