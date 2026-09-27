@@ -233,11 +233,15 @@ func TestMessagesUsesClaudeCodeOAuthFingerprint(t *testing.T) {
 		"context-management-2025-06-27",
 		"prompt-caching-scope-2026-01-05",
 		"mid-conversation-system-2026-04-07",
+		"effort-2025-11-24",
 		"extended-cache-ttl-2025-04-11",
 	} {
 		if !strings.Contains(betas, want) {
 			t.Fatalf("anthropic-beta %q missing %s", betas, want)
 		}
+	}
+	if i := strings.Index(betas, "effort-2025-11-24"); i < 0 || strings.Index(betas, "extended-cache-ttl-2025-04-11") < i {
+		t.Fatalf("effort-2025-11-24 must precede extended-cache-ttl, got %q", betas)
 	}
 	if strings.Contains(betas, "mid-conversation-tool-changes-2026-07-01") {
 		t.Fatalf("sonnet-5 must omit mid-conversation-tool-changes, got %q", betas)
@@ -352,6 +356,149 @@ func TestMessagesStreamKeepsJSONAccept(t *testing.T) {
 	}
 }
 
+func TestMessagesInjectsClaudeCodeSystemCloak(t *testing.T) {
+	_, body, _ := captureMessages(t, "claude-sonnet-5", `{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}]}`)
+	sys := decodeSystemBlocks(t, body)
+	if len(sys) != 2 {
+		t.Fatalf("want billing + identity system blocks, got %#v", sys)
+	}
+	if !strings.HasPrefix(sys[0].Text, "x-anthropic-billing-header: cc_version=2.1.280.") {
+		t.Fatalf("system[0] billing header %q", sys[0].Text)
+	}
+	if !strings.Contains(sys[0].Text, "; cc_entrypoint=cli;") {
+		t.Fatalf("system[0] missing cli entrypoint: %q", sys[0].Text)
+	}
+	if !strings.Contains(sys[0].Text, "cch=00000") {
+		t.Fatalf("system[0] want CPA cch fallback, got %q", sys[0].Text)
+	}
+	if sys[0].CacheControl != nil {
+		t.Fatalf("billing block must not set cache_control, got %#v", sys[0].CacheControl)
+	}
+	if !strings.Contains(sys[0].Text, "cc_version=2.1.280.d7b;") {
+		t.Fatalf("system[0] fingerprint for user text %q, got %q", "hi", sys[0].Text)
+	}
+	if sys[1].Text != "You are Claude Code, Anthropic's official CLI for Claude." {
+		t.Fatalf("system[1] identity %q", sys[1].Text)
+	}
+	if sys[1].CacheControl == nil || sys[1].CacheControl.Type != "ephemeral" {
+		t.Fatalf("identity cache_control %#v", sys[1].CacheControl)
+	}
+	msgs := decodeMessages(t, body)
+	if len(msgs) != 1 || msgs[0].Role != "user" || messageText(msgs[0]) != "hi" {
+		t.Fatalf("user messages must be preserved, got %#v", msgs)
+	}
+}
+
+func TestMessagesPreservesCallerSystemAsMidConversation(t *testing.T) {
+	_, body, _ := captureMessages(t, "claude-sonnet-5", `{"model":"claude-sonnet-5","system":"be terse","messages":[{"role":"user","content":"hi"}]}`)
+	sys := decodeSystemBlocks(t, body)
+	if len(sys) < 2 || sys[1].Text != "You are Claude Code, Anthropic's official CLI for Claude." {
+		t.Fatalf("top-level system must be cloak, got %#v", sys)
+	}
+	for _, b := range sys {
+		if b.Text == "be terse" {
+			t.Fatal("caller system must not stay in top-level system on sonnet-5 (mid-conversation path)")
+		}
+	}
+	msgs := decodeMessages(t, body)
+	if len(msgs) < 2 {
+		t.Fatalf("want user + mid-conversation system, got %#v", msgs)
+	}
+	if msgs[0].Role != "user" || messageText(msgs[0]) != "hi" {
+		t.Fatalf("first user wiped: %#v", msgs[0])
+	}
+	if msgs[1].Role != "system" || messageText(msgs[1]) != "be terse" {
+		t.Fatalf("caller system not relocated after first user: %#v", msgs)
+	}
+}
+
+func TestMessagesLegacySystemUsesUserReminder(t *testing.T) {
+	_, body, _ := captureMessages(t, "claude-sonnet-4-20250514", `{"model":"claude-sonnet-4-20250514","system":"be terse","messages":[{"role":"user","content":"hi"}]}`)
+	sys := decodeSystemBlocks(t, body)
+	if len(sys) < 2 || sys[1].Text != "You are Claude Code, Anthropic's official CLI for Claude." {
+		t.Fatalf("legacy cloak system %#v", sys)
+	}
+	for _, m := range decodeMessages(t, body) {
+		if m.Role == "system" {
+			t.Fatalf("legacy models cannot take mid-conversation system, got %#v", m)
+		}
+	}
+	user := messageText(decodeMessages(t, body)[0])
+	if !strings.Contains(user, "be terse") || !strings.Contains(user, "hi") {
+		t.Fatalf("legacy caller system must stay on the first user turn, got %q", user)
+	}
+}
+
+func TestMessagesSkipsSecondIdentityWhenAlreadyCloaked(t *testing.T) {
+	raw := `{"model":"claude-sonnet-5","system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],"messages":[{"role":"user","content":"hi"}]}`
+	_, body, _ := captureMessages(t, "claude-sonnet-5", raw)
+	n := 0
+	for _, b := range decodeSystemBlocks(t, body) {
+		if b.Text == "You are Claude Code, Anthropic's official CLI for Claude." {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("already-cloaked body must not get a second identity, count=%d body=%s", n, body)
+	}
+}
+
+func TestMessagesHaikuOmitsEffortBeta(t *testing.T) {
+	_, _, betas := captureMessages(t, "claude-haiku-4-5", `{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"hi"}]}`)
+	if strings.Contains(betas, "effort-2025-11-24") {
+		t.Fatalf("haiku must omit effort beta, got %q", betas)
+	}
+	if i := strings.Index(betas, "mid-conversation-tool-changes-2026-07-01"); i < 0 {
+		t.Fatalf("non-sonnet-5 must include tool-changes, got %q", betas)
+	} else if strings.Index(betas, "extended-cache-ttl-2025-04-11") < i {
+		t.Fatalf("tool-changes must precede cache ttl, got %q", betas)
+	}
+}
+
+func TestMessagesThinkingDisabledOmitsEffortBeta(t *testing.T) {
+	_, _, betas := captureMessages(t, "claude-sonnet-5", `{"model":"claude-sonnet-5","thinking":{"type":"disabled"},"messages":[{"role":"user","content":"hi"}]}`)
+	if strings.Contains(betas, "effort-2025-11-24") {
+		t.Fatalf("thinking disabled must omit effort beta, got %q", betas)
+	}
+}
+
+func TestChatOpenAISystemSurvivesCloak(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "msg_1", "model": "claude-sonnet-5",
+			"content":     []map[string]string{{"type": "text", "text": "ok"}},
+			"stop_reason": "end_turn",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "oauth-at", ExpiresAt: time.Now().Add(time.Hour)}
+	if _, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "claude-sonnet-5",
+		Raw:   []byte(`{"model":"claude-sonnet-5","messages":[{"role":"system","content":"be terse"},{"role":"user","content":"hi"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range decodeMessages(t, body) {
+		if m.Role == "system" && strings.Contains(messageText(m), "be terse") {
+			found = true
+		}
+		if m.Role == "user" && !strings.Contains(messageText(m), "hi") {
+			t.Fatalf("user text missing: %#v", m)
+		}
+	}
+	if !found {
+		t.Fatalf("OpenAI system prompt must survive cloak as mid-conversation system, body=%s", body)
+	}
+}
+
 func TestValidateRequiresToken(t *testing.T) {
 	a := testAdapter(t, "http://127.0.0.1:9")
 	if err := a.Validate(context.Background()); err == nil {
@@ -382,6 +529,102 @@ func TestTokenEndpoint403ExplainsCloudflare(t *testing.T) {
 	if !errors.As(err, &he) || he.Status != 403 {
 		t.Fatalf("want HTTPError 403, got %T %v", err, err)
 	}
+}
+
+type capturedSystemBlock struct {
+	Type         string `json:"type"`
+	Text         string `json:"text"`
+	CacheControl *struct {
+		Type string `json:"type"`
+	} `json:"cache_control"`
+}
+
+type capturedMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+func captureMessages(t *testing.T, model, raw string) (*http.Request, []byte, string) {
+	t.Helper()
+	var got *http.Request
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			http.NotFound(w, r)
+			return
+		}
+		got = r.Clone(r.Context())
+		body, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "msg_1", "model": model,
+			"content":     []map[string]string{{"type": "text", "text": "ok"}},
+			"stop_reason": "end_turn",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "oauth-at", ExpiresAt: time.Now().Add(time.Hour)}
+	if _, err := a.Messages(context.Background(), []byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("no /v1/messages request")
+	}
+	return got, body, got.Header.Get("anthropic-beta")
+}
+
+func decodeSystemBlocks(t *testing.T, body []byte) []capturedSystemBlock {
+	t.Helper()
+	var payload struct {
+		System json.RawMessage `json:"system"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.System) == 0 || string(payload.System) == "null" {
+		return nil
+	}
+	var asString string
+	if json.Unmarshal(payload.System, &asString) == nil {
+		return []capturedSystemBlock{{Type: "text", Text: asString}}
+	}
+	var blocks []capturedSystemBlock
+	if err := json.Unmarshal(payload.System, &blocks); err != nil {
+		t.Fatalf("system %s: %v", payload.System, err)
+	}
+	return blocks
+}
+
+func decodeMessages(t *testing.T, body []byte) []capturedMessage {
+	t.Helper()
+	var payload struct {
+		Messages []capturedMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	return payload.Messages
+}
+
+func messageText(m capturedMessage) string {
+	var s string
+	if json.Unmarshal(m.Content, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(m.Content, &blocks) != nil {
+		return string(m.Content)
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" || b.Type == "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 func testAdapter(t *testing.T, base string) *Adapter {
