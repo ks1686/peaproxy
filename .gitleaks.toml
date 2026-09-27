@@ -1,0 +1,15 @@
+title = "peaproxy"
+
+# New-branch pushes scan full history. These are fixture strings already on main,
+# not credentials: Anthropic public beta header names, and a three-part dummy
+# id_token in the OAuth parser test.
+[allowlist]
+description = "public beta header names and the synthetic id_token fixture"
+
+regexes = [
+  '''[a-z0-9]+(?:-[a-z0-9]+){2,}-\d{4}-\d{2}-\d{2}''',
+]
+
+paths = [
+  '''internal/oauth/token_test\.go''',
+]
