@@ -53,12 +53,18 @@ const (
 	cloudflare403           = "Cloudflare/WAF likely blocked stock Go TLS on the Claude token endpoint. PeaProxy does not spoof TLS fingerprints. Use an official API key (adapter anthropic, https://console.anthropic.com/settings/keys) or retry from a typical desktop network. See docs/OAUTH.md."
 )
 
-// OAuthBetas is the Claude Code 2.1.280 OAuth Messages baseline (cli
-// entrypoint, no thinking.display). oauth-2025-04-20 and
-// extended-cache-ttl-2025-04-11 are credential betas; a Bearer token that
-// omits them is not a real OAuth CLI client. mid-conversation-tool-changes is
-// appended by oauthBetas except for claude-sonnet-5.
-const OAuthBetas = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,extended-cache-ttl-2025-04-11"
+// OAuth beta fragments match Claude Code 2.1.280 / CLIProxyAPI wire order.
+// effort-2025-11-24 sits after mid-conversation-system (and tool-changes when
+// present) and before extended-cache-ttl. oauthBetas omits effort for haiku
+// and thinking.type=disabled, and omits tool-changes for claude-sonnet-5.
+const (
+	oauthBetasPrefix      = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07"
+	oauthBetasToolChanges = "mid-conversation-tool-changes-2026-07-01"
+	oauthBetasEffort      = "effort-2025-11-24"
+	oauthBetasCacheTTL    = "extended-cache-ttl-2025-04-11"
+	// OAuthBetas is the sonnet-5 baseline with thinking enabled (includes effort).
+	OAuthBetas = oauthBetasPrefix + "," + oauthBetasEffort + "," + oauthBetasCacheTTL
+)
 
 // Adapter is a Claude subscription OAuth client (Messages API + PKCE login).
 type Adapter struct {
@@ -385,7 +391,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.headers(req, "", a.sessionID)
+	a.headers(req, "", a.sessionID, nil)
 	c := *a.httpClient
 	c.Timeout = 8 * time.Second
 	resp, err := c.Do(req)
@@ -474,7 +480,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw))
+	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw), raw)
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -501,7 +507,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw))
+	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw), raw)
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return err
@@ -537,7 +543,7 @@ func (a *Adapter) messagesURL() string {
 	return a.baseURL + "/v1/messages?beta=true"
 }
 
-func (a *Adapter) headers(req *http.Request, model, sessionID string) {
+func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byte) {
 	a.mu.Lock()
 	tok := a.token.AccessToken
 	a.mu.Unlock()
@@ -545,7 +551,7 @@ func (a *Adapter) headers(req *http.Request, model, sessionID string) {
 		sessionID = a.sessionID
 	}
 	req.Header.Set("anthropic-version", APIVersion)
-	req.Header.Set("anthropic-beta", oauthBetas(model))
+	req.Header.Set("anthropic-beta", oauthBetas(model, body))
 	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	req.Header.Set("x-app", "cli")
 	req.Header.Set("User-Agent", MessagesUserAgent)
@@ -571,7 +577,7 @@ func (a *Adapter) shapeOAuthBody(raw []byte) []byte {
 	if !hasValidClaudeUserID(raw) {
 		raw = jsonx.SetTopLevelRaw(raw, "metadata", a.metadataJSON())
 	}
-	return raw
+	return applyOAuthCloak(raw)
 }
 
 func (a *Adapter) metadataJSON() []byte {
@@ -595,12 +601,30 @@ func (a *Adapter) metadataJSON() []byte {
 	return []byte(`{"user_id":` + string(userID) + `}`)
 }
 
-func oauthBetas(model string) string {
-	if isClaudeSonnet5(translate.CanonicalClaudeModel(model)) {
-		return OAuthBetas
+func oauthBetas(model string, body []byte) string {
+	canon := translate.CanonicalClaudeModel(model)
+	parts := []string{oauthBetasPrefix}
+	if !isClaudeSonnet5(canon) {
+		parts = append(parts, oauthBetasToolChanges)
 	}
-	const trailer = ",extended-cache-ttl-2025-04-11"
-	return strings.TrimSuffix(OAuthBetas, trailer) + ",mid-conversation-tool-changes-2026-07-01" + trailer
+	if includeEffortBeta(canon, body) {
+		parts = append(parts, oauthBetasEffort)
+	}
+	parts = append(parts, oauthBetasCacheTTL)
+	return strings.Join(parts, ",")
+}
+
+func includeEffortBeta(model string, body []byte) bool {
+	if strings.Contains(model, "haiku") {
+		return false
+	}
+	var probe struct {
+		Thinking struct {
+			Type string `json:"type"`
+		} `json:"thinking"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	return !strings.EqualFold(strings.TrimSpace(probe.Thinking.Type), "disabled")
 }
 
 func isClaudeSonnet5(model string) bool {
