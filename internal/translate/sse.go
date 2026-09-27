@@ -91,6 +91,65 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 	return sc.Err()
 }
 
+type openAIChatDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+type openAIChatSSEChunk struct {
+	ID      string                `json:"id"`
+	Object  string                `json:"object"`
+	Model   string                `json:"model"`
+	Choices []openAIChatSSEChoice `json:"choices"`
+}
+
+type openAIChatSSEChoice struct {
+	Index        int             `json:"index"`
+	Delta        openAIChatDelta `json:"delta"`
+	FinishReason string          `json:"finish_reason,omitempty"`
+}
+
+// WriteOpenAIChatSSERole writes the conventional first chat.completion.chunk
+// with delta.role=assistant.
+func WriteOpenAIChatSSERole(w io.Writer, id, model string) error {
+	return writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{Role: "assistant"}, "")
+}
+
+// WriteOpenAIChatSSEFinish writes a terminal chat.completion.chunk with
+// finish_reason, then data: [DONE].
+func WriteOpenAIChatSSEFinish(w io.Writer, id, model, finishReason string) error {
+	if finishReason == "" {
+		finishReason = "stop"
+	}
+	if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{}, finishReason); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, "data: [DONE]\n\n")
+	return err
+}
+
+func writeOpenAIChatSSEChunk(w io.Writer, id, model string, delta openAIChatDelta, finishReason string) error {
+	chunk := openAIChatSSEChunk{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Model:   model,
+		Choices: []openAIChatSSEChoice{{Index: 0, Delta: delta, FinishReason: finishReason}},
+	}
+	raw, err := json.Marshal(chunk)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", raw)
+	return err
+}
+
+func openAIChatFinishReason(hadToolCalls bool) string {
+	if hadToolCalls {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
 // ClaudeSSEToOpenAI converts Anthropic SSE into chat.completion.chunk SSE.
 func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	sc := bufio.NewScanner(r)
@@ -98,6 +157,18 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	id := "chatcmpl-peaproxy"
 	model := ""
 	wrote := false
+	wroteRole := false
+	hadToolCalls := false
+	writeRole := func() error {
+		if wroteRole {
+			return nil
+		}
+		if err := WriteOpenAIChatSSERole(w, id, model); err != nil {
+			return err
+		}
+		wroteRole = true
+		return nil
+	}
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -107,13 +178,18 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 		var ev struct {
 			Type  string `json:"type"`
 			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJSON string `json:"partial_json"`
+				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			Message *struct {
 				ID    string `json:"id"`
 				Model string `json:"model"`
 			} `json:"message"`
+			ContentBlock *struct {
+				Type string `json:"type"`
+			} `json:"content_block"`
 		}
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
@@ -126,42 +202,43 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				}
 				model = ev.Message.Model
 			}
+		case "content_block_start":
+			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
+				hadToolCalls = true
+				wrote = true
+			}
 		case "content_block_delta":
+			if ev.Delta.Type == "input_json_delta" || ev.Delta.PartialJSON != "" {
+				hadToolCalls = true
+				wrote = true
+				continue
+			}
 			if ev.Delta.Text == "" {
 				continue
 			}
-			chunk := struct {
-				ID      string `json:"id"`
-				Object  string `json:"object"`
-				Model   string `json:"model"`
-				Choices []struct {
-					Index int `json:"index"`
-					Delta struct {
-						Content string `json:"content"`
-					} `json:"delta"`
-				} `json:"choices"`
-			}{ID: id, Object: "chat.completion.chunk", Model: model}
-			chunk.Choices = make([]struct {
-				Index int `json:"index"`
-				Delta struct {
-					Content string `json:"content"`
-				} `json:"delta"`
-			}, 1)
-			chunk.Choices[0].Delta.Content = ev.Delta.Text
-			raw, err := json.Marshal(chunk)
-			if err != nil {
+			if err := writeRole(); err != nil {
 				return err
 			}
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
+			if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{Content: ev.Delta.Text}, ""); err != nil {
 				return err
 			}
 			wrote = true
+		case "message_delta":
+			if ev.Delta.StopReason == "tool_use" {
+				hadToolCalls = true
+				wrote = true
+			}
 		default:
-			// ignore ping, content_block_start/stop, message_delta, message_stop
+			// ignore ping, content_block_stop, message_stop
 		}
 	}
 	if wrote {
-		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		if err := writeRole(); err != nil {
+			return err
+		}
+		if err := WriteOpenAIChatSSEFinish(w, id, model, openAIChatFinishReason(hadToolCalls)); err != nil {
+			return err
+		}
 	}
 	return sc.Err()
 }

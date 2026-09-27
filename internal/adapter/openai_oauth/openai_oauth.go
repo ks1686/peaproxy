@@ -23,6 +23,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/translate"
 )
 
 const (
@@ -1027,6 +1028,9 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	callIndex := map[string]int{}
 	nextIndex := 0
+	wroteRole := false
+	hadToolCalls := false
+	const id = "peaproxy-codex"
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -1036,22 +1040,37 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		if payload == "[DONE]" {
 			break
 		}
-		if chunk, ok, err := responsesStreamChunkToChat(payload, model, callIndex, &nextIndex); err != nil {
+		chunk, ok, tools, err := responsesStreamChunkToChat(payload, model, callIndex, &nextIndex)
+		if err != nil {
 			return err
-		} else if ok {
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", chunk); err != nil {
+		}
+		if !ok {
+			continue
+		}
+		if tools {
+			hadToolCalls = true
+		}
+		if !wroteRole {
+			if err := translate.WriteOpenAIChatSSERole(w, id, model); err != nil {
 				return err
 			}
+			wroteRole = true
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", chunk); err != nil {
+			return err
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return err
 	}
-	_, err := io.WriteString(w, "data: [DONE]\n\n")
-	return err
+	reason := "stop"
+	if hadToolCalls {
+		reason = "tool_calls"
+	}
+	return translate.WriteOpenAIChatSSEFinish(w, id, model, reason)
 }
 
-func responsesStreamChunkToChat(payload, model string, callIndex map[string]int, nextIndex *int) ([]byte, bool, error) {
+func responsesStreamChunkToChat(payload, model string, callIndex map[string]int, nextIndex *int) ([]byte, bool, bool, error) {
 	var ev struct {
 		Type  string `json:"type"`
 		Delta string `json:"delta"`
@@ -1067,7 +1086,7 @@ func responsesStreamChunkToChat(payload, model string, callIndex map[string]int,
 		ItemID      string `json:"item_id"`
 	}
 	if json.Unmarshal([]byte(payload), &ev) != nil {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	var delta chatStreamDelta
 	switch {
@@ -1118,7 +1137,7 @@ func responsesStreamChunkToChat(payload, model string, callIndex map[string]int,
 		}
 	}
 	if delta.Content == "" && len(delta.ToolCalls) == 0 {
-		return nil, false, nil
+		return nil, false, false, nil
 	}
 	chunk := struct {
 		ID      string `json:"id"`
@@ -1136,9 +1155,9 @@ func responsesStreamChunkToChat(payload, model string, callIndex map[string]int,
 	chunk.Choices[0].Delta = delta
 	raw, err := json.Marshal(chunk)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return raw, true, nil
+	return raw, true, len(delta.ToolCalls) > 0, nil
 }
 
 func truncate(b []byte) string {
