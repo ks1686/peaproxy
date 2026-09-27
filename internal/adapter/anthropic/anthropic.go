@@ -153,6 +153,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.headers(httpReq)
+	setThinkingBeta(httpReq, raw)
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -177,6 +178,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	a.headers(httpReq)
+	setThinkingBeta(httpReq, raw)
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return err
@@ -192,10 +194,14 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 
 func (a *Adapter) claudeBody(req adapter.ChatRequest, stream bool) ([]byte, error) {
 	if len(req.Raw) > 0 && translate.LooksLikeClaude(req.Raw) {
-		return jsonx.SetStream(req.Raw, stream), nil
+		return withThinking(jsonx.SetStream(req.Raw, stream), req.ThinkingBudget), nil
 	}
 	if len(req.Raw) > 0 {
-		return translate.ToClaude(req.Raw, stream)
+		body, err := translate.ToClaude(req.Raw, stream)
+		if err != nil {
+			return nil, err
+		}
+		return withThinking(body, req.ThinkingBudget), nil
 	}
 	oa, err := json.Marshal(struct {
 		Model    string            `json:"model"`
@@ -205,7 +211,34 @@ func (a *Adapter) claudeBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	return translate.ToClaude(oa, stream)
+	body, err := translate.ToClaude(oa, stream)
+	if err != nil {
+		return nil, err
+	}
+	return withThinking(body, req.ThinkingBudget), nil
+}
+
+func withThinking(raw []byte, budget int) []byte {
+	if budget <= 0 {
+		return raw
+	}
+	return translate.ApplyThinkingBudget(raw, budget)
+}
+
+func setThinkingBeta(req *http.Request, raw []byte) {
+	if !bytes.Contains(raw, []byte(`"budget_tokens"`)) {
+		return
+	}
+	const beta = "interleaved-thinking-2025-05-14"
+	cur := req.Header.Get("anthropic-beta")
+	if strings.Contains(cur, beta) {
+		return
+	}
+	if cur == "" {
+		req.Header.Set("anthropic-beta", beta)
+		return
+	}
+	req.Header.Set("anthropic-beta", cur+","+beta)
 }
 
 func (a *Adapter) headers(req *http.Request) {

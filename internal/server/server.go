@@ -66,6 +66,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("POST /v1/messages", s.handleClaudeMessages)
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
 	mux.HandleFunc("POST /v1/images/generations", s.handleImageGenerations)
+	mux.HandleFunc("POST /v1/images/edits", s.handleImageEdits)
 	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
 	admin := func(h http.HandlerFunc) http.HandlerFunc { return s.requireAdmin(h) }
 	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
@@ -235,6 +236,34 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
+	if len(resp.Raw) > 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(resp.Raw)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"created": resp.Created,
+		"data":    imageDataJSON(resp),
+	})
+}
+
+func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	raw, err := readBody(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errJSON(err))
+		return
+	}
+	ct := r.Header.Get("Content-Type")
+	model := gateway.ImageEditModel(raw, ct)
+	resp, account, err := s.gw.EditImage(requestCtx(r, raw), raw, ct)
+	if err != nil {
+		s.record(account, model, "images", "/v1/images/edits", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		writeErr(w, err)
+		return
+	}
+	s.record(account, model, "images", "/v1/images/edits", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

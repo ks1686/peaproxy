@@ -65,6 +65,9 @@ type ChatRequest struct {
 	Stream   bool
 	// Raw is the original client body for adapters that pass through OpenAI-compat JSON.
 	Raw []byte
+	// ThinkingBudget is an opt-in Anthropic budget from a -thinking-N suffix.
+	// Zero leaves the body alone. Non-Claude adapters ignore it.
+	ThinkingBudget int
 }
 
 // Message is a single chat turn.
@@ -143,15 +146,16 @@ type Options struct {
 	ObserveHeaders func(http.Header)
 }
 
-// ImageRequest is a provider-neutral images.generations call.
+// ImageRequest is a provider-neutral images call. ContentType is set for
+// multipart /images/edits and empty for JSON.
 type ImageRequest struct {
-	Model  string
-	Prompt string
-	// Raw is the original client body for adapters that pass through OpenAI-compat JSON.
-	Raw []byte
+	Model       string
+	Prompt      string
+	Raw         []byte
+	ContentType string
 }
 
-// ImageResponse is a non-streaming images.generations result.
+// ImageResponse is a non-streaming images result.
 type ImageResponse struct {
 	Created int64
 	Model   string
@@ -164,6 +168,11 @@ type ImageResponse struct {
 // /images/generations implement it. Subscription OAuth adapters must not.
 type ImageGenerator interface {
 	GenerateImage(ctx context.Context, req ImageRequest) (ImageResponse, error)
+}
+
+// ImageEditor is optional. The same image_out adapters proxy /images/edits.
+type ImageEditor interface {
+	EditImage(ctx context.Context, req ImageRequest) (ImageResponse, error)
 }
 
 // ParseImageResponse extracts URLs and b64 payloads from an OpenAI-shaped
@@ -196,6 +205,15 @@ func GenerateImageFrom(inner Adapter, ctx context.Context, req ImageRequest) (Im
 		return ImageResponse{}, ErrImageOutUnsupported
 	}
 	return gen.GenerateImage(ctx, req)
+}
+
+// EditImageFrom forwards to inner when it implements ImageEditor.
+func EditImageFrom(inner Adapter, ctx context.Context, req ImageRequest) (ImageResponse, error) {
+	ed, ok := inner.(ImageEditor)
+	if !ok {
+		return ImageResponse{}, ErrImageOutUnsupported
+	}
+	return ed.EditImage(ctx, req)
 }
 
 // EmbeddingRequest is a provider-neutral embeddings call.

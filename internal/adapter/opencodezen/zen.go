@@ -84,6 +84,10 @@ func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (
 	return adapter.GenerateImageFrom(a.inner, ctx, req)
 }
 
+func (a *Adapter) EditImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	return adapter.EditImageFrom(a.inner, ctx, req)
+}
+
 func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
 	return adapter.EmbedFrom(a.inner, ctx, req)
 }

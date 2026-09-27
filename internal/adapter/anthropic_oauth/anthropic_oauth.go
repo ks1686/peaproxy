@@ -523,10 +523,14 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 
 func (a *Adapter) claudeBody(req adapter.ChatRequest, stream bool) ([]byte, error) {
 	if len(req.Raw) > 0 && translate.LooksLikeClaude(req.Raw) {
-		return jsonx.SetStream(req.Raw, stream), nil
+		return withThinking(jsonx.SetStream(req.Raw, stream), req.ThinkingBudget), nil
 	}
 	if len(req.Raw) > 0 {
-		return translate.ToClaude(req.Raw, stream)
+		body, err := translate.ToClaude(req.Raw, stream)
+		if err != nil {
+			return nil, err
+		}
+		return withThinking(body, req.ThinkingBudget), nil
 	}
 	oa, err := json.Marshal(struct {
 		Model    string            `json:"model"`
@@ -536,7 +540,18 @@ func (a *Adapter) claudeBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	return translate.ToClaude(oa, stream)
+	body, err := translate.ToClaude(oa, stream)
+	if err != nil {
+		return nil, err
+	}
+	return withThinking(body, req.ThinkingBudget), nil
+}
+
+func withThinking(raw []byte, budget int) []byte {
+	if budget <= 0 {
+		return raw
+	}
+	return translate.ApplyThinkingBudget(raw, budget)
 }
 
 func (a *Adapter) messagesURL() string {

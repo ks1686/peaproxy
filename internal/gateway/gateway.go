@@ -302,7 +302,7 @@ func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
@@ -310,29 +310,39 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
-	req := adapter.ChatRequest{Model: model, Raw: raw, Stream: false}
 	var last error
 	var lastAccount string
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
-		resp, err := inst.Adapter.Chat(ctx, req)
-		if err == nil {
+		var resp adapter.ChatResponse
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			resp, callErr = inst.Adapter.Chat(ctx, chatReq(inst, model, raw, false, budget))
+			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
+				break
+			}
+		}
+		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			resp.Raw = echoClientModel(resp.Raw, client, model)
+			if client != model {
+				resp.Model = client
+			}
 			return resp, lastAccount, nil
 		}
-		last = err
-		if retryable(err) {
-			g.markCooldown(inst.Provider.ID, err)
+		last = callErr
+		if retryable(callErr) || router.Transient(callErr) {
+			g.markCooldown(inst.Provider.ID, callErr)
 			continue
 		}
-		return adapter.ChatResponse{}, lastAccount, err
+		return adapter.ChatResponse{}, lastAccount, callErr
 	}
 	return adapter.ChatResponse{}, lastAccount, cooldownErr(last)
 }
 
 // ChatStream proxies SSE with failover before any bytes are written.
 func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return "", err
 	}
@@ -341,34 +351,125 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		return "", err
 	}
 	cw := &countWriter{w: w}
-	req := adapter.ChatRequest{Model: model, Raw: raw, Stream: true}
+	dest := newRouteRewriter(cw, model, client)
 	var last error
 	var lastAccount string
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
-		err := inst.Adapter.ChatStream(ctx, req, cw)
-		if err == nil {
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			before := cw.n
+			callErr = inst.Adapter.ChatStream(ctx, chatReq(inst, model, raw, true, budget), dest)
+			if callErr == nil || cw.n > before || !router.Transient(callErr) || attempt == 1 {
+				break
+			}
+		}
+		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
 			return lastAccount, nil
 		}
-		last = err
+		last = callErr
 		if cw.n > 0 {
-			return lastAccount, err
+			return lastAccount, callErr
 		}
-		if retryable(err) {
-			g.markCooldown(inst.Provider.ID, err)
+		if retryable(callErr) || router.Transient(callErr) {
+			g.markCooldown(inst.Provider.ID, callErr)
 			continue
 		}
-		return lastAccount, err
+		return lastAccount, callErr
 	}
 	return lastAccount, cooldownErr(last)
+}
+
+// EditImage proxies POST /v1/images/edits for the same image_out accounts
+// that serve generations. Multipart bodies are forwarded with their content type.
+func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string) (adapter.ImageResponse, string, error) {
+	model := ImageEditModel(raw, contentType)
+	body := raw
+	client := model
+	if !strings.Contains(strings.ToLower(contentType), "multipart/") {
+		var err error
+		model, client, body, _, err = g.prepare(raw)
+		if err != nil {
+			return adapter.ImageResponse{}, "", err
+		}
+	} else if target, ok := g.routeTarget(model); ok && target != model {
+		if rewritten, ct, ok := rewriteMultipartModel(raw, contentType, model, target); ok {
+			body, contentType, model = rewritten, ct, target
+		}
+	}
+	if model == "" {
+		return adapter.ImageResponse{}, "", adapter.ErrImageModelRequired
+	}
+	if !g.supportsImageOut(model) {
+		return adapter.ImageResponse{}, "", adapter.ErrModelNotImageOut
+	}
+	cands, session, err := g.route(ctx, body, model)
+	if err != nil {
+		return adapter.ImageResponse{}, "", err
+	}
+	var last error
+	var lastAccount string
+	tried := false
+	for _, inst := range cands {
+		lastAccount = inst.Provider.ID
+		ed, ok := inst.Adapter.(adapter.ImageEditor)
+		if !ok || !inst.Adapter.Capabilities().ImageOut {
+			last = adapter.ErrImageOutUnsupported
+			continue
+		}
+		tried = true
+		var resp adapter.ImageResponse
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			resp, callErr = ed.EditImage(ctx, adapter.ImageRequest{Model: model, Raw: body, ContentType: contentType})
+			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
+				break
+			}
+		}
+		if callErr == nil {
+			g.rememberSuccess(session, model, lastAccount)
+			if !strings.Contains(strings.ToLower(contentType), "multipart/") {
+				resp.Raw = echoClientModel(resp.Raw, client, model)
+			}
+			return resp, lastAccount, nil
+		}
+		last = callErr
+		if retryable(callErr) || router.Transient(callErr) {
+			g.markCooldown(inst.Provider.ID, callErr)
+			continue
+		}
+		return adapter.ImageResponse{}, lastAccount, callErr
+	}
+	if !tried {
+		return adapter.ImageResponse{}, lastAccount, adapter.ErrImageOutUnsupported
+	}
+	if retryable(last) || router.Transient(last) {
+		return adapter.ImageResponse{}, lastAccount, cooldownErr(last)
+	}
+	return adapter.ImageResponse{}, lastAccount, last
+}
+
+func (g *Gateway) routeTarget(name string) (string, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	target, ok := g.cfg.Routes[strings.TrimSpace(name)]
+	if !ok {
+		return "", false
+	}
+	target = strings.TrimSpace(target)
+	if _, found := catalog.FindRoutable(g.models, g.queryLocked(), target); !found {
+		return "", false
+	}
+	return target, true
 }
 
 // GenerateImage proxies OpenAI-compatible POST /v1/images/generations.
 // Upstream is only called when the model is tagged image_out and the adapter
 // implements ImageGenerator with Capabilities.ImageOut.
 func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageResponse, string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
+	_ = budget
 	if err != nil {
 		return adapter.ImageResponse{}, "", err
 	}
@@ -393,17 +494,25 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 			continue
 		}
 		tried = true
-		resp, err := gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
-		if err == nil {
+		var resp adapter.ImageResponse
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			resp, callErr = gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
+			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
+				break
+			}
+		}
+		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			resp.Raw = echoClientModel(resp.Raw, client, model)
 			return resp, lastAccount, nil
 		}
-		last = err
-		if retryable(err) {
-			g.markCooldown(inst.Provider.ID, err)
+		last = callErr
+		if retryable(callErr) || router.Transient(callErr) {
+			g.markCooldown(inst.Provider.ID, callErr)
 			continue
 		}
-		return adapter.ImageResponse{}, lastAccount, err
+		return adapter.ImageResponse{}, lastAccount, callErr
 	}
 	if !tried {
 		return adapter.ImageResponse{}, lastAccount, adapter.ErrImageOutUnsupported
@@ -428,7 +537,8 @@ func (g *Gateway) supportsImageOut(id string) bool {
 // Upstream is only called when the model is tagged embeddings and the adapter
 // implements Embedder with Capabilities.Embeddings.
 func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.EmbeddingResponse, string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
+	_ = budget
 	if err != nil {
 		return adapter.EmbeddingResponse{}, "", err
 	}
@@ -453,17 +563,25 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 			continue
 		}
 		tried = true
-		resp, err := emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: model, Raw: raw})
-		if err == nil {
+		var resp adapter.EmbeddingResponse
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			resp, callErr = emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: model, Raw: raw})
+			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
+				break
+			}
+		}
+		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			resp.Raw = echoClientModel(resp.Raw, client, model)
 			return resp, lastAccount, nil
 		}
-		last = err
-		if retryable(err) {
-			g.markCooldown(inst.Provider.ID, err)
+		last = callErr
+		if retryable(callErr) || router.Transient(callErr) {
+			g.markCooldown(inst.Provider.ID, callErr)
 			continue
 		}
-		return adapter.EmbeddingResponse{}, lastAccount, err
+		return adapter.EmbeddingResponse{}, lastAccount, callErr
 	}
 	if !tried {
 		return adapter.EmbeddingResponse{}, lastAccount, adapter.ErrEmbeddingsUnsupported
@@ -486,7 +604,7 @@ func (g *Gateway) supportsEmbeddings(id string) bool {
 
 // Responses uses native Responses when available, otherwise OpenAI chat translation.
 func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return nil, "", err
 	}
@@ -507,7 +625,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
-				return out, lastAccount, nil
+				return echoClientModel(out, client, model), lastAccount, nil
 			}
 			last = err
 			if retryable(err) {
@@ -520,27 +638,34 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 			last = xerr
 			continue
 		}
-		resp, err := inst.Adapter.Chat(ctx, oaReq)
-		if err != nil {
-			last = err
-			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, err)
+		var resp adapter.ChatResponse
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			resp, callErr = inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
+			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
+				break
+			}
+		}
+		if callErr != nil {
+			last = callErr
+			if retryable(callErr) || router.Transient(callErr) {
+				g.markCooldown(inst.Provider.ID, callErr)
 				continue
 			}
-			return nil, lastAccount, err
+			return nil, lastAccount, callErr
 		}
 		if len(resp.Raw) > 0 {
-			out, ferr := translate.FromOpenAIChat(resp.Raw, oaReq.Model)
+			out, ferr := translate.FromOpenAIChat(resp.Raw, client)
 			if ferr == nil {
 				g.rememberSuccess(session, model, lastAccount)
-				return out, lastAccount, nil
+				return echoClientModel(out, client, model), lastAccount, nil
 			}
 		}
-		out, err := translate.FromChatContent(resp.ID, oaReq.Model, resp.Content)
+		out, err := translate.FromChatContent(resp.ID, client, resp.Content)
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
 		}
-		return out, lastAccount, err
+		return echoClientModel(out, client, model), lastAccount, err
 	}
 	if last == nil {
 		last = xerr
@@ -556,7 +681,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 
 // ResponsesStream writes Responses SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return "", err
 	}
@@ -570,12 +695,13 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		oaReq.Stream = true
 	}
 	cw := &countWriter{w: w}
+	dest := newRouteRewriter(cw, model, client)
 	var last error
 	var lastAccount string
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
-			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), cw)
+			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), dest)
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
 				return lastAccount, nil
@@ -600,7 +726,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			errCh <- translate.OpenAISSEToResponses(pr, cw, model)
 			_ = pr.Close()
 		}()
-		err := inst.Adapter.ChatStream(ctx, oaReq, pw)
+		err := inst.Adapter.ChatStream(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw)
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
@@ -631,7 +757,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 
 // ClaudeChat uses native Messages when available, otherwise OpenAI translation.
 func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return nil, "", err
 	}
@@ -649,10 +775,10 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
-			out, err := nm.Messages(ctx, jsonx.SetStream(raw, false))
+			out, err := nm.Messages(ctx, jsonx.SetStream(claudeRaw(raw, budget), false))
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
-				return out, lastAccount, nil
+				return echoClientModel(out, client, model), lastAccount, nil
 			}
 			last = err
 			if retryable(err) {
@@ -665,7 +791,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 			last = xerr
 			continue
 		}
-		resp, err := inst.Adapter.Chat(ctx, oaReq)
+		resp, err := inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 		if err != nil {
 			last = err
 			if retryable(err) {
@@ -688,11 +814,11 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 				return nil, lastAccount, err
 			}
 		}
-		out, err := translate.FromOpenAI(oaRaw, oaReq.Model)
+		out, err := translate.FromOpenAI(oaRaw, client)
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
 		}
-		return out, lastAccount, err
+		return echoClientModel(out, client, model), lastAccount, err
 	}
 	if last == nil {
 		last = xerr
@@ -708,7 +834,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 
 // ClaudeChatStream writes true Anthropic SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
-	model, raw, err := g.resolveBody(raw)
+	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return "", err
 	}
@@ -722,12 +848,13 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		oaReq.Stream = true
 	}
 	cw := &countWriter{w: w}
+	dest := newRouteRewriter(cw, model, client)
 	var last error
 	var lastAccount string
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
-			err := nm.MessagesStream(ctx, jsonx.SetStream(raw, true), cw)
+			err := nm.MessagesStream(ctx, jsonx.SetStream(claudeRaw(raw, budget), true), dest)
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
 				return lastAccount, nil
@@ -752,7 +879,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			errCh <- translate.OpenAISSEToClaude(pr, cw, model)
 			_ = pr.Close()
 		}()
-		err := inst.Adapter.ChatStream(ctx, oaReq, pw)
+		err := inst.Adapter.ChatStream(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw)
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {

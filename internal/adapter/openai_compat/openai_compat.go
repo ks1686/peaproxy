@@ -219,6 +219,36 @@ func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (
 	return adapter.ParseImageResponse(body, req.Model), nil
 }
 
+func (a *Adapter) EditImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	raw := req.Raw
+	if len(raw) == 0 {
+		return adapter.ImageResponse{}, adapter.ErrImageModelRequired
+	}
+	ct := req.ContentType
+	if ct == "" {
+		ct = "application/json"
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/images/edits", bytes.NewReader(raw))
+	if err != nil {
+		return adapter.ImageResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", ct)
+	a.auth(httpReq)
+	resp, err := a.client.Do(httpReq)
+	if err != nil {
+		return adapter.ImageResponse{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return adapter.ImageResponse{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return adapter.ImageResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+	}
+	return adapter.ParseImageResponse(body, req.Model), nil
+}
+
 func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
 	raw := req.Raw
 	if len(raw) == 0 {

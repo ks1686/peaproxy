@@ -63,6 +63,16 @@ func Classify(err error) FailoverClass {
 	return FailoverNone
 }
 
+// Transient reports a 502 or 504. The gateway retries that account once
+// before cooling it. 403 is not transient and does not fail over.
+func Transient(err error) bool {
+	var he adapter.HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	return he.Status == http.StatusBadGateway || he.Status == http.StatusGatewayTimeout
+}
+
 func classifyStatus(status int) FailoverClass {
 	switch status {
 	case http.StatusTooManyRequests:
