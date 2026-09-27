@@ -98,7 +98,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
 | OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
 | OS keychain / `secrets.enc` | Shipped |
-| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`) |
+| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h) |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped |
 | CLI `catalog` / `health` / `requests` / `accounts add` | Shipped |

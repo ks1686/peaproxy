@@ -41,6 +41,8 @@ expose:
 # sticky: keep the last successful account for that model until it cools or fails.
 failover:
   policy: round-robin
+  # sessionAffinity defaults on. Set false to rotate every request.
+  # sessionAffinityTTL: 1h
 
 providers:
   - id: ollama-local
