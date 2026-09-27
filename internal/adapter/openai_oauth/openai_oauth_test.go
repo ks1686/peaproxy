@@ -81,6 +81,34 @@ func TestExchangeIsFormEncodedAndParsesJWTAccount(t *testing.T) {
 	}
 }
 
+func TestListModelsSendsCodexClientVersionQuery(t *testing.T) {
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/models") {
+			http.NotFound(w, r)
+			return
+		}
+		gotQuery = r.URL.Query()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{{"id": "gpt-5"}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	models, err := a.ListModels(context.Background())
+	if err != nil || len(models) != 1 {
+		t.Fatalf("%v %#v", err, models)
+	}
+	// Official Codex CLI GETs /models?client_version=<cargo version> (see
+	// openai/codex ModelsClient::append_client_version_query). chatgpt.com
+	// returns 400 "Field required: query client_version" without it.
+	want := strings.TrimPrefix(UserAgent, Originator+"/")
+	if got := gotQuery.Get("client_version"); got != want {
+		t.Fatalf("client_version=%q want %q; query=%v", got, want, gotQuery)
+	}
+}
+
 func TestChatPostsResponsesWithBearerAndAccountHeader(t *testing.T) {
 	var gotPath, gotAuth, gotAcct, gotOrig string
 	var body []byte
