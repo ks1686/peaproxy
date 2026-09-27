@@ -472,8 +472,57 @@ func TestChatStreamMapsFunctionCallEvents(t *testing.T) {
 	if !strings.Contains(got, `"tool_calls"`) || !strings.Contains(got, `"lookup"`) {
 		t.Fatalf("chat stream missing tool_calls: %s", got)
 	}
-	if !strings.Contains(got, `[DONE]`) {
-		t.Fatalf("%s", got)
+	assertChatSSEFinish(t, got, "tool_calls")
+}
+
+func TestResponsesSSEToOpenAITextEmitsFinishReasonStop(t *testing.T) {
+	in := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hel"}`,
+		``,
+		`data: {"type":"response.output_text.delta","delta":"lo"}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n")
+	var out bytes.Buffer
+	if err := responsesSSEToOpenAI(strings.NewReader(in), &out, "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"content":"hel"`) || !strings.Contains(got, `"content":"lo"`) {
+		t.Fatalf("missing text deltas: %s", got)
+	}
+	if !strings.Contains(got, `"role":"assistant"`) {
+		t.Fatalf("missing initial assistant role chunk: %s", got)
+	}
+	assertChatSSEFinish(t, got, "stop")
+}
+
+func sseDataPayloads(s string) []string {
+	var payloads []string
+	for _, line := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payloads = append(payloads, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+	}
+	return payloads
+}
+
+func assertChatSSEFinish(t *testing.T, sse, reason string) {
+	t.Helper()
+	payloads := sseDataPayloads(sse)
+	if len(payloads) < 2 {
+		t.Fatalf("want finish chunk then [DONE], got %d payloads: %q", len(payloads), sse)
+	}
+	if got := payloads[len(payloads)-1]; got != "[DONE]" {
+		t.Fatalf("last payload = %q, want [DONE]\n%s", got, sse)
+	}
+	finish := payloads[len(payloads)-2]
+	want := `"finish_reason":"` + reason + `"`
+	if !strings.Contains(finish, want) {
+		t.Fatalf("finish chunk missing %s: %s", want, finish)
 	}
 }
 
