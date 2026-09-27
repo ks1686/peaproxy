@@ -82,7 +82,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Capability | Status |
 |---|---|
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped |
-| `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]` |
+| `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is `reasoning_opaque` on the assistant message (stripped before OpenAI-compat upstreams) |
 | `POST /v1/messages` true Anthropic SSE | Shipped |
 | `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |

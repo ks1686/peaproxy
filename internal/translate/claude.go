@@ -39,11 +39,12 @@ type openAIRequest struct {
 }
 
 type openAIMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content,omitempty"`
-	ToolCalls  json.RawMessage `json:"tool_calls,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	Name       string          `json:"name,omitempty"`
+	Role            string          `json:"role"`
+	Content         json.RawMessage `json:"content,omitempty"`
+	ToolCalls       json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID      string          `json:"tool_call_id,omitempty"`
+	Name            string          `json:"name,omitempty"`
+	ReasoningOpaque json.RawMessage `json:"reasoning_opaque,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -60,9 +61,10 @@ type openAIResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Role      string           `json:"role"`
-			Content   string           `json:"content"`
-			ToolCalls []openAIToolCall `json:"tool_calls"`
+			Role            string           `json:"role"`
+			Content         string           `json:"content"`
+			ToolCalls       []openAIToolCall `json:"tool_calls"`
+			ReasoningOpaque json.RawMessage  `json:"reasoning_opaque"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -88,11 +90,14 @@ type claudeContent struct {
 }
 
 type claudeContentOut struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+	Data      string          `json:"data,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
 }
 
 type claudeUsage struct {
@@ -155,11 +160,17 @@ func FromOpenAI(raw []byte, model string) ([]byte, error) {
 	}
 	var text string
 	var calls []openAIToolCall
+	var opaque []opaqueEntry
 	finish := ""
 	if len(in.Choices) > 0 {
 		text = in.Choices[0].Message.Content
 		calls = in.Choices[0].Message.ToolCalls
 		finish = in.Choices[0].FinishReason
+		parsed, err := parseOpaque(in.Choices[0].Message.ReasoningOpaque)
+		if err != nil {
+			return nil, err
+		}
+		opaque = parsed
 	}
 	id := in.ID
 	if id == "" {
@@ -168,8 +179,16 @@ func FromOpenAI(raw []byte, model string) ([]byte, error) {
 	if in.Model != "" {
 		model = in.Model
 	}
-	content := make([]claudeContentOut, 0, 1+len(calls))
-	if text != "" || len(calls) == 0 {
+	content := make([]claudeContentOut, 0, 1+len(calls)+len(opaque))
+	for _, e := range opaque {
+		switch e.Kind {
+		case kindAnthropicThinking:
+			content = append(content, claudeContentOut{Type: "thinking", Thinking: e.Thinking, Signature: e.Signature})
+		case kindAnthropicRedacted:
+			content = append(content, claudeContentOut{Type: "redacted_thinking", Data: e.Data})
+		}
+	}
+	if text != "" || (len(calls) == 0 && len(content) == 0) {
 		content = append(content, claudeContentOut{Type: "text", Text: text})
 	}
 	for _, tc := range calls {
@@ -243,6 +262,9 @@ type claudeBlock struct {
 	Input     json.RawMessage `json:"input"`
 	ToolUseID string          `json:"tool_use_id"`
 	Content   json.RawMessage `json:"content"`
+	Thinking  string          `json:"thinking"`
+	Signature string          `json:"signature"`
+	Data      string          `json:"data"`
 	Source    *struct {
 		Type      string `json:"type"`
 		URL       string `json:"url"`
@@ -291,6 +313,7 @@ func claudeMessageToOpenAI(role string, raw json.RawMessage) ([]openAIMessage, e
 	var parts []oaContentPart
 	var calls []openAIToolCall
 	var results []openAIMessage
+	var opaque []opaqueEntry
 	hasImage := false
 	hasUnknown := false
 	for _, bl := range blocks {
@@ -298,6 +321,18 @@ func claudeMessageToOpenAI(role string, raw json.RawMessage) ([]openAIMessage, e
 		case "text", "":
 			text.WriteString(bl.Text)
 			parts = append(parts, oaContentPart{Type: "text", Text: bl.Text})
+		case "thinking":
+			if role != "assistant" {
+				hasUnknown = true
+				break
+			}
+			opaque = append(opaque, opaqueEntry{Kind: kindAnthropicThinking, Thinking: bl.Thinking, Signature: bl.Signature})
+		case "redacted_thinking":
+			if role != "assistant" {
+				hasUnknown = true
+				break
+			}
+			opaque = append(opaque, opaqueEntry{Kind: kindAnthropicRedacted, Data: bl.Data})
 		case "image":
 			hasImage = true
 			url, err := claudeImageURL(bl.Source)
@@ -320,18 +355,25 @@ func claudeMessageToOpenAI(role string, raw json.RawMessage) ([]openAIMessage, e
 			hasUnknown = true
 		}
 	}
-	if hasUnknown && text.Len() == 0 && !hasImage && len(calls) == 0 && len(results) == 0 {
+	if hasUnknown && text.Len() == 0 && !hasImage && len(calls) == 0 && len(results) == 0 && len(opaque) == 0 {
 		return nil, fmt.Errorf("refusing to drop non-text Claude content into an empty message")
+	}
+	opaqueRaw, err := marshalOpaque(opaque)
+	if err != nil {
+		return nil, err
 	}
 	if len(results) > 0 {
 		if text.Len() == 0 && !hasImage {
-			return results, nil
+			return withOpaque(results, opaqueRaw), nil
 		}
 		userContent, err := openAIUserContent(text.String(), parts, hasImage)
 		if err != nil {
 			return nil, err
 		}
-		return append(results, openAIMessage{Role: "user", Content: userContent}), nil
+		return withOpaque(append(results, openAIMessage{Role: "user", Content: userContent}), opaqueRaw), nil
+	}
+	if len(opaqueRaw) > 0 && text.Len() == 0 && !hasImage && len(calls) == 0 {
+		return []openAIMessage{{Role: role, Content: json.RawMessage("null"), ReasoningOpaque: opaqueRaw}}, nil
 	}
 	if len(calls) > 0 {
 		rawCalls, err := json.Marshal(calls)
@@ -342,13 +384,13 @@ func claudeMessageToOpenAI(role string, raw json.RawMessage) ([]openAIMessage, e
 		if err != nil {
 			return nil, err
 		}
-		return []openAIMessage{{Role: "assistant", Content: content, ToolCalls: rawCalls}}, nil
+		return []openAIMessage{{Role: "assistant", Content: content, ToolCalls: rawCalls, ReasoningOpaque: opaqueRaw}}, nil
 	}
 	content, err := openAIUserContent(text.String(), parts, hasImage)
 	if err != nil {
 		return nil, err
 	}
-	return []openAIMessage{{Role: role, Content: content}}, nil
+	return withOpaque([]openAIMessage{{Role: role, Content: content}}, opaqueRaw), nil
 }
 
 func assistantOpenAIContent(text string) (json.RawMessage, error) {

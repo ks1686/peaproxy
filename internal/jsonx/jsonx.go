@@ -89,6 +89,76 @@ func SetTopLevelRaw(raw []byte, key string, value []byte) []byte {
 	return out
 }
 
+// DropKeyInArray removes dropKey from each object element of the top-level
+// array named arrayKey. Other keys stay in place. A missing array is a no-op.
+func DropKeyInArray(raw []byte, arrayKey, dropKey string) []byte {
+	raw = bytes.TrimSpace(raw)
+	if arrayKey == "" || dropKey == "" {
+		return raw
+	}
+	for _, s := range topLevelMembers(raw) {
+		if s.key != arrayKey {
+			continue
+		}
+		val := bytes.TrimSpace(raw[s.valueStart:s.valueEnd])
+		next := dropKeyFromArray(val, dropKey)
+		if bytes.Equal(val, next) {
+			return raw
+		}
+		out := make([]byte, 0, len(raw)-len(val)+len(next))
+		out = append(out, raw[:s.valueStart]...)
+		out = append(out, next...)
+		out = append(out, raw[s.valueEnd:]...)
+		return out
+	}
+	return raw
+}
+
+func dropKeyFromArray(raw []byte, dropKey string) []byte {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '[' {
+		return raw
+	}
+	var b bytes.Buffer
+	b.WriteByte('[')
+	i := 1
+	first := true
+	changed := false
+	for i < len(raw) {
+		i = skipSpace(raw, i)
+		if i >= len(raw) || raw[i] == ']' {
+			break
+		}
+		if raw[i] == ',' {
+			i++
+			continue
+		}
+		end, ok := skipValue(raw, i)
+		if !ok {
+			return raw
+		}
+		elem := bytes.TrimSpace(raw[i:end])
+		if len(elem) > 0 && elem[0] == '{' {
+			stripped := DropTopLevelKeys(elem, dropKey)
+			if !bytes.Equal(stripped, elem) {
+				changed = true
+				elem = stripped
+			}
+		}
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+		b.Write(elem)
+		i = end
+	}
+	if !changed {
+		return raw
+	}
+	b.WriteByte(']')
+	return b.Bytes()
+}
+
 // DropTopLevelKeys removes named top-level object keys without reordering
 // remaining fields. Unknown keys are ignored. Used to strip Amp/Codex
 // stream_options (and similar) that chatgpt.com/codex rejects.

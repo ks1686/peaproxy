@@ -675,6 +675,113 @@ func TestRefreshFormGrant(t *testing.T) {
 	}
 }
 
+func TestResponsesSSECarriesReasoningOpaqueBeforeFinish(t *testing.T) {
+	in := strings.NewReader(strings.Join([]string{
+		`data: {"type":"response.output_item.added","item":{"type":"reasoning","id":"rs_9","encrypted_content":"enc","status":"completed","summary":[{"type":"summary_text","text":"skip me"}]}}`,
+		``,
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		``,
+		`data: {"type":"response.completed","response":{"output":[{"type":"reasoning","id":"rs_9","encrypted_content":"enc","summary":[{"type":"summary_text","text":"skip me"}]}]}}`,
+		``,
+		``,
+	}, "\n"))
+	var buf bytes.Buffer
+	if err := responsesSSEToOpenAI(in, &buf, "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Contains(got, `"content":"skip me"`) {
+		t.Fatalf("reasoning streamed as content: %s", got)
+	}
+	opaqueAt := strings.Index(got, `"reasoning_opaque"`)
+	finishAt := strings.Index(got, `"finish_reason"`)
+	if opaqueAt < 0 || finishAt < 0 || opaqueAt > finishAt {
+		t.Fatalf("opaque at %d finish at %d\n%s", opaqueAt, finishAt, got)
+	}
+	if strings.Count(got, `"reasoning_opaque"`) != 1 || !strings.Contains(got, `"rs_9"`) || !strings.Contains(got, `"content":"hello"`) {
+		t.Fatalf("%s", got)
+	}
+}
+
+func TestChatToResponsesRestoresReasoningBeforeText(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5",
+		"messages":[{
+			"role":"assistant",
+			"content":"hello",
+			"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}],
+			"reasoning_opaque":[
+				{"kind":"anthropic_thinking","thinking":"nope","signature":"sig"},
+				{"kind":"responses_reasoning","id":"rs_9","encrypted_content":"enc","status":"completed","summary":[{"type":"summary_text","text":"skip me"}]}
+			]
+		}]
+	}`)
+	out, err := chatToResponses(raw, "gpt-5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte("nope")) || bytes.Contains(out, []byte(`"signature"`)) {
+		t.Fatalf("anthropic kind leaked: %s", out)
+	}
+	if bytes.Contains(out, []byte(`"output_text":"skip me"`)) {
+		t.Fatalf("reasoning invented as assistant text: %s", out)
+	}
+	var parsed struct {
+		Input []struct {
+			Type             string          `json:"type"`
+			ID               string          `json:"id"`
+			EncryptedContent string          `json:"encrypted_content"`
+			Role             string          `json:"role"`
+			Summary          json.RawMessage `json:"summary"`
+			Content          []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			CallID string `json:"call_id"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if len(parsed.Input) < 3 {
+		t.Fatalf("input %#v from %s", parsed.Input, out)
+	}
+	if parsed.Input[0].Type != "reasoning" || parsed.Input[0].ID != "rs_9" || parsed.Input[0].EncryptedContent != "enc" {
+		t.Fatalf("first %#v", parsed.Input[0])
+	}
+	if !bytes.Contains(parsed.Input[0].Summary, []byte("skip me")) {
+		t.Fatalf("summary %s", parsed.Input[0].Summary)
+	}
+	if parsed.Input[1].Role != "assistant" || parsed.Input[1].Content[0].Text != "hello" {
+		t.Fatalf("text item %#v", parsed.Input[1])
+	}
+	if parsed.Input[2].Type != "function_call" || parsed.Input[2].CallID != "call_1" {
+		t.Fatalf("call %#v", parsed.Input[2])
+	}
+}
+
+func TestResponsesToChatCompletionCarriesReasoningOpaque(t *testing.T) {
+	body := []byte(`{
+		"id":"resp_1",
+		"output":[
+			{"type":"reasoning","id":"rs_9","encrypted_content":"enc","status":"completed","summary":[{"type":"summary_text","text":"skip me"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}
+		]
+	}`)
+	out, content, err := responsesToChatCompletion("gpt-5", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "hello" {
+		t.Fatalf("content %q", content)
+	}
+	if bytes.Contains(out, []byte(`"content":"skip me"`)) {
+		t.Fatalf("reasoning invented as content: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"reasoning_opaque"`)) || !bytes.Contains(out, []byte(`"responses_reasoning"`)) || !bytes.Contains(out, []byte(`"rs_9"`)) {
+		t.Fatalf("missing carry: %s", out)
+	}
+}
+
 func testAdapter(t *testing.T, base string) *Adapter {
 	t.Helper()
 	adp, err := New(adapter.Options{ID: "openai-oauth", BaseURL: base})

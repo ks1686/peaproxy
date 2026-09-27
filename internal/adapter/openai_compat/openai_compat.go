@@ -13,6 +13,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/translate"
 )
 
 const Name = "openai_compat"
@@ -258,7 +259,7 @@ var _ adapter.Embedder = (*Adapter)(nil)
 
 func (a *Adapter) body(req adapter.ChatRequest, stream bool) ([]byte, error) {
 	if len(req.Raw) > 0 {
-		return jsonx.SetStream(req.Raw, stream), nil
+		return jsonx.SetStream(translate.StripReasoningOpaque(req.Raw), stream), nil
 	}
 	payload := chatRequest{
 		Model:    req.Model,

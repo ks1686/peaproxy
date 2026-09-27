@@ -26,6 +26,36 @@ func TestOpenAISSEToClaudeTrueEvents(t *testing.T) {
 	}
 }
 
+func TestOpenAISSEToClaudeEmitsThinkingBeforeStop(t *testing.T) {
+	in := strings.NewReader(strings.Join([]string{
+		`data: {"id":"c1","model":"m","choices":[{"delta":{"content":"hello"}}]}`,
+		``,
+		`data: {"choices":[{"delta":{"reasoning_opaque":[{"kind":"anthropic_thinking","thinking":"secret chain","signature":"sig_1"},{"kind":"responses_reasoning","id":"rs_9","encrypted_content":"enc"}]}}]}`,
+		``,
+		`data: {"choices":[{"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n"))
+	var out bytes.Buffer
+	if err := OpenAISSEToClaude(in, &out, "m"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, `"text":"secret chain"`) || strings.Contains(got, "rs_9") || strings.Contains(got, `"encrypted_content"`) {
+		t.Fatalf("opaque leaked as text or responses kind: %s", got)
+	}
+	think := strings.Index(got, `"type":"thinking"`)
+	stop := strings.Index(got, "event: message_stop")
+	if think < 0 || stop < 0 || think > stop {
+		t.Fatalf("thinking block missing before message_stop: %s", got)
+	}
+	if !strings.Contains(got, `"signature":"sig_1"`) || !strings.Contains(got, `"thinking":"secret chain"`) {
+		t.Fatalf("signature not restored: %s", got)
+	}
+}
+
 func TestOpenAISSEToClaudeEmptyWritesNothing(t *testing.T) {
 	var out bytes.Buffer
 	if err := OpenAISSEToClaude(strings.NewReader(""), &out, "m"); err != nil {

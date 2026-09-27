@@ -60,8 +60,11 @@ func TestResponsesToOpenAIMapsFunctionCallItems(t *testing.T) {
 	if !bytes.Contains(body, []byte(`"role":"tool"`)) || !bytes.Contains(body, []byte(`"tool_call_id":"call_1"`)) {
 		t.Fatalf("function_call_output must become tool message: %s", body)
 	}
-	if bytes.Contains(body, []byte("skip me")) {
+	if bytes.Contains(messageContents(t, body), []byte("skip me")) {
 		t.Fatalf("reasoning must not be invented as chat text: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"reasoning_opaque"`)) || !bytes.Contains(body, []byte("skip me")) {
+		t.Fatalf("reasoning item must be carried opaquely: %s", body)
 	}
 	if req.Model != "m" {
 		t.Fatalf("model %s", req.Model)
@@ -135,6 +138,48 @@ func TestFromOpenAIChatWrapsOutputText(t *testing.T) {
 	}
 	if len(parsed.Output) != 1 || parsed.Output[0].Content[0].Type != "output_text" {
 		t.Fatalf("%s", out)
+	}
+}
+
+func messageContents(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var parsed struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	for _, m := range parsed.Messages {
+		b.Write(m.Content)
+	}
+	return b.Bytes()
+}
+
+func TestOpenAISSEToResponsesCarriesOpaqueReasoning(t *testing.T) {
+	in := strings.NewReader(strings.Join([]string{
+		`data: {"id":"c1","model":"m","choices":[{"delta":{"content":"hello"}}]}`,
+		``,
+		`data: {"choices":[{"delta":{"reasoning_opaque":[{"kind":"responses_reasoning","id":"rs_9","encrypted_content":"enc","summary":[{"type":"summary_text","text":"skip me"}]}]}}]}`,
+		``,
+		`data: {"choices":[{"finish_reason":"stop"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n"))
+	var out bytes.Buffer
+	if err := OpenAISSEToResponses(in, &out, "m"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.Contains(got, `"output_text":"skip me"`) || strings.Contains(got, `"delta":"skip me"`) {
+		t.Fatalf("reasoning invented as text: %s", got)
+	}
+	if !strings.Contains(got, `"type":"reasoning"`) || !strings.Contains(got, `"id":"rs_9"`) || !strings.Contains(got, `"encrypted_content":"enc"`) {
+		t.Fatalf("missing reasoning item: %s", got)
 	}
 }
 
