@@ -60,8 +60,34 @@ type CatalogPrefs struct {
 }
 
 // FailoverPrefs selects how matching accounts are ordered. Empty policy is round-robin.
+// Session affinity is on unless sessionAffinity is false. It pins one conversation
+// to one account until the TTL, then fails over when that account is cooled.
 type FailoverPrefs struct {
-	Policy string `yaml:"policy,omitempty" json:"policy,omitempty"`
+	Policy             string `yaml:"policy,omitempty" json:"policy,omitempty"`
+	SessionAffinity    *bool  `yaml:"sessionAffinity,omitempty" json:"sessionAffinity,omitempty"`
+	SessionAffinityTTL string `yaml:"sessionAffinityTTL,omitempty" json:"sessionAffinityTTL,omitempty"`
+}
+
+// AffinityEnabled reports whether a conversation should stay on one account.
+// An omitted sessionAffinity field means on.
+func (c Config) AffinityEnabled() bool {
+	if c.Failover.SessionAffinity == nil {
+		return true
+	}
+	return *c.Failover.SessionAffinity
+}
+
+// AffinityTTL is how long a conversation stays pinned. Empty or invalid is 1h.
+func (c Config) AffinityTTL() time.Duration {
+	s := strings.TrimSpace(c.Failover.SessionAffinityTTL)
+	if s == "" {
+		return time.Hour
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return time.Hour
+	}
+	return d
 }
 
 // FailoverPolicy returns the effective routing policy (round-robin by default).
@@ -388,6 +414,12 @@ func (c Config) Validate() error {
 	case "", "round-robin", "fill-first", "sticky":
 	default:
 		return fmt.Errorf("invalid failover.policy %q (want round-robin|fill-first|sticky)", c.Failover.Policy)
+	}
+	if s := strings.TrimSpace(c.Failover.SessionAffinityTTL); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("invalid failover.sessionAffinityTTL %q", s)
+		}
 	}
 	return nil
 }

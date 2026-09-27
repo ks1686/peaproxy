@@ -168,14 +168,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	peek := jsonx.PeekBody(raw)
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
-		account, err := s.gw.ChatStream(r.Context(), raw, sw)
+		account, err := s.gw.ChatStream(requestCtx(r, raw), raw, sw)
 		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
 		return
 	}
-	resp, account, err := s.gw.Chat(r.Context(), raw)
+	resp, account, err := s.gw.Chat(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
@@ -201,14 +201,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	peek := jsonx.PeekBody(raw)
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
-		account, err := s.gw.ResponsesStream(r.Context(), raw, sw)
+		account, err := s.gw.ResponsesStream(requestCtx(r, raw), raw, sw)
 		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
 		return
 	}
-	out, account, err := s.gw.Responses(r.Context(), raw)
+	out, account, err := s.gw.Responses(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
@@ -228,7 +228,7 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	peek := jsonx.PeekBody(raw)
-	resp, account, err := s.gw.GenerateImage(r.Context(), raw)
+	resp, account, err := s.gw.GenerateImage(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
@@ -255,7 +255,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	peek := jsonx.PeekBody(raw)
-	resp, account, err := s.gw.CreateEmbeddings(r.Context(), raw)
+	resp, account, err := s.gw.CreateEmbeddings(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
@@ -285,14 +285,14 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	peek := jsonx.PeekBody(raw)
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
-		account, err := s.gw.ClaudeChatStream(r.Context(), raw, sw)
+		account, err := s.gw.ClaudeChatStream(requestCtx(r, raw), raw, sw)
 		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
 		return
 	}
-	out, account, err := s.gw.ClaudeChat(r.Context(), raw)
+	out, account, err := s.gw.ClaudeChat(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
@@ -597,7 +597,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, errJSON(err))
 			return
 		}
-		resp, account, err := s.gw.GenerateImage(r.Context(), raw)
+		resp, account, err := s.gw.GenerateImage(requestCtx(r, raw), raw)
 		if err != nil {
 			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 			writeErr(w, err)
@@ -627,7 +627,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, errJSON(err))
 			return
 		}
-		resp, account, err := s.gw.CreateEmbeddings(r.Context(), raw)
+		resp, account, err := s.gw.CreateEmbeddings(requestCtx(r, raw), raw)
 		if err != nil {
 			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 			writeErr(w, err)
@@ -653,7 +653,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errJSON(err))
 		return
 	}
-	resp, account, err := s.gw.Chat(r.Context(), raw)
+	resp, account, err := s.gw.Chat(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
@@ -820,6 +820,10 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func requestCtx(r *http.Request, raw []byte) context.Context {
+	return router.WithSession(r.Context(), router.SessionID(r.Header, raw))
 }
 
 func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte) {

@@ -33,18 +33,19 @@ var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
-	mu     sync.RWMutex
-	cfg    config.Config
-	path   string
-	reg    *adapter.Registry
-	inst   []instance
-	models []catalog.Model
-	Usage  *usage.Store
-	cool   map[string]Cooldown
-	rr     uint64
-	sticky map[string]string
-	health []AdapterHealth
-	quota  *quota.Store
+	mu       sync.RWMutex
+	cfg      config.Config
+	path     string
+	reg      *adapter.Registry
+	inst     []instance
+	models   []catalog.Model
+	Usage    *usage.Store
+	cool     map[string]Cooldown
+	rr       uint64
+	sticky   map[string]string
+	affinity map[string]affinityBind
+	health   []AdapterHealth
+	quota    *quota.Store
 }
 
 // Cooldown is a temporary skip of an account after a retryable failure.
@@ -69,6 +70,11 @@ type AdapterHealth struct {
 	QuotaHint    string               `json:"quotaHint,omitempty"`
 }
 
+type affinityBind struct {
+	Account string
+	Until   time.Time
+}
+
 type instance struct {
 	Provider config.Provider
 	Adapter  adapter.Adapter
@@ -79,7 +85,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, quota: quota.NewStore()}
+	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, quota: quota.NewStore()}
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -300,7 +306,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
@@ -311,7 +317,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 		lastAccount = inst.Provider.ID
 		resp, err := inst.Adapter.Chat(ctx, req)
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -330,7 +336,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	if err != nil {
 		return "", err
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return "", err
 	}
@@ -342,7 +348,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		lastAccount = inst.Provider.ID
 		err := inst.Adapter.ChatStream(ctx, req, cw)
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 			return lastAccount, nil
 		}
 		last = err
@@ -372,7 +378,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	if !g.supportsImageOut(model) {
 		return adapter.ImageResponse{}, "", adapter.ErrModelNotImageOut
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return adapter.ImageResponse{}, "", err
 	}
@@ -389,7 +395,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 		tried = true
 		resp, err := gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -432,7 +438,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	if !g.supportsEmbeddings(model) {
 		return adapter.EmbeddingResponse{}, "", adapter.ErrModelNotEmbeddings
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return adapter.EmbeddingResponse{}, "", err
 	}
@@ -449,7 +455,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		tried = true
 		resp, err := emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: model, Raw: raw})
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 			return resp, lastAccount, nil
 		}
 		last = err
@@ -484,7 +490,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 	if err != nil {
 		return nil, "", err
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -500,7 +506,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
-				g.rememberSticky(model, lastAccount)
+				g.rememberSuccess(session, model, lastAccount)
 				return out, lastAccount, nil
 			}
 			last = err
@@ -526,13 +532,13 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if len(resp.Raw) > 0 {
 			out, ferr := translate.FromOpenAIChat(resp.Raw, oaReq.Model)
 			if ferr == nil {
-				g.rememberSticky(model, lastAccount)
+				g.rememberSuccess(session, model, lastAccount)
 				return out, lastAccount, nil
 			}
 		}
 		out, err := translate.FromChatContent(resp.ID, oaReq.Model, resp.Content)
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 		}
 		return out, lastAccount, err
 	}
@@ -554,7 +560,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if err != nil {
 		return "", err
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return "", err
 	}
@@ -571,7 +577,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), cw)
 			if err == nil {
-				g.rememberSticky(model, lastAccount)
+				g.rememberSuccess(session, model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -598,7 +604,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -629,7 +635,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	if err != nil {
 		return nil, "", err
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -645,7 +651,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			out, err := nm.Messages(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
-				g.rememberSticky(model, lastAccount)
+				g.rememberSuccess(session, model, lastAccount)
 				return out, lastAccount, nil
 			}
 			last = err
@@ -684,7 +690,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		}
 		out, err := translate.FromOpenAI(oaRaw, oaReq.Model)
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 		}
 		return out, lastAccount, err
 	}
@@ -706,7 +712,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	if err != nil {
 		return "", err
 	}
-	cands, err := g.route(model)
+	cands, session, err := g.route(ctx, raw, model)
 	if err != nil {
 		return "", err
 	}
@@ -723,7 +729,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			err := nm.MessagesStream(ctx, jsonx.SetStream(raw, true), cw)
 			if err == nil {
-				g.rememberSticky(model, lastAccount)
+				g.rememberSuccess(session, model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -750,7 +756,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
-			g.rememberSticky(model, lastAccount)
+			g.rememberSuccess(session, model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -810,6 +816,37 @@ func cooldownErr(last error) error {
 	return router.CooldownError{RetryAfter: cooldownTTL, Err: last}
 }
 
+func (g *Gateway) rememberSuccess(session, model, account string) {
+	g.rememberSticky(model, account)
+	g.bindAffinity(session, model, account)
+}
+
+func (g *Gateway) bindAffinity(session, model, account string) {
+	if session == "" || model == "" || account == "" || !g.cfg.AffinityEnabled() {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.affinity == nil {
+		g.affinity = map[string]affinityBind{}
+	}
+	g.affinity[session+"\x00"+model] = affinityBind{Account: account, Until: time.Now().Add(g.cfg.AffinityTTL())}
+}
+
+func (g *Gateway) liveAffinityLocked(session, model string, now time.Time) (string, bool) {
+	if session == "" || !g.cfg.AffinityEnabled() {
+		return "", false
+	}
+	b, ok := g.affinity[session+"\x00"+model]
+	if !ok || !now.Before(b.Until) {
+		if ok {
+			delete(g.affinity, session+"\x00"+model)
+		}
+		return "", false
+	}
+	return b.Account, true
+}
+
 func (g *Gateway) rememberSticky(model, account string) {
 	if model == "" || account == "" {
 		return
@@ -819,15 +856,19 @@ func (g *Gateway) rememberSticky(model, account string) {
 	g.sticky[model] = account
 }
 
-func (g *Gateway) route(model string) ([]instance, error) {
-	cands, retry := g.candidates(model)
+func (g *Gateway) route(ctx context.Context, raw []byte, model string) ([]instance, string, error) {
+	session := router.SessionFrom(ctx)
+	if session == "" {
+		session = router.SessionFromBody(raw)
+	}
+	cands, retry := g.candidates(model, session)
 	if len(cands) == 0 {
 		if retry > 0 {
-			return nil, router.CooldownError{RetryAfter: retry}
+			return nil, session, router.CooldownError{RetryAfter: retry}
 		}
-		return nil, router.ErrNoAccount
+		return nil, session, router.ErrNoAccount
 	}
-	return cands, nil
+	return cands, session, nil
 }
 
 func (g *Gateway) markCooldown(id string, err error) {
@@ -977,7 +1018,16 @@ func (g *Gateway) probeQuota(ctx context.Context, inst []instance) {
 	}
 }
 
-func (g *Gateway) candidates(model string) ([]instance, time.Duration) {
+func containsID(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
@@ -1026,7 +1076,12 @@ func (g *Gateway) candidates(model string) ([]instance, time.Duration) {
 		hotIDs[i] = inst.Provider.ID
 		byID[inst.Provider.ID] = inst
 	}
-	ordered := router.Order(router.Policy(g.cfg.Failover.Policy), hotIDs, &g.rr, g.sticky[model])
+	var ordered []string
+	if acct, ok := g.liveAffinityLocked(session, model, now); ok && containsID(hotIDs, acct) {
+		ordered = router.Order(router.PolicySticky, hotIDs, nil, acct)
+	} else {
+		ordered = router.Order(router.Policy(g.cfg.Failover.Policy), hotIDs, &g.rr, g.sticky[model])
+	}
 	out := make([]instance, 0, len(ordered))
 	for _, id := range ordered {
 		out = append(out, byID[id])

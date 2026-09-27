@@ -85,13 +85,17 @@ failover:
   policy: round-robin   # default
   # policy: fill-first
   # policy: sticky
+  # sessionAffinity: false   # default is on
+  # sessionAffinityTTL: 1h
 ```
 
 | Policy | Behavior |
 |---|---|
-| `round-robin` | Rotate the starting hot account on each request (default). |
+| `round-robin` | Rotate the starting hot account on each new conversation (default). |
 | `fill-first` | Always start at the first hot account in YAML `providers` order. |
 | `sticky` | Remember the last successful account per model and try it first; if it is cooled or fails, try the remaining hot accounts in YAML order and stick to whoever succeeds. |
+
+Session affinity is separate from `sticky`. It keeps one conversation on the account that first succeeded, for `sessionAffinityTTL` (default 1 hour). The id comes from `X-Session-ID`, `X-Client-Request-Id`, `Session-Id`, `session_id`, `conversation_id`, a Claude metadata user id that already names a session, or a hash of the system prompt plus the first user turn. Later turns in that chat do not change the id. If the bound account is cooled, the next hot account takes the conversation. Set `sessionAffinity: false` to keep plain round-robin for identical chats. An empty `messages` list has no session, so those requests still rotate.
 
 Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider error bodies that look like rate-limit / quota, overloaded, or auth-expired. Cooldown reasons are those classes (`rate-limit`, `overloaded`, `auth-expired`) — not raw bodies (no secrets). Plain `400 invalid_request_error` does not fail over.
 
