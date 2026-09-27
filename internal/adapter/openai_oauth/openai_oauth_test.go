@@ -475,6 +475,85 @@ func TestChatStreamMapsFunctionCallEvents(t *testing.T) {
 	assertChatSSEFinish(t, got, "tool_calls")
 }
 
+// Codex sends a reasoning item at output_index 0, then a function call whose
+// item id (fc_…) is not the call id (call_…). Argument deltas refer to the
+// item id and the original output index. Those deltas must stay on the same
+// chat tool_calls index as the call that carried the string id.
+func TestChatStreamKeepsCodexToolDeltasOnCallIndex(t *testing.T) {
+	in := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_9","encrypted_content":"enc"}}`,
+		``,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_9","call_id":"call_9","name":"todowrite","arguments":""}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_9","delta":"{\"todos\":"}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_9","delta":"[{\"content\":\"a\"}]}"}`,
+		``,
+		`data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_8","call_id":"call_8","name":"other","arguments":""}}`,
+		``,
+		`data: {"type":"response.function_call_arguments.delta","output_index":2,"item_id":"fc_8","delta":"{}"}`,
+		``,
+		``,
+	}, "\n")
+	var out bytes.Buffer
+	if err := responsesSSEToOpenAI(strings.NewReader(in), &out, "gpt-6-astra"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	var toolChunks int
+	opened := map[int]string{}
+	for _, payload := range sseDataPayloads(got) {
+		if payload == "[DONE]" || !strings.Contains(payload, `"tool_calls"`) {
+			continue
+		}
+		toolChunks++
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			t.Fatalf("chunk: %v\n%s", err, payload)
+		}
+		for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+			if tc.ID != "" {
+				opened[tc.Index] = tc.ID
+			} else if _, ok := opened[tc.Index]; !ok {
+				t.Fatalf("argument delta opened a slot with no id\n%s", payload)
+			}
+			want := -1
+			switch {
+			case tc.ID == "call_9" || tc.Function.Name == "todowrite" || strings.Contains(tc.Function.Arguments, "todos") || strings.Contains(tc.Function.Arguments, "content"):
+				want = 0
+			case tc.ID == "call_8" || tc.Function.Name == "other" || tc.Function.Arguments == "{}":
+				want = 1
+			}
+			if want < 0 || tc.Index != want {
+				t.Fatalf("tool call index %d, want %d\n%s", tc.Index, want, payload)
+			}
+		}
+	}
+	if toolChunks < 4 {
+		t.Fatalf("want added+delta for both calls, got %d tool chunks\n%s", toolChunks, got)
+	}
+	if !strings.Contains(got, `"todowrite"`) || !strings.Contains(got, `{\"todos\":`) || !strings.Contains(got, `"call_9"`) {
+		t.Fatalf("missing todowrite deltas:\n%s", got)
+	}
+	if !strings.Contains(got, `"call_8"`) || !strings.Contains(got, `"other"`) {
+		t.Fatalf("second call not kept:\n%s", got)
+	}
+	assertChatSSEFinish(t, got, "tool_calls")
+}
+
 func TestResponsesSSEToOpenAITextEmitsFinishReasonStop(t *testing.T) {
 	in := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"hel"}`,

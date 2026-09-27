@@ -1190,33 +1190,27 @@ func responsesStreamChunkToChat(payload, model string, callIndex map[string]int,
 			delta.Content = ev.Text
 		}
 	case strings.Contains(ev.Type, "output_item.added") && ev.Item != nil && ev.Item.Type == "function_call":
-		idx := ev.OutputIndex
-		key := ev.Item.CallID
-		if key == "" {
-			key = ev.Item.ID
-		}
-		if key != "" {
-			if existing, ok := callIndex[key]; ok {
-				idx = existing
-			} else {
-				idx = *nextIndex
-				callIndex[key] = idx
-				*nextIndex++
-			}
-		} else {
+		// Responses uses the output item id (fc_…) on later argument
+		// deltas and the call id (call_…) on the item itself. output_index
+		// also counts reasoning items, so it is not a chat tool slot.
+		idx, found := resolveCallIndex(callIndex, ev.Item.CallID, ev.Item.ID, ev.OutputIndex)
+		if !found {
 			idx = *nextIndex
 			*nextIndex++
 		}
-		tc := chatStreamToolCall{Index: idx, ID: ev.Item.CallID, Type: "function"}
+		rememberCallIndex(callIndex, idx, ev.Item.CallID, ev.Item.ID, ev.OutputIndex)
+		id := ev.Item.CallID
+		if id == "" {
+			id = ev.Item.ID
+		}
+		tc := chatStreamToolCall{Index: idx, ID: id, Type: "function"}
 		tc.Function.Name = ev.Item.Name
 		tc.Function.Arguments = ev.Item.Arguments
 		delta.ToolCalls = []chatStreamToolCall{tc}
 	case strings.Contains(ev.Type, "function_call_arguments.delta"):
-		idx := ev.OutputIndex
-		if ev.ItemID != "" {
-			if existing, ok := callIndex[ev.ItemID]; ok {
-				idx = existing
-			}
+		idx, found := resolveCallIndex(callIndex, "", ev.ItemID, ev.OutputIndex)
+		if !found {
+			break
 		}
 		tc := chatStreamToolCall{Index: idx}
 		tc.Function.Arguments = ev.Delta
@@ -1251,6 +1245,36 @@ func responsesStreamChunkToChat(payload, model string, callIndex map[string]int,
 		return nil, false, false, err
 	}
 	return raw, true, len(delta.ToolCalls) > 0, nil
+}
+
+// callIndex keys a chat tool slot by every id Codex may use for that call.
+// output-index is stored only after the call is known, so a bare responses
+// output_index cannot open a new slot that has no string id.
+func rememberCallIndex(callIndex map[string]int, idx int, callID, itemID string, outputIndex int) {
+	for _, key := range callIndexKeys(callID, itemID, outputIndex) {
+		callIndex[key] = idx
+	}
+}
+
+func resolveCallIndex(callIndex map[string]int, callID, itemID string, outputIndex int) (int, bool) {
+	for _, key := range callIndexKeys(callID, itemID, outputIndex) {
+		if idx, ok := callIndex[key]; ok {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
+func callIndexKeys(callID, itemID string, outputIndex int) []string {
+	keys := make([]string, 0, 3)
+	if callID != "" {
+		keys = append(keys, callID)
+	}
+	if itemID != "" && itemID != callID {
+		keys = append(keys, itemID)
+	}
+	keys = append(keys, fmt.Sprintf("output-index:%d", outputIndex))
+	return keys
 }
 
 func truncate(b []byte) string {
