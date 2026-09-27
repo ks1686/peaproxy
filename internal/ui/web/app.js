@@ -133,7 +133,32 @@ function bindOnboarding(root, pickPreset) {
 function usageTables(data) {
   const providers = data.byProvider || [];
   const accounts = data.byAccount || [];
+  const days = data.byDay || [];
   const recent = data.recent || [];
+  const dayRows = days
+    .map((d) => {
+      const tokens =
+        d.promptTokens || d.completionTokens
+          ? String((d.promptTokens || 0) + (d.completionTokens || 0))
+          : "—";
+      let price = "—";
+      if (d.costUSD != null) {
+        price = String(d.costUSD);
+        if ((d.costCalls || 0) < (d.calls || 0)) {
+          price += ` (${d.costCalls || 0}/${d.calls || 0} priced)`;
+        }
+      }
+      return `<tr>
+        <td>${escapeHtml(d.day || "")}</td>
+        <td>${escapeHtml(d.accountId || "")}</td>
+        <td>${escapeHtml(d.provider || "")}</td>
+        <td>${escapeHtml(String(d.calls || 0))}</td>
+        <td>${escapeHtml(String(d.errors || 0))}</td>
+        <td>${escapeHtml(tokens)}</td>
+        <td>${escapeHtml(price)}</td>
+      </tr>`;
+    })
+    .join("");
   const providerRows = providers
     .map(
       (p) => `<tr>
@@ -171,6 +196,15 @@ function usageTables(data) {
     })
     .join("");
   return `
+    <h3>By day</h3>
+    <p class="muted">UTC days, kept 90 days. Tokens and price count only calls that published them. A dash means the provider did not send that number.</p>
+    ${
+      dayRows
+        ? `<table>
+      <thead><tr><th>Day</th><th>Account</th><th>Provider</th><th>Calls</th><th>Errors</th><th>Tokens</th><th>Published price</th></tr></thead>
+      <tbody>${dayRows}</tbody></table>`
+        : emptyState("No daily usage yet", "Daily totals are kept after the 200 most recent calls roll off.")
+    }
     <h3>By provider</h3>
     ${
       providerRows

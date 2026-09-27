@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -168,7 +169,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ChatStream(r.Context(), raw, sw)
-		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
@@ -176,11 +177,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, account, err := s.gw.Chat(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started)
+	s.record(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -201,7 +202,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ResponsesStream(r.Context(), raw, sw)
-		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
@@ -209,11 +210,11 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	out, account, err := s.gw.Responses(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "responses", "/v1/responses", false, http.StatusOK, nil, inspectorPreview(raw, ""), started)
+	s.record(account, peek.Model, "responses", "/v1/responses", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -229,11 +230,11 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	peek := jsonx.PeekBody(raw)
 	resp, account, err := s.gw.GenerateImage(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started)
+	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -256,11 +257,11 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	peek := jsonx.PeekBody(raw)
 	resp, account, err := s.gw.CreateEmbeddings(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started)
+	s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -285,7 +286,7 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ClaudeChatStream(r.Context(), raw, sw)
-		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
 			writeErr(w, err)
 		}
@@ -293,11 +294,11 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	out, account, err := s.gw.ClaudeChat(r.Context(), raw)
 	if err != nil {
-		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "claude", "/v1/messages", false, http.StatusOK, nil, inspectorPreview(raw, ""), started)
+	s.record(account, peek.Model, "claude", "/v1/messages", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -598,11 +599,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, account, err := s.gw.GenerateImage(r.Context(), raw)
 		if err != nil {
-			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 			writeErr(w, err)
 			return
 		}
-		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started)
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"account":  account,
 			"model":    body.Model,
@@ -628,11 +629,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, account, err := s.gw.CreateEmbeddings(r.Context(), raw)
 		if err != nil {
-			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 			writeErr(w, err)
 			return
 		}
-		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started)
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"account":    account,
 			"model":      body.Model,
@@ -654,11 +655,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, account, err := s.gw.Chat(r.Context(), raw)
 	if err != nil {
-		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started)
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
 		writeErr(w, err)
 		return
 	}
-	s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started)
+	s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account":  account,
 		"model":    body.Model,
@@ -680,7 +681,8 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"byAccount":  s.gw.Usage.ByAccount(),
 		"byProvider": s.gw.Usage.ByProvider(),
 		"path":       path,
-		"disclaimer": "Persisted to usage.json next to the config file. Opt-in requestLog writes redacted JSONL to requests.log.",
+		"byDay":      s.gw.Usage.ByDay(),
+		"disclaimer": "usage.json keeps a 200-event ring and 90 UTC days of per-account totals. Tokens and costUSD count only calls whose provider published them. Subscription quota is omitted unless the upstream sent it.",
 	})
 }
 
@@ -820,7 +822,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time) {
+func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte) {
 	if s.gw == nil || s.gw.Usage == nil {
 		return
 	}
@@ -834,6 +836,12 @@ func (s *Server) record(account, model, proto, path string, stream bool, status 
 		Status:     status,
 		Preview:    preview,
 		DurationMS: time.Since(started).Milliseconds(),
+	}
+	if prompt, completion, cost, ok := usage.ParsePublishedUsage(body); ok {
+		e.PromptTokens = prompt
+		e.CompletionTokens = completion
+		e.TokensKnown = true
+		e.CostUSD = cost
 	}
 	if err != nil {
 		e.Error = usage.Redact(err.Error())
@@ -956,6 +964,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 type sseWriter struct {
 	http.ResponseWriter
 	started bool
+	usage   []byte
 }
 
 func (s *sseWriter) Write(p []byte) (int, error) {
@@ -963,6 +972,9 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 		s.Header().Set("Content-Type", "text/event-stream")
 		s.Header().Set("Cache-Control", "no-cache")
 		s.started = true
+	}
+	if bytes.Contains(p, []byte(`"usage"`)) {
+		s.usage = append([]byte(nil), p...)
 	}
 	n, err := s.ResponseWriter.Write(p)
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
