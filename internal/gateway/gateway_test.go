@@ -116,6 +116,72 @@ func TestChatFailsover429ToNextAccount(t *testing.T) {
 	}
 }
 
+// TestChatRespectsRequestWideAttemptBudget catches the old behavior where a
+// transient retry on every account could exceed the request-wide attempt cap.
+func TestChatRespectsRequestWideAttemptBudget(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := policyGateway(t, "",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusBadGateway)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	)
+	gw.cfg.RequestEngine.MaxAttempts = 2
+
+	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	if !errors.Is(err, errAttemptBudgetExhausted) {
+		t.Fatalf("error = %v, want attempt budget exhaustion", err)
+	}
+	if hitsA+hitsB != 2 {
+		t.Fatalf("upstream calls = %d, want 2 (a=%d b=%d)", hitsA+hitsB, hitsA, hitsB)
+	}
+}
+
+// TestChatStreamRespectsRequestWideAttemptBudget catches a stream retry loop
+// exceeding the request limit before it has sent any client-visible bytes.
+func TestChatStreamRespectsRequestWideAttemptBudget(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := policyGateway(t, "",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusBadGateway)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	)
+	gw.cfg.RequestEngine.MaxAttempts = 2
+
+	_, err := gw.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), io.Discard)
+	if !errors.Is(err, errAttemptBudgetExhausted) {
+		t.Fatalf("error = %v, want attempt budget exhaustion", err)
+	}
+	if hitsA+hitsB != 2 {
+		t.Fatalf("upstream calls = %d, want 2 (a=%d b=%d)", hitsA+hitsB, hitsA, hitsB)
+	}
+}
+
 func TestChatFailsover401(t *testing.T) {
 	gw := twoAccountGateway(t,
 		func(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +315,138 @@ func TestResponsesTranslatesToChatCompletions(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"object":"response"`) || !strings.Contains(string(out), `"output_text":"pong"`) {
 		t.Fatalf("responses wrap: %s", out)
+	}
+}
+
+// TestResponsesRespectsRequestWideAttemptBudget catches translated Responses
+// calls retaining the old per-account transient retry multiplication.
+func TestResponsesRespectsRequestWideAttemptBudget(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := policyGateway(t, "",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusBadGateway)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	)
+	gw.cfg.RequestEngine.MaxAttempts = 2
+
+	_, _, err := gw.Responses(context.Background(), []byte(`{"model":"m","input":"hi"}`))
+	if !errors.Is(err, errAttemptBudgetExhausted) {
+		t.Fatalf("error = %v, want attempt budget exhaustion", err)
+	}
+	if hitsA+hitsB != 2 {
+		t.Fatalf("upstream calls = %d, want 2 (a=%d b=%d)", hitsA+hitsB, hitsA, hitsB)
+	}
+}
+
+// TestResponsesStreamRespectsRequestWideAttemptBudget catches translated
+// Responses streams continuing after the request-wide limit is exhausted.
+func TestResponsesStreamRespectsRequestWideAttemptBudget(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := policyGateway(t, "",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+	)
+	gw.cfg.RequestEngine.MaxAttempts = 1
+
+	_, err := gw.ResponsesStream(context.Background(), []byte(`{"model":"m","stream":true,"input":"hi"}`), io.Discard)
+	if !errors.Is(err, errAttemptBudgetExhausted) {
+		t.Fatalf("error = %v, want attempt budget exhaustion", err)
+	}
+	if hitsA != 1 || hitsB != 0 {
+		t.Fatalf("upstream calls a=%d b=%d, want a=1 b=0", hitsA, hitsB)
+	}
+}
+
+// TestClaudeChatRespectsRequestWideAttemptBudget catches Messages failover
+// continuing to another account after the configured request cap is spent.
+func TestClaudeChatRespectsRequestWideAttemptBudget(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := policyGateway(t, "",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+	)
+	gw.cfg.RequestEngine.MaxAttempts = 1
+
+	_, _, err := gw.ClaudeChat(context.Background(), []byte(`{"model":"m","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`))
+	if !errors.Is(err, errAttemptBudgetExhausted) {
+		t.Fatalf("error = %v, want attempt budget exhaustion", err)
+	}
+	if hitsA != 1 || hitsB != 0 {
+		t.Fatalf("upstream calls a=%d b=%d, want a=1 b=0", hitsA, hitsB)
+	}
+}
+
+// TestClaudeChatStreamRespectsRequestWideAttemptBudget catches Messages
+// streams failing over after their request-wide attempt limit is exhausted.
+func TestClaudeChatStreamRespectsRequestWideAttemptBudget(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := policyGateway(t, "",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+	)
+	gw.cfg.RequestEngine.MaxAttempts = 1
+
+	_, err := gw.ClaudeChatStream(context.Background(), []byte(`{"model":"m","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`), io.Discard)
+	if !errors.Is(err, errAttemptBudgetExhausted) {
+		t.Fatalf("error = %v, want attempt budget exhaustion", err)
+	}
+	if hitsA != 1 || hitsB != 0 {
+		t.Fatalf("upstream calls a=%d b=%d, want a=1 b=0", hitsA, hitsB)
 	}
 }
 
@@ -1072,4 +1270,68 @@ func TestQuotaCapturesChatHeaders(t *testing.T) {
 	if len(after) != 1 || after[0].RemainingRequests == nil || *after[0].RemainingRequests != 8 {
 		t.Fatalf("%#v", after)
 	}
+}
+
+func TestGenerateImageDoesNotReplayTransientOnSameAccount(t *testing.T) {
+	hitsA := 0
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/v1/models":
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "dall-e-3"}}})
+			case "/v1/images/generations":
+				hitsA++
+				w.WriteHeader(http.StatusBadGateway)
+			default:
+				http.NotFound(w, r)
+			}
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "dall-e-3"}}})
+				return
+			}
+			w.WriteHeader(http.StatusBadGateway)
+		},
+	)
+	_, _, err := gw.GenerateImage(context.Background(), []byte(`{"model":"dall-e-3","prompt":"a cat"}`))
+	if err == nil {
+		t.Fatal("expected upstream failure")
+	}
+	if hitsA != 1 {
+		t.Fatalf("same-account image calls = %d, want 1", hitsA)
+	}
+}
+
+func TestModelCooldownDoesNotDisableOtherModels(t *testing.T) {
+	models := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "alpha"}, {"id": "beta"}}})
+			return
+		}
+		http.NotFound(w, r)
+	}
+	gw := twoAccountGateway(t, models, models)
+	gw.markCooldown("acct-a", "alpha", adapter.HTTPError{Status: http.StatusTooManyRequests, Scope: adapter.ScopeModel})
+	for _, cand := range mustCandidates(t, gw, "beta") {
+		if cand.Provider.ID == "acct-a" {
+			goto cooledAlpha
+		}
+	}
+	t.Fatal("model-scoped cooldown removed the account from an unrelated model")
+cooledAlpha:
+	for _, cand := range mustCandidates(t, gw, "alpha") {
+		if cand.Provider.ID == "acct-a" {
+			t.Fatal("cooled model was still eligible")
+		}
+	}
+}
+
+func mustCandidates(t *testing.T, gw *Gateway, model string) []instance {
+	t.Helper()
+	cands, retry := gw.candidates(model, "")
+	if retry != 0 {
+		t.Fatalf("retry %s", retry)
+	}
+	return cands
 }

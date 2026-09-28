@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	var list struct {
 		Data []struct {
@@ -108,6 +109,10 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 				InputModalities  []string `json:"input_modalities"`
 				OutputModalities []string `json:"output_modalities"`
 			} `json:"architecture"`
+			Pricing *struct {
+				Prompt     string `json:"prompt"`
+				Completion string `json:"completion"`
+			} `json:"pricing"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
@@ -120,7 +125,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 			input = m.Architecture.InputModalities
 			output = m.Architecture.OutputModalities
 		}
-		out = append(out, catalog.Model{
+		row := catalog.Model{
 			ID:         m.ID,
 			Provider:   a.provider,
 			AccountID:  a.id,
@@ -129,7 +134,11 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 			Status:     "ready",
 			Exposed:    true,
 			Routable:   true,
-		})
+		}
+		if a.provider == "openrouter" {
+			row.Price = openRouterPrice(m.Pricing)
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }
@@ -155,7 +164,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return adapter.ChatResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.ChatResponse{}, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return adapter.ChatResponse{Model: req.Model, Raw: body, Content: extractContent(body)}, nil
 }
@@ -179,7 +188,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	_, err = io.Copy(w, resp.Body)
 	return err
@@ -214,7 +223,7 @@ func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (
 		return adapter.ImageResponse{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return adapter.ImageResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.ImageResponse{}, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return adapter.ParseImageResponse(body, req.Model), nil
 }
@@ -244,7 +253,7 @@ func (a *Adapter) EditImage(ctx context.Context, req adapter.ImageRequest) (adap
 		return adapter.ImageResponse{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return adapter.ImageResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.ImageResponse{}, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return adapter.ParseImageResponse(body, req.Model), nil
 }
@@ -278,7 +287,7 @@ func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingReq
 		return adapter.EmbeddingResponse{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return adapter.EmbeddingResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.EmbeddingResponse{}, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return adapter.ParseEmbeddingResponse(body, req.Model), nil
 }
@@ -317,6 +326,30 @@ func (a *Adapter) auth(req *http.Request) {
 			req.Header.Set(k, v)
 		}
 	}
+}
+
+func openRouterPrice(pricing *struct {
+	Prompt     string `json:"prompt"`
+	Completion string `json:"completion"`
+}) catalog.Price {
+	if pricing == nil {
+		return catalog.Price{}
+	}
+	input, inOK := parsePerToken(pricing.Prompt)
+	output, outOK := parsePerToken(pricing.Completion)
+	if !inOK || !outOK {
+		return catalog.Price{}
+	}
+	return catalog.Price{Input: &input, Output: &output, Currency: "USD", Verified: true}
+}
+
+func parsePerToken(raw string) (float64, bool) {
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || value < 0 {
+		return 0, false
+	}
+	perMillion := value * 1_000_000
+	return perMillion, true
 }
 
 func inferTier(id string, fallback catalog.Tier) catalog.Tier {

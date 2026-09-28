@@ -7,6 +7,25 @@ import (
 	"testing"
 )
 
+func TestCacheHitDoesNotReplayUpstreamUsage(t *testing.T) {
+	s := Open(filepath.Join(t.TempDir(), "usage.json"))
+	body := []byte(`{"usage":{"prompt_tokens":12,"completion_tokens":4}}`)
+	live := Event{AccountID: "a", Model: "m", Status: 200}
+	ApplyPublishedUsage(&live, body, false)
+	s.Add(live)
+	hit := Event{AccountID: "a", Model: "m", Status: 200}
+	ApplyPublishedUsage(&hit, body, true)
+	s.Add(hit)
+	days := s.ByDay()
+	if len(days) != 1 || days[0].Calls != 2 || days[0].PromptTokens != 12 || days[0].CompletionTokens != 4 {
+		t.Fatalf("%#v", days)
+	}
+	recent := s.Recent()
+	if len(recent) != 2 || !recent[0].CacheHit || recent[0].PromptTokens != 0 || !recent[0].TokensKnown {
+		t.Fatalf("%#v", recent)
+	}
+}
+
 func TestPersistAndReload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.json")

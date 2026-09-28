@@ -70,6 +70,18 @@ func TestDailyRollupSurvivesRingAndOmitsUnpricedCalls(t *testing.T) {
 	}
 }
 
+func TestCacheCountersStayOutOfPromptTokens(t *testing.T) {
+	s := Open("")
+	s.Add(Event{
+		Time: time.Now().UTC(), AccountID: "a", Status: 200, TokensKnown: true,
+		PromptTokens: 80, CompletionTokens: 10, CacheRead: 20, CacheWrite: 5,
+	})
+	days := s.ByDay()
+	if len(days) != 1 || days[0].PromptTokens != 80 || days[0].CacheRead != 20 || days[0].CacheWrite != 5 {
+		t.Fatalf("%#v", days)
+	}
+}
+
 func TestDailyRollupDropsDaysOlderThanRetention(t *testing.T) {
 	s := Open("")
 	old := time.Now().UTC().AddDate(0, 0, -120)

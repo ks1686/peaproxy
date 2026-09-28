@@ -39,10 +39,15 @@ expose:
 # Matching accounts for a model. Empty / omitted policy is round-robin.
 # fill-first: always start at the first hot account in YAML order.
 # sticky: keep the last successful account for that model until it cools or fails.
+# adaptive: prefer lower in-flight, then fewer errors, then lower latency.
 failover:
   policy: round-robin
   # sessionAffinity defaults on. Set false to rotate every request.
   # sessionAffinityTTL: 1h
+
+# requestEngine and automaticRoutes are omitted by default.
+# promptCache stays preserve, response cache stays off, and pea/* routes stay disabled.
+# See docs/V2.md.
 
 providers:
   - id: ollama-local

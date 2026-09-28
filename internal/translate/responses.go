@@ -350,6 +350,7 @@ func oneResponsesToolToChat(item json.RawMessage) (json.RawMessage, error) {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
 		Parameters  json.RawMessage `json:"parameters"`
+		Strict      *bool           `json:"strict,omitempty"`
 		Function    json.RawMessage `json:"function"`
 	}
 	if err := json.Unmarshal(item, &parsed); err != nil {
@@ -364,11 +365,13 @@ func oneResponsesToolToChat(item json.RawMessage) (json.RawMessage, error) {
 			Function struct {
 				Name        string          `json:"name"`
 				Description string          `json:"description,omitempty"`
+				Strict      *bool           `json:"strict,omitempty"`
 				Parameters  json.RawMessage `json:"parameters,omitempty"`
 			} `json:"function"`
 		}{Type: "function"}
 		tool.Function.Name = parsed.Name
 		tool.Function.Description = parsed.Description
+		tool.Function.Strict = parsed.Strict
 		tool.Function.Parameters = parsed.Parameters
 		return json.Marshal(tool)
 	}

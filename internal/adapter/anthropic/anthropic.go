@@ -81,7 +81,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	var list struct {
 		Data []struct {
@@ -164,7 +164,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return body, nil
 }
@@ -186,7 +186,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	_, err = io.Copy(w, resp.Body)
 	return err

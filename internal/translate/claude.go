@@ -496,8 +496,10 @@ func claudeImageURL(src *struct {
 }
 
 type claudeTool struct {
+	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
+	Strict      *bool           `json:"strict,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
@@ -506,6 +508,7 @@ type openAITool struct {
 	Function struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
+		Strict      *bool           `json:"strict,omitempty"`
 		Parameters  json.RawMessage `json:"parameters"`
 	} `json:"function"`
 }
@@ -517,9 +520,13 @@ func toolsToOpenAI(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	out := make([]openAITool, 0, len(tools))
 	for _, t := range tools {
+		if t.Type != "" && t.Type != "custom" {
+			return nil, fmt.Errorf("unsupported built-in tool %q", t.Type)
+		}
 		item := openAITool{Type: "function"}
 		item.Function.Name = t.Name
 		item.Function.Description = t.Description
+		item.Function.Strict = t.Strict
 		item.Function.Parameters = t.InputSchema
 		out = append(out, item)
 	}

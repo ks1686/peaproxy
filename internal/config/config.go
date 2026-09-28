@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/router"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,18 +26,20 @@ const (
 
 // Config is the on-disk schema. schemaVersion must be bumped on breaking changes.
 type Config struct {
-	SchemaVersion    int               `yaml:"schemaVersion"`
-	Bind             string            `yaml:"bind"`
-	Port             int               `yaml:"port"`
-	AdminToken       string            `yaml:"adminToken,omitempty"`
-	AllowNonLoopback bool              `yaml:"allowNonLoopback,omitempty"`
-	RequestLog       bool              `yaml:"requestLog,omitempty"`
-	Hide             HideList          `yaml:"hide"`
-	Expose           ExposeList        `yaml:"expose"`
-	Catalog          CatalogPrefs      `yaml:"catalog,omitempty"`
-	Failover         FailoverPrefs     `yaml:"failover,omitempty"`
-	Routes           map[string]string `yaml:"routes,omitempty"`
-	Providers        []Provider        `yaml:"providers"`
+	SchemaVersion    int                 `yaml:"schemaVersion"`
+	Bind             string              `yaml:"bind"`
+	Port             int                 `yaml:"port"`
+	AdminToken       string              `yaml:"adminToken,omitempty"`
+	AllowNonLoopback bool                `yaml:"allowNonLoopback,omitempty"`
+	RequestLog       bool                `yaml:"requestLog,omitempty"`
+	Hide             HideList            `yaml:"hide"`
+	Expose           ExposeList          `yaml:"expose"`
+	Catalog          CatalogPrefs        `yaml:"catalog,omitempty"`
+	Failover         FailoverPrefs       `yaml:"failover,omitempty"`
+	RequestEngine    RequestEnginePrefs  `yaml:"requestEngine,omitempty"`
+	AutomaticRoutes  AutomaticRoutePrefs `yaml:"automaticRoutes,omitempty"`
+	Routes           map[string]string   `yaml:"routes,omitempty"`
+	Providers        []Provider          `yaml:"providers"`
 }
 
 // HideList drops providers or model IDs from /v1/models and UI pickers.
@@ -97,6 +100,8 @@ func (c Config) FailoverPolicy() string {
 		return "fill-first"
 	case "sticky":
 		return "sticky"
+	case "adaptive":
+		return "adaptive"
 	default:
 		return "round-robin"
 	}
@@ -411,14 +416,29 @@ func (c Config) Validate() error {
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Failover.Policy)) {
-	case "", "round-robin", "fill-first", "sticky":
+	case "", "round-robin", "fill-first", "sticky", "adaptive":
 	default:
-		return fmt.Errorf("invalid failover.policy %q (want round-robin|fill-first|sticky)", c.Failover.Policy)
+		return fmt.Errorf("invalid failover.policy %q (want round-robin|fill-first|sticky|adaptive)", c.Failover.Policy)
+	}
+	for name := range c.Routes {
+		if router.Automatic(name) {
+			return fmt.Errorf("routes %q collides with an automatic route", name)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(c.RequestEngine.PromptCache)) {
+	case "", "preserve", "optimize", "off":
+	default:
+		return fmt.Errorf("invalid requestEngine.promptCache %q", c.RequestEngine.PromptCache)
 	}
 	if s := strings.TrimSpace(c.Failover.SessionAffinityTTL); s != "" {
 		d, err := time.ParseDuration(s)
 		if err != nil || d <= 0 {
 			return fmt.Errorf("invalid failover.sessionAffinityTTL %q", s)
+		}
+	}
+	if c.RequestEngine.MaxAttempts != 0 || strings.TrimSpace(c.RequestEngine.Deadline) != "" || strings.TrimSpace(c.RequestEngine.PreludeTimeout) != "" {
+		if err := c.validateRequestEngine(); err != nil {
+			return err
 		}
 	}
 	return nil

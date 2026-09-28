@@ -52,6 +52,7 @@ type Adapter struct {
 	pollInterval    time.Duration
 	mu              sync.Mutex
 	token           oauth.Token
+	generation      uint64
 	pending         *oauth.DeviceCode
 }
 
@@ -170,6 +171,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
 	a.mu.Lock()
+	a.generation++
 	a.token = tok
 	a.pending = nil
 	persist := a.persist
@@ -295,6 +297,7 @@ func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
+	seen := a.generation
 	a.mu.Unlock()
 	github := tok.RefreshToken
 	if github == "" {
@@ -309,14 +312,16 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if github == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := a.refresh(ctx, github)
+	next, err := oauth.DefaultRefresh.Do(ctx, "copilot:"+a.id, func(ctx context.Context) (oauth.Token, error) {
+		return a.refresh(ctx, github)
+	})
 	if err != nil {
 		return err
 	}
 	next = next.KeepExtra(tok)
 	next.RefreshToken = github
 	a.applyAPIBase(next.AccessToken)
-	return a.storeToken(next)
+	return oauth.CommitRefresh(&a.mu, &a.token, &a.generation, seen, next, a.persist)
 }
 
 func (a *Adapter) applyAPIBase(session string) {

@@ -75,6 +75,7 @@ type Adapter struct {
 	persist      func(oauth.Token) error
 	mu           sync.Mutex
 	token        oauth.Token
+	generation   uint64
 	pending      *pendingAuth
 	skipLoopback bool
 	deviceID     string
@@ -217,6 +218,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 		return err
 	}
 	a.mu.Lock()
+	a.generation++
 	a.token = tok
 	a.pending = nil
 	persist := a.persist
@@ -351,6 +353,7 @@ func tokenStatusError(status int, raw []byte) error {
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
+	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -361,18 +364,27 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := a.refresh(ctx, tok.RefreshToken)
+	next, err := oauth.DefaultRefresh.Do(ctx, "anthropic:"+a.id, func(ctx context.Context) (oauth.Token, error) {
+		return a.refresh(ctx, tok.RefreshToken)
+	})
 	if err != nil {
 		return err
 	}
 	a.mu.Lock()
-	a.token = next
+	latest := a.generation
+	current := a.token
+	kept, store, _ := oauth.KeepIfCurrent(seen, latest, current, next, nil)
+	if store && a.generation == seen {
+		a.token = kept
+	} else {
+		store = false
+	}
 	persist := a.persist
 	a.mu.Unlock()
-	if persist != nil {
-		_ = persist(next)
+	if !store || persist == nil {
+		return nil
 	}
-	return nil
+	return persist(kept)
 }
 
 func (a *Adapter) Validate(ctx context.Context) error {
@@ -492,7 +504,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return restoreOAuthToolNames(body, restore), nil
 }
@@ -517,7 +529,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	filter := &oAuthToolSSEFilter{dst: w, reverse: restore}
 	_, err = io.Copy(filter, resp.Body)

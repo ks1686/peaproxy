@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -659,6 +660,25 @@ func TestChatToResponsesForcesStoreFalse(t *testing.T) {
 				t.Fatalf("max_output_tokens must be omitted: %s", out)
 			}
 		})
+	}
+}
+
+func TestChatParsesRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "12")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("slow"))
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct", ExpiresAt: time.Now().Add(time.Hour)}
+	_, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gpt-5",
+		Raw:   []byte(`{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	var he adapter.HTTPError
+	if !errors.As(err, &he) || he.RetryAfter != 12*time.Second {
+		t.Fatalf("retry-after = %v err = %v", he.RetryAfter, err)
 	}
 }
 

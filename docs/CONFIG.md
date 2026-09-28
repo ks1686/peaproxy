@@ -27,6 +27,7 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 | `PEAPROXY_REQUEST_LOG` | same truthy values enable redacted `requests.log` |
 | `PEAPROXY_FAILOVER_POLICY` | `round-robin` (default), `fill-first`, or `sticky` |
 | `PEAPROXY_SECRET_BACKEND` | `file` forces the AES-GCM file next to the config; `keyring` requires the OS store (macOS Keychain / Windows Credential Manager / Linux Secret Service). Unset: try keyring, then file. `go test` always uses `file`. |
+| `PEAPROXY_CLIENT_ROOT` | Directory for managed harness connect/disconnect. Unset uses the home directory. Smoke tests set a temporary directory. |
 
 Prefer `apiKeyEnv` over inline `apiKey`. Inline keys and OAuth tokens are **not** written back to YAML; they go to the secret store. YAML still lists `providers[]` (id, adapter, email, expiry, non-secret extra).
 
@@ -94,12 +95,32 @@ failover:
 | `round-robin` | Rotate the starting hot account on each new conversation (default). |
 | `fill-first` | Always start at the first hot account in YAML `providers` order. |
 | `sticky` | Remember the last successful account per model and try it first; if it is cooled or fails, try the remaining hot accounts in YAML order and stick to whoever succeeds. |
+| `adaptive` | Prefer measured accounts with lower in-flight work, then fewer errors, then lower latency. Accounts with no measurements stay in YAML order after the measured ones. |
 
 Session affinity is separate from `sticky`. It keeps one conversation on the account that first succeeded, for `sessionAffinityTTL` (default 1 hour). The id comes from `X-Session-ID`, `X-Client-Request-Id`, `Session-Id`, `session_id`, `conversation_id`, a Claude metadata user id that already names a session, or a hash of the system prompt plus the first user turn. Later turns in that chat do not change the id. If the bound account is cooled, the next hot account takes the conversation. Set `sessionAffinity: false` to keep plain round-robin for identical chats. An empty `messages` list has no session, so those requests still rotate.
 
 Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider error bodies that look like rate-limit / quota, overloaded, or auth-expired. Cooldown reasons are those classes (`rate-limit`, `overloaded`, `auth-expired`) — not raw bodies (no secrets). Plain `400 invalid_request_error` does not fail over.
 
 `peaproxy config validate` prints the effective `failover.policy`. Health UI and `peaproxy health` still list active cooldowns with remaining time, plus quota remaining when a provider reports it.
+
+## Request engine
+
+`requestEngine` and `automaticRoutes` are optional. Omitted, they keep the schema-1 path: three attempts, a two-minute deadline, prompt-cache bytes left as the caller sent them, no response cache, and no `pea/*` route.
+
+```yaml
+requestEngine:
+  maxAttempts: 3
+  deadline: 2m
+  preludeTimeout: 5s
+  promptCache: preserve # preserve | optimize | off
+  cacheResponses: false
+  cacheEmbeddings: false
+  maxInFlight: 0 # 0 is unlimited
+automaticRoutes:
+  enabled: false
+```
+
+`promptCache: optimize` adds one Anthropic `cache_control` breakpoint only for a known profile and only when the caller is under that profile's limit. `off` does not strip caller breakpoints. Response caching is exact, in-memory, and skips tools, images, and continuation ids. `pea/auto`, `pea/economy`, `pea/local`, and `pea/free` are rejected as `routes` names. They select a live model only when `automaticRoutes.enabled` is true. Unknown prices are not free and do not win economy. An exact local model does not fail over to a cloud account that happens to advertise the same id.
 
 ## Request log
 

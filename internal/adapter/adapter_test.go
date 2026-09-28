@@ -347,6 +347,29 @@ func TestOpenAICompatGenerateImageProxiesGenerations(t *testing.T) {
 	}
 }
 
+func TestOpenRouterPriceDoesNotInventModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{{
+				"id":      "openai/gpt-4o",
+				"pricing": map[string]string{"prompt": "0.0000025", "completion": "0.00001"},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a, err := openrouter.New(adapter.Options{ID: "or", BaseURL: srv.URL + "/v1", APIKey: "or-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := a.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || !models[0].Price.Verified || models[0].Price.Input == nil || *models[0].Price.Input != 2.5 {
+		t.Fatalf("%#v", models)
+	}
+}
+
 func TestOpenRouterTagsFreeModelsAndHeaders(t *testing.T) {
 	var gotRef, gotTitle, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

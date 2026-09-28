@@ -56,6 +56,8 @@ type Model struct {
 	// AliasOf is the live catalog id a stable route name forwards to.
 	// Empty on rows that came from ListModels.
 	AliasOf string `json:"aliasOf,omitempty"`
+	// Price is present only when a live payload or an explicit override verified it.
+	Price Price `json:"price,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.

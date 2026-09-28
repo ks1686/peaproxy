@@ -442,6 +442,66 @@ func clientsCmd() *cobra.Command {
 	verify.Flags().BoolVar(&doChat, "chat", false, "Also POST a tiny completion using the first listed model")
 	verify.Flags().StringVar(&origin, "origin", "http://127.0.0.1:8317", "Gateway origin")
 	cmd.AddCommand(verify)
+	var root string
+	var model string
+	var baseURL string
+	layout := func() clients.Layout {
+		if root == "" {
+			home, _ := os.UserHomeDir()
+			return clients.Layout{Root: home}
+		}
+		return clients.Layout{Root: root}
+	}
+	detect := &cobra.Command{
+		Use:   "detect",
+		Short: "List managed harness configs under --root",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = args
+			found := layout().Detect()
+			if len(found) == 0 {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "none")
+				return nil
+			}
+			for _, item := range found {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", item.Name, item.Path)
+			}
+			return nil
+		},
+	}
+	connect := &cobra.Command{
+		Use:   "connect [name]",
+		Short: "Add the PeaProxy block to a managed harness config",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return layout().Connect(args[0], baseURL, model)
+		},
+	}
+	disconnect := &cobra.Command{
+		Use:   "disconnect [name]",
+		Short: "Remove only the PeaProxy block from a managed harness config",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return layout().Disconnect(args[0])
+		},
+	}
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show managed harness files under --root",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_ = args
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "root %s\n", layout().Root)
+			for _, item := range layout().Detect() {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\n", item.Name, item.Path)
+			}
+			return nil
+		},
+	}
+	for _, sub := range []*cobra.Command{detect, connect, disconnect, status} {
+		sub.Flags().StringVar(&root, "root", "", "Config directory (default: home). Tests and agents should pass a temp directory.")
+		cmd.AddCommand(sub)
+	}
+	connect.Flags().StringVar(&model, "model", "", "Model id to record")
+	connect.Flags().StringVar(&baseURL, "origin", "http://127.0.0.1:8317/v1", "Gateway base URL to record")
 	return cmd
 }
 

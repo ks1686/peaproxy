@@ -196,7 +196,7 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 8. **Free + custom providers** — including OpenCode Zen (CPA declined #6018).
 9. **Built-in usage / showcase** — CPA removed usage in v6.10+.
 
-What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md), [docs/RELEASING.md](docs/RELEASING.md).
+What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md), [docs/V2.md](docs/V2.md), [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Security
 

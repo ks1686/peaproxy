@@ -47,6 +47,7 @@ type Adapter struct {
 	pollInterval time.Duration
 	mu           sync.Mutex
 	token        oauth.Token
+	generation   uint64
 	pending      *oauth.DeviceCode
 }
 
@@ -186,6 +187,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
 	a.mu.Lock()
+	a.generation++
 	a.token = tok
 	if id := tok.ExtraGet(deviceExtra); id != "" {
 		a.deviceID = id
@@ -268,6 +270,7 @@ func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
+	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -278,12 +281,14 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := a.refresh(ctx, tok.RefreshToken)
+	next, err := oauth.DefaultRefresh.Do(ctx, "kimi:"+a.id, func(ctx context.Context) (oauth.Token, error) {
+		return a.refresh(ctx, tok.RefreshToken)
+	})
 	if err != nil {
 		return err
 	}
 	next = next.KeepExtra(tok)
-	return a.storeToken(next)
+	return oauth.CommitRefresh(&a.mu, &a.token, &a.generation, seen, next, a.persist)
 }
 
 func (a *Adapter) compat() (*oauthcompat.Tagged, error) {

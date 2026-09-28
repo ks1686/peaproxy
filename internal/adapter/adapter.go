@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/oauth"
@@ -78,10 +80,11 @@ type Message struct {
 
 // ChatResponse is a non-streaming completion.
 type ChatResponse struct {
-	ID      string
-	Model   string
-	Content string
-	Raw     []byte
+	ID       string
+	Model    string
+	Content  string
+	Raw      []byte
+	CacheHit bool
 }
 
 // AuthSession is an in-progress OAuth login (browser redirect, device code, …).
@@ -114,10 +117,34 @@ type Authenticator interface {
 // Factory builds an adapter from config fields.
 type Factory func(opts Options) (Adapter, error)
 
+// DeliveryCertainty says whether an upstream call is known to have reached
+// the provider. Unspecified means a completed HTTP response was observed.
+type DeliveryCertainty uint8
+
+const (
+	DeliveryUnspecified DeliveryCertainty = iota
+	DeliveryUncertain
+	DeliveryCompleted
+)
+
+// FailureScope is the narrowest cooldown justified by an observation.
+type FailureScope string
+
+const (
+	ScopeUnspecified FailureScope = ""
+	ScopeAccount     FailureScope = "account"
+	ScopeModel       FailureScope = "model"
+	ScopeEndpoint    FailureScope = "endpoint"
+)
+
 // HTTPError is an upstream HTTP failure. 429 is treated as retryable by the router.
+// Body is for callers that already surface upstream errors. Sanitized omits it.
 type HTTPError struct {
-	Status int
-	Body   string
+	Status     int
+	Body       string
+	RetryAfter time.Duration
+	Scope      FailureScope
+	Delivery   DeliveryCertainty
 }
 
 func (e HTTPError) Error() string {
@@ -125,6 +152,64 @@ func (e HTTPError) Error() string {
 		return fmt.Sprintf("upstream HTTP %d", e.Status)
 	}
 	return fmt.Sprintf("upstream HTTP %d: %s", e.Status, e.Body)
+}
+
+// Sanitized is safe for telemetry. It never includes the upstream body.
+func (e HTTPError) Sanitized() string {
+	return fmt.Sprintf("upstream HTTP %d", e.Status)
+}
+
+// NewHTTPError records a completed HTTP response, including Retry-After when present.
+func NewHTTPError(resp *http.Response, body string) HTTPError {
+	if resp == nil {
+		return HTTPError{Body: body, Delivery: DeliveryUncertain, Scope: ScopeAccount}
+	}
+	e := HTTPError{Status: resp.StatusCode, Body: body, Delivery: DeliveryCompleted, Scope: ScopeAccount}
+	e.RetryAfter = retryAfter(resp.Header, time.Now())
+	switch stringsScope(resp.Header.Get("X-Ratelimit-Scope")) {
+	case ScopeModel, ScopeEndpoint, ScopeAccount:
+		e.Scope = stringsScope(resp.Header.Get("X-Ratelimit-Scope"))
+	}
+	return e
+}
+
+func stringsScope(v string) FailureScope {
+	switch FailureScope(v) {
+	case ScopeModel, ScopeEndpoint, ScopeAccount:
+		return FailureScope(v)
+	default:
+		return ScopeUnspecified
+	}
+}
+
+func retryAfter(h http.Header, now time.Time) time.Duration {
+	v := h.Get("Retry-After")
+	if v == "" {
+		return 0
+	}
+	const maxWait = time.Hour
+	if sec, err := strconv.Atoi(v); err == nil {
+		if sec < 0 {
+			return 0
+		}
+		d := time.Duration(sec) * time.Second
+		if d > maxWait {
+			return maxWait
+		}
+		return d
+	}
+	when, err := http.ParseTime(v)
+	if err != nil {
+		return 0
+	}
+	d := when.Sub(now)
+	if d < 0 {
+		return 0
+	}
+	if d > maxWait {
+		return maxWait
+	}
+	return d
 }
 
 // Options is the generic constructor input for adapters.
@@ -230,6 +315,7 @@ type EmbeddingResponse struct {
 	Raw        []byte
 	Count      int
 	Dimensions int
+	CacheHit   bool
 }
 
 // Embedder is optional. API-key OpenAI-compat adapters that can POST

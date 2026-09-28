@@ -824,6 +824,7 @@ function clientsPage(root) {
         <div class="row snippet-actions">
           <button class="btn" data-copy>Copy snippet</button>
           <button class="btn" data-verify="${escapeHtml(c.verify || "")}">Copy verify</button>
+          ${["opencode", "continue", "codex", "claude-code"].includes(c.name) ? `<button class="btn" data-connect="${escapeHtml(c.name)}">Connect</button><button class="btn" data-disconnect="${escapeHtml(c.name)}">Disconnect</button><button class="btn" data-probe="${escapeHtml(c.name)}">Check</button>` : ""}
         </div>
         <pre>${escapeHtml(c.snippet)}</pre>
       </div>`
@@ -836,6 +837,42 @@ function clientsPage(root) {
             await navigator.clipboard.writeText(pre.textContent);
             btn.textContent = "Copied";
             toast("Copied preset", "ok");
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-connect]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.connect || "";
+          try {
+            await sendJSON("/admin/clients/" + encodeURIComponent(name) + "/connect", "POST", { model: "" });
+            btn.textContent = "Connected";
+            toast("Connected " + name, "ok");
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-disconnect]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.disconnect || "";
+          try {
+            await sendJSON("/admin/clients/" + encodeURIComponent(name) + "/disconnect", "POST", {});
+            btn.textContent = "Disconnected";
+            toast("Disconnected " + name, "ok");
+          } catch (err) {
+            toast(err.message);
+          }
+        });
+      });
+      document.querySelectorAll("[data-probe]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.probe || "";
+          try {
+            await sendJSON("/admin/clients/" + encodeURIComponent(name) + "/verify", "POST", {});
+            btn.textContent = "Checked";
+            toast("Checked " + name, "ok");
           } catch (err) {
             toast(err.message);
           }

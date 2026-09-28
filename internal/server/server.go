@@ -26,6 +26,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
 	"github.com/ks1686/peaproxy/internal/quota"
+	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/ui"
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -36,10 +37,11 @@ const maxBody = 8 << 20
 
 // Server is the localhost gateway (OpenAI + Claude + admin + UI).
 type Server struct {
-	gw        *gateway.Gateway
-	http      *http.Server
-	oauthMu   sync.Mutex
-	oauthJobs map[string]*oauthJob
+	gw         *gateway.Gateway
+	http       *http.Server
+	oauthMu    sync.Mutex
+	oauthJobs  map[string]*oauthJob
+	clientRoot string
 }
 
 type oauthJob struct {
@@ -51,14 +53,15 @@ type oauthJob struct {
 
 // Options wires dependencies for tests.
 type Options struct {
-	Gateway *gateway.Gateway
-	Config  config.Config
-	Models  []catalog.Model
+	Gateway    *gateway.Gateway
+	Config     config.Config
+	Models     []catalog.Model
+	ClientRoot string
 }
 
 // New builds an HTTP server that is not yet listening.
 func New(opts Options) *Server {
-	s := &Server{gw: opts.Gateway, oauthJobs: map[string]*oauthJob{}}
+	s := &Server{gw: opts.Gateway, oauthJobs: map[string]*oauthJob{}, clientRoot: opts.ClientRoot}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", s.handleOpenAIModels)
 	mux.HandleFunc("GET /v0/catalog", s.handleCatalogAPI)
@@ -83,6 +86,10 @@ func New(opts Options) *Server {
 	mux.HandleFunc("GET /admin/usage", admin(s.handleUsage))
 	mux.HandleFunc("GET /admin/requests", admin(s.handleRequests))
 	mux.HandleFunc("GET /admin/clients", admin(s.handleClients))
+	mux.HandleFunc("POST /admin/clients/{name}/connect", admin(s.handleClientConnect))
+	mux.HandleFunc("POST /admin/clients/{name}/disconnect", admin(s.handleClientDisconnect))
+	mux.HandleFunc("POST /admin/clients/{name}/verify", admin(s.handleClientVerify))
+	mux.HandleFunc("GET /admin/engine", admin(s.handleEngine))
 	mux.HandleFunc("POST /admin/oauth/start", admin(s.handleOAuthStart))
 	mux.HandleFunc("GET /admin/oauth/status", admin(s.handleOAuthStatus))
 	mux.HandleFunc("GET /admin/settings", admin(s.handleSettings))
@@ -182,7 +189,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw)
+	s.recordCall(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -290,7 +297,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw)
+	s.recordCall(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit)
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -662,7 +669,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, err)
 			return
 		}
-		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw)
+		s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"account":    account,
 			"model":      body.Model,
@@ -688,7 +695,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw)
+	s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account":  account,
 		"model":    body.Model,
@@ -852,10 +859,34 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func requestCtx(r *http.Request, raw []byte) context.Context {
-	return router.WithSession(r.Context(), router.SessionID(r.Header, raw))
+	session := router.SessionID(r.Header, raw)
+	ctx := router.WithSession(r.Context(), session)
+	wire := requestmeta.WireChat
+	switch r.URL.Path {
+	case "/v1/messages":
+		wire = requestmeta.WireMessages
+	case "/v1/responses":
+		wire = requestmeta.WireResponses
+	case "/v1/embeddings":
+		wire = requestmeta.WireEmbeddings
+	case "/v1/images/generations", "/v1/images/edits":
+		wire = requestmeta.WireImages
+	}
+	peek := jsonx.PeekBody(raw)
+	return requestmeta.WithRequest(ctx, requestmeta.Request{
+		ID:           r.Header.Get("X-Request-Id"),
+		SessionID:    session,
+		Model:        peek.Model,
+		Wire:         wire,
+		Requirements: requestmeta.RequirementsFromBody(wire, raw),
+	})
 }
 
 func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte) {
+	s.recordCall(account, model, proto, path, stream, status, err, preview, started, body, false)
+}
+
+func (s *Server) recordCall(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, cacheHit bool) {
 	if s.gw == nil || s.gw.Usage == nil {
 		return
 	}
@@ -870,12 +901,7 @@ func (s *Server) record(account, model, proto, path string, stream bool, status 
 		Preview:    preview,
 		DurationMS: time.Since(started).Milliseconds(),
 	}
-	if prompt, completion, cost, ok := usage.ParsePublishedUsage(body); ok {
-		e.PromptTokens = prompt
-		e.CompletionTokens = completion
-		e.TokensKnown = true
-		e.CostUSD = cost
-	}
+	usage.ApplyPublishedUsage(&e, body, cacheHit)
 	if err != nil {
 		e.Error = usage.Redact(err.Error())
 		if e.Status == 0 {

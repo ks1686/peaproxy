@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/config"
@@ -25,6 +26,6 @@ func runServe(out io.Writer, cfg config.Config, path string, created bool) error
 	}
 	gw.Refresh(context.Background())
 	_, _ = fmt.Fprintf(out, "catalog: %d models (live ListModels; hide is listing-only)\n", len(gw.Models()))
-	srv := server.New(server.Options{Gateway: gw})
+	srv := server.New(server.Options{Gateway: gw, ClientRoot: os.Getenv("PEAPROXY_CLIENT_ROOT")})
 	return srv.ListenAndServe()
 }

@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "profiles": {
+    "anthropic-claude": {"tools": "yes", "vision": "yes", "cache": "preserve"}
+  }
+}

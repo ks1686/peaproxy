@@ -9,6 +9,27 @@ import (
 // SSE chunk. Token counts are returned only when the provider sent the field,
 // including an explicit 0. cost is set only for a numeric usage.cost.
 // A body with no usage object returns found=false and a nil cost.
+// ApplyPublishedUsage copies provider usage onto an event.
+// A cache hit records that tokens are known and zero, and does not replay the cached body's usage.
+func ApplyPublishedUsage(e *Event, body []byte, cacheHit bool) {
+	if e == nil {
+		return
+	}
+	if cacheHit {
+		e.CacheHit = true
+		e.TokensKnown = true
+		return
+	}
+	prompt, completion, cost, ok := ParsePublishedUsage(body)
+	if !ok {
+		return
+	}
+	e.PromptTokens = prompt
+	e.CompletionTokens = completion
+	e.TokensKnown = true
+	e.CostUSD = cost
+}
+
 func ParsePublishedUsage(body []byte) (prompt, completion int, cost *float64, found bool) {
 	if p, c, price, ok := decodeUsageBody(body); ok {
 		return p, c, price, true

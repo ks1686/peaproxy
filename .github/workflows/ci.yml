@@ -7,7 +7,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -19,6 +22,17 @@ jobs:
         run: go test ./...
       - name: Build
         run: go build ./...
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Race
+        env:
+          PEAPROXY_SECRET_BACKEND: file
+        run: go test -race ./internal/gateway ./internal/router ./internal/responsecache ./internal/oauth ./internal/streamguard ./internal/server
       - name: GoReleaser check
         uses: goreleaser/goreleaser-action@v6
         with:

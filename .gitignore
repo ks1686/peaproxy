@@ -19,6 +19,9 @@ coverage.html
 go.work
 go.work.sum
 
+# Node smoke runner
+scripts/node_modules/
+
 # IDE / OS
 .idea/
 .vscode/

@@ -19,9 +19,12 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/localruntime"
 	"github.com/ks1686/peaproxy/internal/oauth"
 	"github.com/ks1686/peaproxy/internal/quota"
+	"github.com/ks1686/peaproxy/internal/responsecache"
 	"github.com/ks1686/peaproxy/internal/router"
+	"github.com/ks1686/peaproxy/internal/streamguard"
 	"github.com/ks1686/peaproxy/internal/translate"
 	"github.com/ks1686/peaproxy/internal/usage"
 )
@@ -33,19 +36,24 @@ var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
-	mu       sync.RWMutex
-	cfg      config.Config
-	path     string
-	reg      *adapter.Registry
-	inst     []instance
-	models   []catalog.Model
-	Usage    *usage.Store
-	cool     map[string]Cooldown
-	rr       uint64
-	sticky   map[string]string
-	affinity map[string]affinityBind
-	health   []AdapterHealth
-	quota    *quota.Store
+	mu            sync.RWMutex
+	cfg           config.Config
+	path          string
+	reg           *adapter.Registry
+	inst          []instance
+	models        []catalog.Model
+	Usage         *usage.Store
+	cool          map[string]Cooldown
+	rr            uint64
+	sticky        map[string]string
+	affinity      map[string]affinityBind
+	continuations map[string]continuationBind
+	accountStats  map[string]router.AccountStat
+	admission     *router.Gate
+	responses     *responsecache.Cache
+	flight        *responsecache.Flight
+	health        []AdapterHealth
+	quota         *quota.Store
 }
 
 // Cooldown is a temporary skip of an account after a retryable failure.
@@ -55,6 +63,7 @@ type Cooldown struct {
 	Reason      string    `json:"reason"`
 	RemainingMs int64     `json:"remainingMs"`
 	QuotaHint   string    `json:"quotaHint,omitempty"`
+	Model       string    `json:"model,omitempty"`
 }
 
 // AdapterHealth is last ListModels/Validate status for the Health UI.
@@ -85,7 +94,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, quota: quota.NewStore()}
+	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, continuations: map[string]continuationBind{}, accountStats: map[string]router.AccountStat{}, admission: &router.Gate{}, flight: &responsecache.Flight{}, quota: quota.NewStore()}
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -158,6 +167,13 @@ func (g *Gateway) Config() config.Config {
 // SetConfigPath updates the save target.
 func (g *Gateway) SetConfigPath(path string) { g.path = path }
 
+// SetConfig replaces the in-memory config. It does not write the YAML file.
+func (g *Gateway) SetConfig(cfg config.Config) {
+	g.mu.Lock()
+	g.cfg = cfg
+	g.mu.Unlock()
+}
+
 // Query is the current listing query.
 func (g *Gateway) Query() catalog.Query {
 	g.mu.RLock()
@@ -195,6 +211,7 @@ func (g *Gateway) Refresh(ctx context.Context) {
 			Capabilities: inst.Adapter.Capabilities(),
 		}
 		if err != nil {
+			g.observeLatency(inst.Provider.ID, time.Since(start), err)
 			h.Status = "error"
 			h.Error = usage.Redact(err.Error())
 			all = append(all, catalog.Model{
@@ -211,6 +228,15 @@ func (g *Gateway) Refresh(ctx context.Context) {
 		}
 		h.Status = "ok"
 		h.Models = len(models)
+		if inst.Provider.Adapter == "ollama" {
+			snap := localruntime.ProbeLoopback(ctx, inst.Provider.BaseURL, nil)
+			if snap.State == localruntime.StateLoading {
+				for i := range models {
+					models[i].Status = string(localruntime.StateLoading)
+				}
+			}
+		}
+		g.observeLatency(inst.Provider.ID, time.Since(start), nil)
 		health = append(health, h)
 		all = append(all, models...)
 	}
@@ -302,37 +328,80 @@ func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, string, error) {
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
+	for _, inst := range cands {
+		if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
+			hit.Raw = echoClientModel(hit.Raw, client, model)
+			if client != model {
+				hit.Model = client
+			}
+			return hit, inst.Provider.ID, nil
+		}
+	}
 	var last error
 	var lastAccount string
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		var resp adapter.ChatResponse
 		var callErr error
-		for attempt := 0; attempt < 2; attempt++ {
-			resp, callErr = inst.Adapter.Chat(ctx, chatReq(inst, model, raw, false, budget))
-			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
-				break
+		callUpstream := func(runCtx context.Context) (adapter.ChatResponse, error) {
+			var once adapter.ChatResponse
+			var onceErr error
+			for attempt := 0; attempt < 2; attempt++ {
+				if err := budgetAttempts.take(); err != nil {
+					return adapter.ChatResponse{}, errAttemptBudgetExhausted
+				}
+				release, aerr := g.admit(runCtx, inst.Provider.ID)
+				if aerr != nil {
+					return adapter.ChatResponse{}, aerr
+				}
+				once, onceErr = inst.Adapter.Chat(runCtx, chatReq(inst, model, g.promptBody(raw, inst.Provider.Adapter), false, budget))
+				release()
+				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
+					break
+				}
 			}
+			return once, onceErr
+		}
+		if coalesce && g.flight != nil {
+			var body []byte
+			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
+				once, err := callUpstream(runCtx)
+				if err != nil {
+					return nil, err
+				}
+				return once.Raw, nil
+			})
+			if callErr == nil {
+				resp.Raw = body
+			}
+		} else {
+			resp, callErr = callUpstream(ctx)
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			resp.Raw = echoClientModel(resp.Raw, client, model)
 			if client != model {
 				resp.Model = client
 			}
+			g.storeChat(lastAccount, inst.Provider.BaseURL, model, raw, resp.Raw)
 			return resp, lastAccount, nil
 		}
 		last = callErr
 		if retryable(callErr) || router.Transient(callErr) {
-			g.markCooldown(inst.Provider.ID, callErr)
+			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return adapter.ChatResponse{}, lastAccount, callErr
@@ -340,40 +409,70 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	return adapter.ChatResponse{}, lastAccount, cooldownErr(last)
 }
 
+// streamPrelude keeps the configured first-event limit, and lengthens it only
+// while a local model is still loading. The request deadline is unchanged.
+func (g *Gateway) streamPrelude(model string) time.Duration {
+	base := g.cfg.StreamPreludeTimeout()
+	const coldStart = 30 * time.Second
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, m := range g.models {
+		if m.ID == model && m.Tier == catalog.TierLocal && m.Status == string(localruntime.StateLoading) && base < coldStart {
+			return coldStart
+		}
+	}
+	return base
+}
+
+func (g *Gateway) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, g.cfg.RequestDeadline())
+}
+
 // ChatStream proxies SSE with failover before any bytes are written.
 func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return "", err
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return "", err
 	}
 	cw := &countWriter{w: w}
-	dest := newRouteRewriter(cw, model, client)
+	guard := streamguard.New(cw, 0, g.streamPrelude(model))
+	dest := newRouteRewriter(guard, model, client)
 	var last error
 	var lastAccount string
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
+			if err := budgetAttempts.take(); err != nil {
+				return lastAccount, errAttemptBudgetExhausted
+			}
+			guard.Reset()
 			before := cw.n
-			callErr = inst.Adapter.ChatStream(ctx, chatReq(inst, model, raw, true, budget), dest)
-			if callErr == nil || cw.n > before || !router.Transient(callErr) || attempt == 1 {
+			attemptCtx, stop := guard.Bound(ctx)
+			callErr = noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, model, raw, true, budget), dest))
+			stop()
+			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !preludeFailover(callErr)) || attempt == 1 {
 				break
 			}
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			return lastAccount, nil
 		}
 		last = callErr
 		if cw.n > 0 {
 			return lastAccount, callErr
 		}
-		if retryable(callErr) || router.Transient(callErr) {
-			g.markCooldown(inst.Provider.ID, callErr)
+		if retryable(callErr) || router.Transient(callErr) || preludeFailover(callErr) {
+			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return lastAccount, callErr
@@ -404,7 +503,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	if !g.supportsImageOut(model) {
 		return adapter.ImageResponse{}, "", adapter.ErrModelNotImageOut
 	}
-	cands, session, err := g.route(ctx, body, model)
+	model, cands, session, err := g.routeResolved(ctx, body, model)
 	if err != nil {
 		return adapter.ImageResponse{}, "", err
 	}
@@ -419,16 +518,13 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 			continue
 		}
 		tried = true
-		var resp adapter.ImageResponse
-		var callErr error
-		for attempt := 0; attempt < 2; attempt++ {
-			resp, callErr = ed.EditImage(ctx, adapter.ImageRequest{Model: model, Raw: body, ContentType: contentType})
-			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
-				break
-			}
+		resp, callErr := ed.EditImage(ctx, adapter.ImageRequest{Model: model, Raw: body, ContentType: contentType})
+		if stop := ambiguousDelivery(callErr); stop != nil {
+			return adapter.ImageResponse{}, lastAccount, stop
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			if !strings.Contains(strings.ToLower(contentType), "multipart/") {
 				resp.Raw = echoClientModel(resp.Raw, client, model)
 			}
@@ -436,7 +532,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 		}
 		last = callErr
 		if retryable(callErr) || router.Transient(callErr) {
-			g.markCooldown(inst.Provider.ID, callErr)
+			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return adapter.ImageResponse{}, lastAccount, callErr
@@ -479,7 +575,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	if !g.supportsImageOut(model) {
 		return adapter.ImageResponse{}, "", adapter.ErrModelNotImageOut
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return adapter.ImageResponse{}, "", err
 	}
@@ -494,22 +590,19 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 			continue
 		}
 		tried = true
-		var resp adapter.ImageResponse
-		var callErr error
-		for attempt := 0; attempt < 2; attempt++ {
-			resp, callErr = gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
-			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
-				break
-			}
+		resp, callErr := gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
+		if stop := ambiguousDelivery(callErr); stop != nil {
+			return adapter.ImageResponse{}, lastAccount, stop
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			resp.Raw = echoClientModel(resp.Raw, client, model)
 			return resp, lastAccount, nil
 		}
 		last = callErr
 		if retryable(callErr) || router.Transient(callErr) {
-			g.markCooldown(inst.Provider.ID, callErr)
+			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return adapter.ImageResponse{}, lastAccount, callErr
@@ -548,9 +641,15 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	if !g.supportsEmbeddings(model) {
 		return adapter.EmbeddingResponse{}, "", adapter.ErrModelNotEmbeddings
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return adapter.EmbeddingResponse{}, "", err
+	}
+	for _, inst := range cands {
+		if hit, ok := g.cachedEmbeddings(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
+			hit.Raw = echoClientModel(hit.Raw, client, model)
+			return hit, inst.Provider.ID, nil
+		}
 	}
 	var last error
 	var lastAccount string
@@ -565,20 +664,42 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		tried = true
 		var resp adapter.EmbeddingResponse
 		var callErr error
-		for attempt := 0; attempt < 2; attempt++ {
-			resp, callErr = emb.CreateEmbeddings(ctx, adapter.EmbeddingRequest{Model: model, Raw: raw})
-			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
-				break
+		callUpstream := func(runCtx context.Context) (adapter.EmbeddingResponse, error) {
+			var once adapter.EmbeddingResponse
+			var onceErr error
+			for attempt := 0; attempt < 2; attempt++ {
+				once, onceErr = emb.CreateEmbeddings(runCtx, adapter.EmbeddingRequest{Model: model, Raw: raw})
+				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
+					break
+				}
 			}
+			return once, onceErr
+		}
+		if g.flight != nil && g.cfg.RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
+			var body []byte
+			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
+				once, err := callUpstream(runCtx)
+				if err != nil {
+					return nil, err
+				}
+				return once.Raw, nil
+			})
+			if callErr == nil {
+				resp.Raw = body
+			}
+		} else {
+			resp, callErr = callUpstream(ctx)
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			resp.Raw = echoClientModel(resp.Raw, client, model)
+			g.storeEmbeddings(lastAccount, inst.Provider.BaseURL, model, raw, resp.Raw)
 			return resp, lastAccount, nil
 		}
 		last = callErr
 		if retryable(callErr) || router.Transient(callErr) {
-			g.markCooldown(inst.Provider.ID, callErr)
+			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return adapter.EmbeddingResponse{}, lastAccount, callErr
@@ -604,13 +725,19 @@ func (g *Gateway) supportsEmbeddings(id string) bool {
 
 // Responses uses native Responses when available, otherwise OpenAI chat translation.
 func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, error) {
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return nil, "", err
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return nil, "", err
+	}
+	cands = continuationFirst(cands, g.continuationAccount(previousResponseID(raw), model))
+	if len(cands) == 0 {
+		return nil, "", router.ErrNoAccount
 	}
 	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
 	if xerr == nil {
@@ -619,17 +746,23 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 	}
 	var last error
 	var lastAccount string
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
+			if err := budgetAttempts.take(); err != nil {
+				return nil, lastAccount, errAttemptBudgetExhausted
+			}
 			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
+				g.rememberSuccess(session, client, lastAccount)
+				g.bindContinuation(responseID(out), model, lastAccount)
 				return echoClientModel(out, client, model), lastAccount, nil
 			}
 			last = err
 			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, err)
+				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
 			return nil, lastAccount, err
@@ -641,6 +774,9 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		var resp adapter.ChatResponse
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
+			if err := budgetAttempts.take(); err != nil {
+				return nil, lastAccount, errAttemptBudgetExhausted
+			}
 			resp, callErr = inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
 				break
@@ -649,7 +785,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if callErr != nil {
 			last = callErr
 			if retryable(callErr) || router.Transient(callErr) {
-				g.markCooldown(inst.Provider.ID, callErr)
+				g.markCooldown(inst.Provider.ID, model, callErr)
 				continue
 			}
 			return nil, lastAccount, callErr
@@ -658,12 +794,14 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 			out, ferr := translate.FromOpenAIChat(resp.Raw, client)
 			if ferr == nil {
 				g.rememberSuccess(session, model, lastAccount)
+				g.rememberSuccess(session, client, lastAccount)
 				return echoClientModel(out, client, model), lastAccount, nil
 			}
 		}
 		out, err := translate.FromChatContent(resp.ID, client, resp.Content)
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 		}
 		return echoClientModel(out, client, model), lastAccount, err
 	}
@@ -681,11 +819,13 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 
 // ResponsesStream writes Responses SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return "", err
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return "", err
 	}
@@ -695,15 +835,24 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		oaReq.Stream = true
 	}
 	cw := &countWriter{w: w}
-	dest := newRouteRewriter(cw, model, client)
+	guard := streamguard.New(cw, 0, g.streamPrelude(model))
+	dest := newRouteRewriter(guard, model, client)
 	var last error
 	var lastAccount string
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
-			err := nr.ResponsesStream(ctx, jsonx.SetStream(raw, true), dest)
+			if err := budgetAttempts.take(); err != nil {
+				return lastAccount, errAttemptBudgetExhausted
+			}
+			guard.Reset()
+			attemptCtx, stop := guard.Bound(ctx)
+			err := noteStream(guard, nr.ResponsesStream(attemptCtx, jsonx.SetStream(raw, true), dest))
+			stop()
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
+				g.rememberSuccess(session, client, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -711,7 +860,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 				return lastAccount, err
 			}
 			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, err)
+				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
 			return lastAccount, err
@@ -720,17 +869,24 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			last = xerr
 			continue
 		}
+		if err := budgetAttempts.take(); err != nil {
+			return lastAccount, errAttemptBudgetExhausted
+		}
+		guard.Reset()
+		attemptCtx, stop := guard.Bound(ctx)
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- translate.OpenAISSEToResponses(pr, cw, model)
+			errCh <- translate.OpenAISSEToResponses(pr, guard, model)
 			_ = pr.Close()
 		}()
-		err := inst.Adapter.ChatStream(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw)
+		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
+		stop()
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -738,7 +894,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			return lastAccount, err
 		}
 		if retryable(err) {
-			g.markCooldown(inst.Provider.ID, err)
+			g.markCooldown(inst.Provider.ID, model, err)
 			continue
 		}
 		return lastAccount, err
@@ -757,11 +913,13 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 
 // ClaudeChat uses native Messages when available, otherwise OpenAI translation.
 func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, error) {
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return nil, "", err
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -772,17 +930,22 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	}
 	var last error
 	var lastAccount string
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
-			out, err := nm.Messages(ctx, jsonx.SetStream(claudeRaw(raw, budget), false))
+			if err := budgetAttempts.take(); err != nil {
+				return nil, lastAccount, errAttemptBudgetExhausted
+			}
+			out, err := nm.Messages(ctx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), false))
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
+				g.rememberSuccess(session, client, lastAccount)
 				return echoClientModel(out, client, model), lastAccount, nil
 			}
 			last = err
 			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, err)
+				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
 			return nil, lastAccount, err
@@ -791,11 +954,14 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 			last = xerr
 			continue
 		}
+		if err := budgetAttempts.take(); err != nil {
+			return nil, lastAccount, errAttemptBudgetExhausted
+		}
 		resp, err := inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 		if err != nil {
 			last = err
 			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, err)
+				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
 			return nil, lastAccount, err
@@ -817,6 +983,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		out, err := translate.FromOpenAI(oaRaw, client)
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 		}
 		return echoClientModel(out, client, model), lastAccount, err
 	}
@@ -834,11 +1001,13 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 
 // ClaudeChatStream writes true Anthropic SSE (native pass-through or converted OpenAI stream).
 func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer) (string, error) {
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	if err != nil {
 		return "", err
 	}
-	cands, session, err := g.route(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model)
 	if err != nil {
 		return "", err
 	}
@@ -848,15 +1017,24 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		oaReq.Stream = true
 	}
 	cw := &countWriter{w: w}
-	dest := newRouteRewriter(cw, model, client)
+	guard := streamguard.New(cw, 0, g.streamPrelude(model))
+	dest := newRouteRewriter(guard, model, client)
 	var last error
 	var lastAccount string
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
-			err := nm.MessagesStream(ctx, jsonx.SetStream(claudeRaw(raw, budget), true), dest)
+			if err := budgetAttempts.take(); err != nil {
+				return lastAccount, errAttemptBudgetExhausted
+			}
+			guard.Reset()
+			attemptCtx, stop := guard.Bound(ctx)
+			err := noteStream(guard, nm.MessagesStream(attemptCtx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest))
+			stop()
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
+				g.rememberSuccess(session, client, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -864,7 +1042,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 				return lastAccount, err
 			}
 			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, err)
+				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
 			return lastAccount, err
@@ -873,17 +1051,24 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			last = xerr
 			continue
 		}
+		if err := budgetAttempts.take(); err != nil {
+			return lastAccount, errAttemptBudgetExhausted
+		}
+		guard.Reset()
+		attemptCtx, stop := guard.Bound(ctx)
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- translate.OpenAISSEToClaude(pr, cw, model)
+			errCh <- translate.OpenAISSEToClaude(pr, guard, model)
 			_ = pr.Close()
 		}()
-		err := inst.Adapter.ChatStream(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw)
+		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
+		stop()
 		_ = pw.Close()
 		convErr := <-errCh
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
+			g.rememberSuccess(session, client, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -891,7 +1076,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			return lastAccount, err
 		}
 		if retryable(err) {
-			g.markCooldown(inst.Provider.ID, err)
+			g.markCooldown(inst.Provider.ID, model, err)
 			continue
 		}
 		return lastAccount, err
@@ -929,6 +1114,25 @@ type countWriter struct {
 	n int
 }
 
+func noteStream(guard *streamguard.Guard, callErr error) error {
+	if guard == nil {
+		return callErr
+	}
+	if callErr == nil {
+		if err := guard.Finish(); err != nil {
+			return err
+		}
+	}
+	if perr := guard.Err(); perr != nil && (callErr == nil || errors.Is(callErr, context.Canceled) || errors.Is(callErr, context.DeadlineExceeded)) {
+		return perr
+	}
+	return callErr
+}
+
+func preludeFailover(err error) bool {
+	return errors.Is(err, streamguard.ErrPrelude) || errors.Is(err, streamguard.ErrTimeout)
+}
+
 func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += n
@@ -944,8 +1148,22 @@ func cooldownErr(last error) error {
 }
 
 func (g *Gateway) rememberSuccess(session, model, account string) {
+	if g.admission != nil {
+		g.admission.EndHalfOpen(account)
+	}
+	g.mu.Lock()
+	g.noteStatLocked(account, nil, 0)
+	g.mu.Unlock()
 	g.rememberSticky(model, account)
 	g.bindAffinity(session, model, account)
+}
+
+func (g *Gateway) admit(ctx context.Context, account string) (func(), error) {
+	if g.admission == nil || g.cfg.RequestEngine.MaxInFlight <= 0 {
+		return func() {}, nil
+	}
+	g.admission.MaxInFlight = g.cfg.RequestEngine.MaxInFlight
+	return g.admission.Acquire(ctx, account)
 }
 
 func (g *Gateway) bindAffinity(session, model, account string) {
@@ -998,19 +1216,59 @@ func (g *Gateway) route(ctx context.Context, raw []byte, model string) ([]instan
 	return cands, session, nil
 }
 
-func (g *Gateway) markCooldown(id string, err error) {
+func (g *Gateway) markCooldown(id, model string, err error) {
+	if g.admission != nil {
+		g.admission.EndHalfOpen(id)
+	}
 	class := router.Classify(err)
 	reason := class.String()
 	if class == router.FailoverNone {
 		reason = "failover"
 	}
+	wait := cooldownTTL
+	var scopedModel string
 	var he adapter.HTTPError
 	if errors.As(err, &he) {
 		reason = fmt.Sprintf("HTTP %d (%s)", he.Status, reason)
+		if he.RetryAfter > 0 {
+			wait = he.RetryAfter
+		}
+		if he.Scope == adapter.ScopeModel {
+			scopedModel = model
+		}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.cool[id] = Cooldown{AccountID: id, Until: time.Now().Add(cooldownTTL), Reason: reason}
+	g.noteStatLocked(id, err, 0)
+	g.cool[id] = Cooldown{AccountID: id, Model: scopedModel, Until: time.Now().Add(wait), Reason: reason}
+}
+
+func (g *Gateway) observeLatency(account string, latency time.Duration, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.noteStatLocked(account, err, latency)
+}
+
+func (g *Gateway) noteStatLocked(account string, err error, latency time.Duration) {
+	if account == "" {
+		return
+	}
+	if g.accountStats == nil {
+		g.accountStats = map[string]router.AccountStat{}
+	}
+	stat := g.accountStats[account]
+	stat.Known = true
+	if err != nil {
+		stat.Errors++
+	}
+	if latency > 0 {
+		if stat.Latency == 0 {
+			stat.Latency = latency
+		} else {
+			stat.Latency = (stat.Latency*3 + latency) / 4
+		}
+	}
+	g.accountStats[account] = stat
 }
 
 // Cooldowns returns active account cooldowns for the Health UI.
@@ -1158,9 +1416,11 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
+	expired := map[string]struct{}{}
 	for id, c := range g.cool {
 		if !now.Before(c.Until) {
 			delete(g.cool, id)
+			expired[id] = struct{}{}
 		}
 	}
 	q := g.queryLocked()
@@ -1183,9 +1443,15 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	hot := make([]instance, 0, len(matched))
 	var until time.Time
 	for _, inst := range matched {
-		if c, ok := g.cool[inst.Provider.ID]; ok && now.Before(c.Until) {
+		if c, ok := g.cool[inst.Provider.ID]; ok && now.Before(c.Until) && (c.Model == "" || c.Model == model) {
 			if until.IsZero() || c.Until.Before(until) {
 				until = c.Until
+			}
+			continue
+		}
+		if _, just := expired[inst.Provider.ID]; just && g.admission != nil && !g.admission.TryHalfOpen(inst.Provider.ID) {
+			if until.IsZero() {
+				until = now.Add(time.Second)
 			}
 			continue
 		}
@@ -1213,7 +1479,20 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	for _, id := range ordered {
 		out = append(out, byID[id])
 	}
-	return out, 0
+	if router.NormalizePolicy(router.Policy(g.cfg.Failover.Policy)) == router.PolicyAdaptive {
+		ids := make([]string, len(out))
+		by := map[string]instance{}
+		for i, inst := range out {
+			ids[i] = inst.Provider.ID
+			by[inst.Provider.ID] = inst
+		}
+		ordered = router.AdaptiveOrder(ids, g.accountStats)
+		out = out[:0]
+		for _, id := range ordered {
+			out = append(out, by[id])
+		}
+	}
+	return filterExactLocal(model, g.models, out), 0
 }
 
 // SetRequestLog toggles the opt-in redacted JSONL log and persists config.
@@ -1282,6 +1561,14 @@ func (g *Gateway) RemoveProvider(ctx context.Context, id string) error {
 		}
 	}
 	g.cfg.Providers = kept
+	for responseID, bind := range g.continuations {
+		if bind.Account == id {
+			delete(g.continuations, responseID)
+		}
+	}
+	if g.responses != nil {
+		g.responses.InvalidatePrefix(id + "\x00")
+	}
 	_ = g.rebuild()
 	path, cfg := g.path, g.cfg
 	g.mu.Unlock()

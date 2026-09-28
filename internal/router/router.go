@@ -18,6 +18,7 @@ const (
 	PolicyFillFirst  Policy = "fill-first"
 	PolicyRoundRobin Policy = "round-robin"
 	PolicySticky     Policy = "sticky"
+	PolicyAdaptive   Policy = "adaptive"
 )
 
 // ErrNoAccount means every candidate failed or none matched.

@@ -373,6 +373,24 @@ func TestValidateRoutes(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	cfg = config.Default()
+	cfg.Routes = map[string]string{"pea/auto": "llama3.2"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "automatic") {
+		t.Fatalf("alias collision: %v", err)
+	}
+}
+
+func TestRouteAliasCollisionRejected(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routes = map[string]string{"pea/free": "llama3.2"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "automatic") {
+		t.Fatalf("error = %v", err)
+	}
+	cfg = config.Default()
+	cfg.Failover.Policy = "adaptive"
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestValidateCatalogOverlays(t *testing.T) {

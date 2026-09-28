@@ -54,6 +54,7 @@ type Adapter struct {
 	flow         string
 	mu           sync.Mutex
 	token        oauth.Token
+	generation   uint64
 	pending      *pendingAuth
 	skipLoopback bool
 }
@@ -296,6 +297,7 @@ func (a *Adapter) completeDevice(ctx context.Context, pending *pendingAuth) erro
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
 	a.mu.Lock()
+	a.generation++
 	a.token = tok
 	a.pending = nil
 	persist := a.persist
@@ -356,6 +358,7 @@ func (a *Adapter) postForm(ctx context.Context, form url.Values) (oauth.Token, e
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
+	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -366,7 +369,9 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := a.refresh(ctx, tok.RefreshToken)
+	next, err := oauth.DefaultRefresh.Do(ctx, "openai:"+a.id, func(ctx context.Context) (oauth.Token, error) {
+		return a.refresh(ctx, tok.RefreshToken)
+	})
 	if err != nil {
 		return err
 	}
@@ -376,7 +381,19 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if next.Email == "" {
 		next.Email = tok.Email
 	}
-	return a.storeToken(next)
+	a.mu.Lock()
+	kept, store, _ := oauth.KeepIfCurrent(seen, a.generation, a.token, next, nil)
+	if store && a.generation == seen {
+		a.token = kept
+	} else {
+		store = false
+	}
+	persist := a.persist
+	a.mu.Unlock()
+	if !store || persist == nil {
+		return nil
+	}
+	return persist(kept)
 }
 
 func (a *Adapter) Validate(ctx context.Context) error {
@@ -513,7 +530,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	return responsesSSEToOpenAI(resp.Body, w, req.Model)
 }
@@ -536,7 +553,7 @@ func (a *Adapter) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	_, err = io.Copy(w, resp.Body)
 	return err
@@ -553,7 +570,7 @@ func (a *Adapter) postResponses(ctx context.Context, raw []byte, stream bool) ([
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return body, nil
 }

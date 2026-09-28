@@ -33,6 +33,8 @@ type DayRollup struct {
 	Errors           int      `json:"errors"`
 	PromptTokens     int      `json:"promptTokens,omitempty"`
 	CompletionTokens int      `json:"completionTokens,omitempty"`
+	CacheRead        int      `json:"cacheRead,omitempty"`
+	CacheWrite       int      `json:"cacheWrite,omitempty"`
 	CostUSD          *float64 `json:"costUSD,omitempty"`
 	CostCalls        int      `json:"costCalls,omitempty"`
 }
@@ -48,6 +50,8 @@ type Event struct {
 	Stream           bool      `json:"stream"`
 	PromptTokens     int       `json:"promptTokens,omitempty"`
 	CompletionTokens int       `json:"completionTokens,omitempty"`
+	CacheRead        int       `json:"cacheRead,omitempty"`
+	CacheWrite       int       `json:"cacheWrite,omitempty"`
 	TokensKnown      bool      `json:"tokensKnown,omitempty"`
 	CostUSD          *float64  `json:"costUSD,omitempty"`
 	Status           int       `json:"status"`
@@ -55,6 +59,7 @@ type Event struct {
 	Preview          string    `json:"preview,omitempty"`
 	DurationMS       int64     `json:"durationMs,omitempty"`
 	QuotaHint        string    `json:"quotaHint,omitempty"`
+	CacheHit         bool      `json:"cacheHit,omitempty"`
 }
 
 // AccountRollup is a per-account summary.
@@ -371,6 +376,8 @@ func bumpDay(row *DayRollup, e Event) {
 	if e.TokensKnown {
 		row.PromptTokens += e.PromptTokens
 		row.CompletionTokens += e.CompletionTokens
+		row.CacheRead += e.CacheRead
+		row.CacheWrite += e.CacheWrite
 	}
 	if e.CostUSD != nil {
 		if row.CostUSD == nil {

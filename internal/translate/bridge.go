@@ -223,6 +223,7 @@ func toolsToClaude(raw json.RawMessage) (json.RawMessage, error) {
 		out = append(out, claudeTool{
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
+			Strict:      t.Function.Strict,
 			InputSchema: t.Function.Parameters,
 		})
 	}

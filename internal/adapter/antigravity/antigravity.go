@@ -77,6 +77,7 @@ type Adapter struct {
 	persist      func(oauth.Token) error
 	mu           sync.Mutex
 	token        oauth.Token
+	generation   uint64
 	pending      *pendingAuth
 	skipLoopback bool
 }
@@ -215,6 +216,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
 	a.mu.Lock()
+	a.generation++
 	a.token = tok
 	a.pending = nil
 	persist := a.persist
@@ -448,6 +450,7 @@ func (a *Adapter) do(req *http.Request) ([]byte, error) {
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
+	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -458,12 +461,14 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := a.refresh(ctx, tok.RefreshToken)
+	next, err := oauth.DefaultRefresh.Do(ctx, "antigravity:"+a.id, func(ctx context.Context) (oauth.Token, error) {
+		return a.refresh(ctx, tok.RefreshToken)
+	})
 	if err != nil {
 		return err
 	}
 	next = next.KeepExtra(tok)
-	return a.storeToken(next)
+	return oauth.CommitRefresh(&a.mu, &a.token, &a.generation, seen, next, a.persist)
 }
 
 func (a *Adapter) Validate(ctx context.Context) error {
@@ -618,7 +623,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return adapter.ChatResponse{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.ChatResponse{}, adapter.NewHTTPError(resp, truncate(body))
 	}
 	content := extractGeminiText(body)
 	oa, err := toOpenAIChatJSON(req.Model, content)
@@ -650,7 +655,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	return geminiSSEToOpenAI(resp.Body, w, req.Model)
 }
