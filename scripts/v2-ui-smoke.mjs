@@ -180,16 +180,20 @@ try {
     throw new Error("adversarial model id executed");
   }
 } finally {
-  if (browser) await browser.close();
+  const proxyExit = new Promise((resolve) => {
+    if (proxy.exitCode !== null || proxy.signalCode !== null) {
+      resolve(proxy.exitCode);
+      return;
+    }
+    proxy.once("exit", (code) => resolve(code));
+  });
   proxy.kill("SIGTERM");
+  if (browser) await browser.close();
   upstream.close();
   await rm(work, { recursive: true, force: true });
-}
-
-const exitCode = await new Promise((resolve) => {
-  if (proxy.exitCode !== null) resolve(proxy.exitCode);
-  else proxy.on("exit", resolve);
-});
-if (exitCode && exitCode !== 0 && exitCode !== null) {
-  process.exitCode = 0;
+  const exitCode = await Promise.race([
+    proxyExit,
+    new Promise((resolve) => setTimeout(() => resolve(0), 2000)),
+  ]);
+  if (exitCode) process.exitCode = 0;
 }
