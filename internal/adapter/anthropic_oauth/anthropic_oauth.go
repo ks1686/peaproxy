@@ -188,6 +188,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if err != nil {
 		return err
 	}
+	fromLoopback := false
 	if code == "" && pending.lb != nil {
 		waitCtx := ctx
 		if waitCtx == nil {
@@ -200,6 +201,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 			return werr
 		}
 		code, stateFromInput = res.Code, res.State
+		fromLoopback = true
 	}
 	if pending.lb != nil {
 		_ = pending.lb.Close()
@@ -207,13 +209,11 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if code == "" {
 		return fmt.Errorf("anthropic_oauth: empty authorization code")
 	}
-	state := pending.state
-	if stateFromInput != "" {
-		state = stateFromInput
-	} else if session.State != "" {
-		state = session.State
+	if err := oauth.ConfirmCallbackState(pending.state, stateFromInput, fromLoopback); err != nil {
+		return err
 	}
-	tok, err := a.exchange(ctx, code, state, pending.pkce)
+	_ = session
+	tok, err := a.exchange(ctx, code, pending.state, pending.pkce)
 	if err != nil {
 		return err
 	}

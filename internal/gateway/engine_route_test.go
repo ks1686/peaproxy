@@ -98,6 +98,22 @@ func TestLocalExactNeverCloudFallback(t *testing.T) {
 	}
 }
 
+func TestAutomaticSkipsCooledAccount(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := twoAccountGateway(t, countOK(&hitsA, "a"), countOK(&hitsB, "b"))
+	gw.cfg.AutomaticRoutes.Enabled = true
+	gw.mu.Lock()
+	gw.cool["acct-a"] = Cooldown{AccountID: "acct-a", Until: time.Now().Add(time.Hour)}
+	gw.mu.Unlock()
+	_, account, err := gw.Chat(context.Background(), []byte(`{"model":"pea/auto","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "acct-b" || hitsA != 0 || hitsB == 0 {
+		t.Fatalf("account=%s hits a=%d b=%d", account, hitsA, hitsB)
+	}
+}
+
 func TestAutomaticSessionStable(t *testing.T) {
 	hitsA, hitsB := 0, 0
 	gw := twoAccountGateway(t, countOK(&hitsA, "a"), countOK(&hitsB, "b"))

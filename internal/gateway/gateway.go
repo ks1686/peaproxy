@@ -87,6 +87,8 @@ type affinityBind struct {
 type instance struct {
 	Provider config.Provider
 	Adapter  adapter.Adapter
+	// upstreamModel is the concrete catalog id for an automatic-route candidate.
+	upstreamModel string
 }
 
 // New builds adapters from cfg. Call Refresh after.
@@ -362,6 +364,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 		return adapter.ChatResponse{}, "", err
 	}
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
 		if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
 			hit.Raw = echoClientModel(hit.Raw, client, model)
 			if client != model {
@@ -375,6 +378,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
 		lastAccount = inst.Provider.ID
 		var resp adapter.ChatResponse
 		var callErr error
@@ -465,11 +469,12 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	}
 	cw := &countWriter{w: w}
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
-	dest := newRouteRewriter(guard, model, client)
 	var last error
 	var lastAccount string
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
+		dest := newRouteRewriter(guard, model, client)
 		lastAccount = inst.Provider.ID
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
@@ -534,6 +539,9 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	var lastAccount string
 	tried := false
 	for _, inst := range cands {
+		if !strings.Contains(strings.ToLower(contentType), "multipart/") {
+			model, body = inst.applyModel(model, body)
+		}
 		lastAccount = inst.Provider.ID
 		ed, ok := inst.Adapter.(adapter.ImageEditor)
 		if !ok || !inst.Adapter.Capabilities().ImageOut {
@@ -606,6 +614,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	var lastAccount string
 	tried := false
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
 		lastAccount = inst.Provider.ID
 		gen, ok := inst.Adapter.(adapter.ImageGenerator)
 		if !ok || !inst.Adapter.Capabilities().ImageOut {
@@ -669,6 +678,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		return adapter.EmbeddingResponse{}, "", err
 	}
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
 		if hit, ok := g.cachedEmbeddings(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
 			hit.Raw = echoClientModel(hit.Raw, client, model)
 			return hit, inst.Provider.ID, nil
@@ -678,6 +688,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	var lastAccount string
 	tried := false
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
 		lastAccount = inst.Provider.ID
 		emb, ok := inst.Adapter.(adapter.Embedder)
 		if !ok || !inst.Adapter.Capabilities().Embeddings {
@@ -771,6 +782,10 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 	var lastAccount string
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
+		if len(oaReq.Raw) > 0 {
+			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
+		}
 		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			if err := budgetAttempts.take(); err != nil {
@@ -859,11 +874,15 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	}
 	cw := &countWriter{w: w}
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
-	dest := newRouteRewriter(guard, model, client)
 	var last error
 	var lastAccount string
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
+		if len(oaReq.Raw) > 0 {
+			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
+		}
+		dest := newRouteRewriter(guard, model, client)
 		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			if err := budgetAttempts.take(); err != nil {
@@ -955,6 +974,10 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	var lastAccount string
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
+		if len(oaReq.Raw) > 0 {
+			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
+		}
 		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			if err := budgetAttempts.take(); err != nil {
@@ -1041,11 +1064,15 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	}
 	cw := &countWriter{w: w}
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
-	dest := newRouteRewriter(guard, model, client)
 	var last error
 	var lastAccount string
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		model, raw := inst.applyModel(model, raw)
+		if len(oaReq.Raw) > 0 {
+			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
+		}
+		dest := newRouteRewriter(guard, model, client)
 		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			if err := budgetAttempts.take(); err != nil {

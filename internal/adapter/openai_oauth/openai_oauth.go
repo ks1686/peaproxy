@@ -210,6 +210,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if err != nil {
 		return err
 	}
+	fromLoopback := false
 	if code == "" && pending.lb != nil {
 		waitCtx := ctx
 		if waitCtx == nil {
@@ -222,6 +223,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 			return werr
 		}
 		code, stateFromInput = res.Code, res.State
+		fromLoopback = true
 	}
 	if pending.lb != nil {
 		_ = pending.lb.Close()
@@ -229,7 +231,9 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if code == "" {
 		return fmt.Errorf("openai_oauth: empty authorization code")
 	}
-	_ = stateFromInput
+	if err := oauth.ConfirmCallbackState(pending.state, stateFromInput, fromLoopback); err != nil {
+		return err
+	}
 	_ = session
 	redirect := pending.redirectURI
 	if redirect == "" {
@@ -625,8 +629,9 @@ type responsesInput struct {
 }
 
 type responsesPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type responsesBody struct {
@@ -709,7 +714,7 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 	if parsed.Model != "" {
 		model = parsed.Model
 	}
-	if len(parsed.Tools) > 0 || len(parsed.ToolChoice) > 0 || chatMessagesHaveTools(parsed.Messages) || chatMessagesHaveOpaque(parsed.Messages) {
+	if len(parsed.Tools) > 0 || len(parsed.ToolChoice) > 0 || chatMessagesHaveTools(parsed.Messages) || chatMessagesHaveOpaque(parsed.Messages) || chatMessagesHaveImages(parsed.Messages) {
 		return chatToResponsesWithTools(model, parsed.Messages, parsed.Tools, parsed.ToolChoice, stream)
 	}
 	msgs := make([]adapter.Message, 0, len(parsed.Messages))
@@ -785,6 +790,7 @@ func responsesStreamToJSON(body []byte) ([]byte, error) {
 		return trimmed, nil
 	}
 	var completed []byte
+	var completedType string
 	var text strings.Builder
 	sc := bufio.NewScanner(bytes.NewReader(trimmed))
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
@@ -810,6 +816,7 @@ func responsesStreamToJSON(body []byte) ([]byte, error) {
 			resp := bytes.TrimSpace(ev.Response)
 			if len(resp) > 0 && resp[0] == '{' {
 				completed = append([]byte(nil), resp...)
+				completedType = ev.Type
 			}
 		}
 		if strings.HasSuffix(ev.Type, "output_text.delta") {
@@ -819,7 +826,15 @@ func responsesStreamToJSON(body []byte) ([]byte, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
+	if completedType == "response.failed" {
+		return nil, fmt.Errorf("responses stream failed")
+	}
 	if len(completed) > 0 {
+		// Codex often completes with reasoning only. The answer arrived as
+		// output_text.delta events, so keep that text when the object has none.
+		if text.Len() > 0 && !responsesObjectHasText(completed) {
+			return mergeResponsesDeltaText(completed, text.String())
+		}
 		return completed, nil
 	}
 	if text.Len() == 0 {
@@ -837,6 +852,53 @@ func responsesStreamToJSON(body []byte) ([]byte, error) {
 			},
 		},
 	})
+}
+
+func responsesObjectHasText(body []byte) bool {
+	var parsed struct {
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return false
+	}
+	if strings.TrimSpace(parsed.OutputText) != "" {
+		return true
+	}
+	for _, item := range parsed.Output {
+		for _, part := range item.Content {
+			if strings.TrimSpace(part.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeResponsesDeltaText(completed []byte, text string) ([]byte, error) {
+	quoted, err := json.Marshal(text)
+	if err != nil {
+		return nil, err
+	}
+	msg, err := marshalResponsesMessage("assistant", "output_text", text)
+	if err != nil {
+		return nil, err
+	}
+	var existing struct {
+		Output []json.RawMessage `json:"output"`
+	}
+	_ = json.Unmarshal(completed, &existing)
+	items := append(existing.Output, msg)
+	rawItems, err := json.Marshal(items)
+	if err != nil {
+		return nil, err
+	}
+	out := jsonx.SetTopLevelRaw(completed, "output_text", quoted)
+	return jsonx.SetTopLevelRaw(out, "output", rawItems), nil
 }
 
 func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bool) ([]byte, error) {
@@ -931,7 +993,7 @@ func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, to
 				input = append(input, raw)
 			}
 		default:
-			raw, err := marshalResponsesMessage("user", "input_text", messageContentString(m.Content))
+			raw, err := marshalResponsesParts("user", contentParts(m.Content, "input_text"))
 			if err != nil {
 				return nil, err
 			}
@@ -954,7 +1016,85 @@ func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, to
 }
 
 func marshalResponsesMessage(role, partType, text string) (json.RawMessage, error) {
-	return json.Marshal(responsesInput{Role: role, Content: []responsesPart{{Type: partType, Text: text}}})
+	return marshalResponsesParts(role, []responsesPart{{Type: partType, Text: text}})
+}
+
+func marshalResponsesParts(role string, parts []responsesPart) (json.RawMessage, error) {
+	if len(parts) == 0 {
+		parts = []responsesPart{{Type: "input_text", Text: ""}}
+	}
+	return json.Marshal(responsesInput{Role: role, Content: parts})
+}
+
+func chatMessagesHaveImages(msgs []chatInboundMessage) bool {
+	for _, m := range msgs {
+		for _, part := range contentParts(m.Content, "input_text") {
+			if part.Type == "input_image" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func contentParts(raw json.RawMessage, textType string) []responsesPart {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil
+	}
+	if raw[0] == '"' {
+		var s string
+		_ = json.Unmarshal(raw, &s)
+		return []responsesPart{{Type: textType, Text: s}}
+	}
+	var parts []struct {
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return []responsesPart{{Type: textType, Text: messageContentString(raw)}}
+	}
+	var out []responsesPart
+	for _, p := range parts {
+		switch p.Type {
+		case "image_url", "input_image":
+			if url := imageURLValue(p.ImageURL); url != "" {
+				out = append(out, responsesPart{Type: "input_image", ImageURL: url})
+			}
+		default:
+			if p.Text != "" {
+				out = append(out, responsesPart{Type: textType, Text: p.Text})
+			}
+		}
+	}
+	if len(out) == 0 {
+		if text := messageContentString(raw); text != "" {
+			return []responsesPart{{Type: textType, Text: text}}
+		}
+	}
+	return out
+}
+
+func imageURLValue(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return s
+		}
+		return ""
+	}
+	var obj struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal(raw, &obj) == nil {
+		return obj.URL
+	}
+	return ""
 }
 
 func chatToolsToResponses(raw json.RawMessage) json.RawMessage {

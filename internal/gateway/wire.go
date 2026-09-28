@@ -118,6 +118,21 @@ func claudeAdapter(inst instance) bool {
 	}
 }
 
+func (in instance) applyModel(fallback string, raw []byte) (string, []byte) {
+	m := fallback
+	if in.upstreamModel != "" {
+		m = in.upstreamModel
+	}
+	if m == "" || len(bytes.TrimSpace(raw)) == 0 {
+		return m, raw
+	}
+	quoted, err := json.Marshal(m)
+	if err != nil {
+		return m, raw
+	}
+	return m, jsonx.SetTopLevelRaw(raw, "model", quoted)
+}
+
 func chatReq(inst instance, model string, raw []byte, stream bool, budget int) adapter.ChatRequest {
 	req := adapter.ChatRequest{Model: model, Raw: raw, Stream: stream}
 	if budget > 0 && claudeAdapter(inst) {

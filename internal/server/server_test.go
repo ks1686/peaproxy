@@ -76,6 +76,39 @@ func testServer(t *testing.T) (*Server, *httptest.Server) {
 	return New(Options{Gateway: gw}), up
 }
 
+func TestLoopbackMutationGuard(t *testing.T) {
+	s, _ := testServer(t)
+	body := `{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`
+	cases := []struct {
+		name       string
+		host       string
+		origin     string
+		content    string
+		wantStatus int
+	}{
+		{name: "foreign host", host: "evil.example", content: "application/json", wantStatus: http.StatusForbidden},
+		{name: "foreign origin", host: "127.0.0.1:8317", origin: "http://evil.example", content: "application/json", wantStatus: http.StatusForbidden},
+		{name: "form body", host: "127.0.0.1:8317", content: "application/x-www-form-urlencoded", wantStatus: http.StatusUnsupportedMediaType},
+		{name: "json body", host: "127.0.0.1:8317", content: "application/json", wantStatus: http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+			req.RemoteAddr = "127.0.0.1:4321"
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			req.Header.Set("Content-Type", tc.content)
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, req)
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestHealthReportsLoopbackBind(t *testing.T) {
 	s, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)

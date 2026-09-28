@@ -108,7 +108,7 @@ func TestExchangeFormAndProjectDiscovery(t *testing.T) {
 }
 
 func TestListModelsAndChatUseCloudCode(t *testing.T) {
-	var modelPath, chatPath, chatAuth string
+	var modelPath, chatPath, chatAuth, chatUA string
 	var chatBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -126,6 +126,7 @@ func TestListModelsAndChatUseCloudCode(t *testing.T) {
 		case strings.Contains(r.URL.Path, "generateContent"):
 			chatPath = r.URL.Path
 			chatAuth = r.Header.Get("Authorization")
+			chatUA = r.Header.Get("User-Agent")
 			chatBody = raw
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"response": map[string]any{
@@ -170,6 +171,41 @@ func TestListModelsAndChatUseCloudCode(t *testing.T) {
 	}
 	if !bytes.Contains(chatBody, []byte(`"project"`)) || !bytes.Contains(chatBody, []byte("hi")) {
 		t.Fatalf("chat body %s", chatBody)
+	}
+	if chatUA != UserAgent || strings.Contains(chatUA, "linux/amd64") || strings.Contains(chatUA, "2.9.1") {
+		t.Fatalf("user agent %s", chatUA)
+	}
+	for _, needle := range []string{`"userAgent":"antigravity"`, `"requestType":"agent"`, `"requestId":"agent-`} {
+		if !bytes.Contains(chatBody, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, chatBody)
+		}
+	}
+}
+
+func TestChatKeepsImageAndTool(t *testing.T) {
+	var chatBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "generateContent") {
+			chatBody, _ = io.ReadAll(r.Body)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"response": map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": "seen"}}}}}},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "live-at", ExpiresAt: time.Now().Add(time.Hour), Extra: map[string]string{"project_id": "proj-1"}}
+	raw := []byte(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"https://example.com/pea.png"}}]}],"tools":[{"type":"function","function":{"name":"lookup","description":"find","parameters":{"type":"object"}}}]}`)
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{Model: "gemini-2.5-flash", Raw: raw})
+	if err != nil || resp.Content != "seen" {
+		t.Fatalf("%v %#v", err, resp)
+	}
+	for _, needle := range []string{`"fileUri":"https://example.com/pea.png"`, `"name":"lookup"`, `"text":"look"`} {
+		if !bytes.Contains(chatBody, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, chatBody)
+		}
 	}
 }
 

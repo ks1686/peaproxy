@@ -53,8 +53,15 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		}
 	}
 	g.mu.Lock()
-	models := append([]catalog.Model(nil), g.models...)
-	pinned, _ := g.liveAffinityLocked(session, routeName, time.Now())
+	now := time.Now()
+	models := catalog.AllAnnotated(append([]catalog.Model(nil), g.models...), g.queryLocked())
+	pinned, _ := g.liveAffinityLocked(session, routeName, now)
+	cool := make(map[string]Cooldown, len(g.cool))
+	for id, c := range g.cool {
+		if now.Before(c.Until) {
+			cool[id] = c
+		}
+	}
 	g.mu.Unlock()
 	allowed := g.cfg.AutomaticRoutes.Models(routeName)
 	var ranked []instance
@@ -63,10 +70,16 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		if !m.Routable {
 			continue
 		}
+		if skipAutomaticModality(req.Wire, m) {
+			continue
+		}
 		if len(allowed) > 0 && !contains(allowed, m.ID) {
 			continue
 		}
 		if !automaticKind(g, routeName, m) {
+			continue
+		}
+		if c, ok := cool[m.AccountID]; ok && (c.Model == "" || c.Model == m.ID) {
 			continue
 		}
 		inst := g.instanceFor(m.AccountID)
@@ -76,6 +89,7 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		if !eligibleForAutomaticRoute(evidenceFor(inst), req.Requirements) {
 			continue
 		}
+		inst.upstreamModel = m.ID
 		ranked = append(ranked, inst)
 		rankedModel = append(rankedModel, m.ID)
 	}
@@ -94,7 +108,20 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 			}
 		}
 	}
-	return rankedModel[pick], []instance{ranked[pick]}, session, nil
+	if pick != 0 {
+		ranked = append(append([]instance{}, ranked[pick:]...), ranked[:pick]...)
+		rankedModel = append(append([]string{}, rankedModel[pick:]...), rankedModel[:pick]...)
+	}
+	return rankedModel[0], ranked, session, nil
+}
+
+func skipAutomaticModality(wire requestmeta.Wire, m catalog.Model) bool {
+	switch wire {
+	case "", requestmeta.WireChat, requestmeta.WireMessages, requestmeta.WireResponses:
+		return catalog.HasModality(m, "embeddings") || catalog.HasModality(m, "image_out")
+	default:
+		return false
+	}
 }
 
 func (g *Gateway) instanceFor(account string) instance {

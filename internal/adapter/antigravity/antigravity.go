@@ -10,6 +10,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,19 +28,22 @@ import (
 )
 
 const (
-	Name         = "antigravity"
-	AliasGemini  = "gemini_oauth"
-	AuthURL      = "https://accounts.google.com/o/oauth2/v2/auth"
-	TokenURL     = "https://oauth2.googleapis.com/token"
-	UserInfoURL  = "https://www.googleapis.com/oauth2/v2/userinfo?alt=json"
-	APIEndpoint  = "https://cloudcode-pa.googleapis.com"
-	DailyAPI     = "https://daily-cloudcode-pa.googleapis.com"
-	APIVersion   = "v1internal"
-	RedirectURI  = "http://localhost:51121/oauth-callback"
-	UserAgent    = "antigravity/hub/2.9.1 linux/amd64"
-	callbackPort = "51121"
-	callbackPath = "/oauth-callback"
-	projectExtra = "project_id"
+	Name        = "antigravity"
+	AliasGemini = "gemini_oauth"
+	AuthURL     = "https://accounts.google.com/o/oauth2/v2/auth"
+	TokenURL    = "https://oauth2.googleapis.com/token"
+	UserInfoURL = "https://www.googleapis.com/oauth2/v2/userinfo?alt=json"
+	APIEndpoint = "https://cloudcode-pa.googleapis.com"
+	DailyAPI    = "https://daily-cloudcode-pa.googleapis.com"
+	APIVersion  = "v1internal"
+	RedirectURI = "http://localhost:51121/oauth-callback"
+	// ClientVersion is the current Antigravity hub release. Cloud Code treats
+	// the old linux/amd64 2.9.1 hub agent as exhausted even when quota remains.
+	ClientVersion = "2.17.0"
+	UserAgent     = "antigravity/hub/" + ClientVersion + " darwin/arm64"
+	callbackPort  = "51121"
+	callbackPath  = "/oauth-callback"
+	projectExtra  = "project_id"
 )
 
 // Public Antigravity IDE installed-app OAuth client. Google treats installed-app
@@ -176,6 +181,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if err != nil {
 		return err
 	}
+	fromLoopback := false
 	if code == "" && pending.lb != nil {
 		waitCtx := ctx
 		if waitCtx == nil {
@@ -188,6 +194,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 			return werr
 		}
 		code, stateFromInput = res.Code, res.State
+		fromLoopback = true
 	}
 	if pending.lb != nil {
 		_ = pending.lb.Close()
@@ -195,8 +202,10 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if code == "" {
 		return fmt.Errorf("antigravity: empty authorization code")
 	}
+	if err := oauth.ConfirmCallbackState(pending.state, stateFromInput, fromLoopback); err != nil {
+		return err
+	}
 	_ = session
-	_ = stateFromInput
 	tok, err := a.exchange(ctx, code, pending.redirectURI)
 	if err != nil {
 		return err
@@ -330,7 +339,7 @@ func (a *Adapter) onboardUser(ctx context.Context, access, tierID string) (strin
 		TierID: tierID,
 		Metadata: map[string]string{
 			"ide_type":    "ANTIGRAVITY",
-			"ide_version": "2.9.1",
+			"ide_version": ClientVersion,
 			"ide_name":    "antigravity",
 		},
 	})
@@ -623,7 +632,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return adapter.ChatResponse{}, adapter.NewHTTPError(resp, truncate(body))
+		return adapter.ChatResponse{}, chatHTTPError(resp, truncate(body))
 	}
 	content := extractGeminiText(body)
 	oa, err := toOpenAIChatJSON(req.Model, content)
@@ -655,21 +664,52 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return adapter.NewHTTPError(resp, truncate(body))
+		return chatHTTPError(resp, truncate(body))
 	}
 	return geminiSSEToOpenAI(resp.Body, w, req.Model)
+}
+
+func chatHTTPError(resp *http.Response, body string) error {
+	e := adapter.NewHTTPError(resp, body)
+	// Cloud Code does not send X-Ratelimit-Scope. A 429 is this model, not the
+	// whole Google account, so the next model can still be tried.
+	if e.Status == http.StatusTooManyRequests && e.Scope == adapter.ScopeAccount {
+		e.Scope = adapter.ScopeModel
+	}
+	return e
 }
 
 func (a *Adapter) generateURL(stream bool) string {
 	op := "generateContent"
 	if stream {
-		op = "streamGenerateContent"
+		op = "streamGenerateContent?alt=sse"
 	}
 	return strings.TrimRight(a.apiBase, "/") + "/" + APIVersion + ":" + op
 }
 
 type geminiPart struct {
-	Text string `json:"text,omitempty"`
+	Text       string            `json:"text,omitempty"`
+	InlineData *geminiInlineData `json:"inlineData,omitempty"`
+	FileData   *geminiFileData   `json:"fileData,omitempty"`
+}
+
+type geminiInlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
+type geminiFileData struct {
+	FileURI string `json:"fileUri"`
+}
+
+type geminiFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+type geminiTool struct {
+	FunctionDeclarations []geminiFunction `json:"functionDeclarations"`
 }
 
 type geminiContent struct {
@@ -685,12 +725,16 @@ type geminiInnerRequest struct {
 	Contents          []geminiContent         `json:"contents"`
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
+	Tools             []geminiTool            `json:"tools,omitempty"`
 }
 
 type geminiEnvelope struct {
-	Project string             `json:"project,omitempty"`
-	Model   string             `json:"model"`
-	Request geminiInnerRequest `json:"request"`
+	Project     string             `json:"project,omitempty"`
+	Model       string             `json:"model"`
+	UserAgent   string             `json:"userAgent"`
+	RequestType string             `json:"requestType"`
+	RequestID   string             `json:"requestId"`
+	Request     geminiInnerRequest `json:"request"`
 }
 
 func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, error) {
@@ -702,23 +746,30 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	}
 	a.mu.Unlock()
 	model := req.Model
-	msgs := req.Messages
+	type inbound struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	var msgs []inbound
+	var tools []geminiFunction
 	if len(req.Raw) > 0 {
 		var parsed struct {
-			Model    string `json:"model"`
-			Messages []struct {
-				Role    string          `json:"role"`
-				Content json.RawMessage `json:"content"`
-			} `json:"messages"`
+			Model    string          `json:"model"`
+			Messages []inbound       `json:"messages"`
+			Tools    json.RawMessage `json:"tools"`
 		}
 		if err := json.Unmarshal(jsonx.SetStream(req.Raw, false), &parsed); err == nil && len(parsed.Messages) > 0 {
 			if parsed.Model != "" {
 				model = parsed.Model
 			}
-			msgs = make([]adapter.Message, 0, len(parsed.Messages))
-			for _, m := range parsed.Messages {
-				msgs = append(msgs, adapter.Message{Role: m.Role, Content: messageText(m.Content)})
-			}
+			msgs = parsed.Messages
+			tools = geminiFunctions(parsed.Tools)
+		}
+	}
+	if len(msgs) == 0 {
+		for _, m := range req.Messages {
+			raw, _ := json.Marshal(m.Content)
+			msgs = append(msgs, inbound{Role: m.Role, Content: raw})
 		}
 	}
 	var sys strings.Builder
@@ -729,18 +780,146 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 			if sys.Len() > 0 {
 				sys.WriteByte('\n')
 			}
-			sys.WriteString(m.Content)
+			sys.WriteString(messageText(m.Content))
 		case "assistant":
-			contents = append(contents, geminiContent{Role: "model", Parts: []geminiPart{{Text: m.Content}}})
+			contents = append(contents, geminiContent{Role: "model", Parts: geminiPartsFromContent(m.Content)})
 		default:
-			contents = append(contents, geminiContent{Role: "user", Parts: []geminiPart{{Text: m.Content}}})
+			contents = append(contents, geminiContent{Role: "user", Parts: geminiPartsFromContent(m.Content)})
 		}
 	}
-	env := geminiEnvelope{Project: project, Model: model, Request: geminiInnerRequest{Contents: contents}}
+	reqType := "agent"
+	if strings.Contains(strings.ToLower(model), "image") {
+		reqType = "image_gen"
+	}
+	env := geminiEnvelope{
+		Project:     project,
+		Model:       model,
+		UserAgent:   "antigravity",
+		RequestType: reqType,
+		RequestID:   newAgentRequestID(reqType),
+		Request:     geminiInnerRequest{Contents: contents},
+	}
+	if len(tools) > 0 {
+		env.Request.Tools = []geminiTool{{FunctionDeclarations: tools}}
+	}
 	if sys.Len() > 0 {
 		env.Request.SystemInstruction = &geminiContent{Parts: []geminiPart{{Text: sys.String()}}}
 	}
 	return json.Marshal(env)
+}
+
+func newAgentRequestID(reqType string) string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	id := hex.EncodeToString(b[:])
+	if reqType == "image_gen" {
+		return "image_gen/" + id
+	}
+	return "agent-" + id
+}
+
+func geminiFunctions(raw json.RawMessage) []geminiFunction {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '[' {
+		return nil
+	}
+	var items []struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+		Function    *struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		} `json:"function"`
+	}
+	if json.Unmarshal(raw, &items) != nil {
+		return nil
+	}
+	var out []geminiFunction
+	for _, item := range items {
+		fn := geminiFunction{Name: item.Name, Description: item.Description, Parameters: item.Parameters}
+		if item.Function != nil && item.Function.Name != "" {
+			fn = geminiFunction{Name: item.Function.Name, Description: item.Function.Description, Parameters: item.Function.Parameters}
+		}
+		if fn.Name == "" {
+			continue
+		}
+		out = append(out, fn)
+	}
+	return out
+}
+
+func geminiPartsFromContent(raw json.RawMessage) []geminiPart {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return []geminiPart{{Text: ""}}
+	}
+	if raw[0] == '"' {
+		return []geminiPart{{Text: messageText(raw)}}
+	}
+	var parts []struct {
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
+	if json.Unmarshal(raw, &parts) != nil {
+		return []geminiPart{{Text: messageText(raw)}}
+	}
+	var out []geminiPart
+	for _, p := range parts {
+		switch p.Type {
+		case "image_url", "input_image":
+			if part, ok := geminiImagePart(imageURLString(p.ImageURL)); ok {
+				out = append(out, part)
+			}
+		default:
+			if p.Text != "" {
+				out = append(out, geminiPart{Text: p.Text})
+			}
+		}
+	}
+	if len(out) == 0 {
+		return []geminiPart{{Text: messageText(raw)}}
+	}
+	return out
+}
+
+func geminiImagePart(url string) (geminiPart, bool) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return geminiPart{}, false
+	}
+	const prefix = "data:"
+	if strings.HasPrefix(url, prefix) {
+		rest := strings.TrimPrefix(url, prefix)
+		mime, data, ok := strings.Cut(rest, ";base64,")
+		if ok && mime != "" && data != "" {
+			return geminiPart{InlineData: &geminiInlineData{MimeType: mime, Data: data}}, true
+		}
+	}
+	return geminiPart{FileData: &geminiFileData{FileURI: url}}, true
+}
+
+func imageURLString(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return s
+		}
+		return ""
+	}
+	var obj struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal(raw, &obj) == nil {
+		return obj.URL
+	}
+	return ""
 }
 
 func messageText(raw json.RawMessage) string {

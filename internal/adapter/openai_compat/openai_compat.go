@@ -1,6 +1,7 @@
 package openai_compat
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -301,6 +302,88 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return adapter.ChatResponse{Model: req.Model, Raw: body, Content: extractContent(body)}, nil
+}
+
+// Complete posts a prepared chat body. A JSON object is returned as-is. An SSE
+// body is assembled into one chat completion so a non-stream caller still gets text.
+func (a *Adapter) Complete(ctx context.Context, model string, raw []byte) (adapter.ChatResponse, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if bytes.Contains(raw, []byte(`"stream":true`)) {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
+	a.auth(httpReq)
+	resp, err := a.client.Do(httpReq)
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return adapter.ChatResponse{}, adapter.NewHTTPError(resp, truncate(body))
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] == '{' {
+		return adapter.ChatResponse{Model: model, Raw: trimmed, Content: extractContent(trimmed)}, nil
+	}
+	content, assembled, err := assembleOpenAIStream(trimmed)
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	return adapter.ChatResponse{Model: model, Raw: assembled, Content: content}, nil
+}
+
+func assembleOpenAIStream(body []byte) (string, []byte, error) {
+	var text strings.Builder
+	sc := bufio.NewScanner(bytes.NewReader(body))
+	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(payload), &chunk) != nil || len(chunk.Choices) == 0 {
+			continue
+		}
+		if chunk.Choices[0].Delta.Content != "" {
+			text.WriteString(chunk.Choices[0].Delta.Content)
+		} else if chunk.Choices[0].Message.Content != "" && text.Len() == 0 {
+			text.WriteString(chunk.Choices[0].Message.Content)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", nil, err
+	}
+	content := text.String()
+	assembled, err := json.Marshal(map[string]any{
+		"object": "chat.completion",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       map[string]string{"role": "assistant", "content": content},
+			"finish_reason": "stop",
+		}},
+	})
+	return content, assembled, err
 }
 
 func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.Writer) error {

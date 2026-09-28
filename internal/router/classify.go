@@ -14,10 +14,11 @@ import (
 type FailoverClass string
 
 const (
-	FailoverNone       FailoverClass = ""
-	FailoverRateLimit  FailoverClass = "rate-limit"
-	FailoverOverloaded FailoverClass = "overloaded"
-	FailoverAuth       FailoverClass = "auth-expired"
+	FailoverNone        FailoverClass = ""
+	FailoverRateLimit   FailoverClass = "rate-limit"
+	FailoverOverloaded  FailoverClass = "overloaded"
+	FailoverAuth        FailoverClass = "auth-expired"
+	FailoverEntitlement FailoverClass = "entitlement"
 )
 
 func (c FailoverClass) String() string {
@@ -79,6 +80,8 @@ func classifyStatus(status int) FailoverClass {
 		return FailoverRateLimit
 	case http.StatusUnauthorized:
 		return FailoverAuth
+	case http.StatusPaymentRequired:
+		return FailoverEntitlement
 	case http.StatusServiceUnavailable, 529:
 		return FailoverOverloaded
 	default:
@@ -142,6 +145,8 @@ func classifyText(s string) FailoverClass {
 		return FailoverOverloaded
 	case containsAny(lower, authPatterns):
 		return FailoverAuth
+	case containsAny(lower, entitlementPatterns):
+		return FailoverEntitlement
 	default:
 		return FailoverNone
 	}
@@ -168,6 +173,15 @@ var overloadedPatterns = []string{
 	"temporarily unavailable",
 	"unavailable_error",
 	"try again later",
+}
+
+var entitlementPatterns = []string{
+	"freetiererror",
+	"free tier",
+	"insufficient funds",
+	"insufficient_funds",
+	"payment_required",
+	"payment required",
 }
 
 var authPatterns = []string{

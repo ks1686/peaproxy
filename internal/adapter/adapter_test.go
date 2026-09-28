@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -230,6 +231,8 @@ func TestZenTagsFreeAndPrivacy(t *testing.T) {
 
 func TestZenChatSendsOpenCodeClientIdentity(t *testing.T) {
 	var ua, client, session, request string
+	var body []byte
+	sessionID := regexp.MustCompile(`^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
@@ -239,9 +242,9 @@ func TestZenChatSendsOpenCodeClientIdentity(t *testing.T) {
 			client = r.Header.Get("x-opencode-client")
 			session = r.Header.Get("x-opencode-session")
 			request = r.Header.Get("x-opencode-request")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
-			})
+			body, _ = io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"pon\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"g\"}}]}\n\ndata: [DONE]\n")
 		default:
 			http.NotFound(w, r)
 		}
@@ -258,14 +261,18 @@ func TestZenChatSendsOpenCodeClientIdentity(t *testing.T) {
 	if models[0].Tier != catalog.TierFree || models[1].Tier != catalog.TierFree {
 		t.Fatalf("free tiers: %#v %#v", models[0], models[1])
 	}
-	if _, err := a.Chat(context.Background(), adapter.ChatRequest{
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
 		Model: "mimo-v2.5-free",
 		Raw:   []byte(`{"model":"mimo-v2.5-free","messages":[{"role":"user","content":"hi"}]}`),
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err != nil || resp.Content != "pong" {
+		t.Fatalf("%v %#v", err, resp)
 	}
-	if ua != opencodezen.UserAgent || client != "cli" || session == "" || request == "" {
+	if ua != opencodezen.UserAgent || client != "cli" || !sessionID.MatchString(session) || request == "" || request == session {
 		t.Fatalf("ua=%q client=%q session=%q request=%q", ua, client, session, request)
+	}
+	if !bytes.Contains(body, []byte(`"stream":true`)) || !bytes.Contains(body, []byte(`"name":"shell"`)) || !bytes.Contains(body, []byte(`"name":"read"`)) {
+		t.Fatalf("free body %s", body)
 	}
 }
 

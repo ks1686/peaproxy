@@ -45,6 +45,9 @@ func TestClassifyErrorBodies(t *testing.T) {
 		{"auth expired json", 403, `{"error":{"type":"authentication_error","message":"invalid x-api-key"}}`, FailoverAuth},
 		{"token expired phrase", 400, `{"error":"access token expired"}`, FailoverAuth},
 		{"plain 400 stays terminal", 400, `{"error":{"type":"invalid_request_error","message":"messages must be an array"}}`, FailoverNone},
+		{"zen free tier", 403, `{"type":"error","error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}}`, FailoverEntitlement},
+		{"payment required", 402, `{"error":{"message":"insufficient funds"}}`, FailoverEntitlement},
+		{"plain 403 stays terminal", 403, `{"error":{"message":"forbidden"}}`, FailoverNone},
 		{"model not found stays terminal", 404, `{"error":{"code":"model_not_found"}}`, FailoverNone},
 	}
 	for _, tc := range cases {

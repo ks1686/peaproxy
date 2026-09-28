@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,7 +113,7 @@ func New(opts Options) *Server {
 	}
 	s.http = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           s.guard(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
@@ -137,6 +138,70 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return s.http.Shutdown(ctx)
+}
+
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
+			return
+		}
+		peerLoopback := remoteLoopback(r.RemoteAddr)
+		if peerLoopback && !config.IsLoopback(hostOnly(r.Host)) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "loopback host required"})
+			return
+		}
+		if !originAllowed(r, peerLoopback) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request rejected"})
+			return
+		}
+		if peerLoopback && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) {
+			if !mutationContentType(r) {
+				writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content-type must be application/json"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func remoteLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return config.IsLoopback(host)
+}
+
+func hostOnly(hostport string) string {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	return host
+}
+
+func originAllowed(r *http.Request, peerLoopback bool) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	if peerLoopback {
+		return config.IsLoopback(hostOnly(parsed.Host))
+	}
+	return strings.EqualFold(parsed.Host, r.Host)
+}
+
+func mutationContentType(r *http.Request) bool {
+	ct := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.HasPrefix(ct, "application/json") {
+		return true
+	}
+	return r.URL.Path == "/v1/images/edits" && strings.HasPrefix(ct, "multipart/form-data")
 }
 
 func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {

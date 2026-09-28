@@ -80,6 +80,10 @@ func TestExchangeIsFormEncodedAndParsesJWTAccount(t *testing.T) {
 	if a.token.AccessToken != "codex-at" || a.token.AccountID != "acct_99" || a.token.Email != "c@d.e" {
 		t.Fatalf("%#v", a.token)
 	}
+	a.pending = &pendingAuth{pkce: oauth.PKCE{Verifier: "ver"}, state: "st"}
+	if err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "http://127.0.0.1/cb?code=nope&state=wrong"); err == nil {
+		t.Fatal("mismatched oauth state was accepted")
+	}
 }
 
 func TestListModelsSendsCodexClientVersionQuery(t *testing.T) {
@@ -441,6 +445,18 @@ func TestChatMapsFunctionCallOutputToToolCalls(t *testing.T) {
 	}
 	if !bytes.Contains(resp.Raw, []byte(`"finish_reason":"tool_calls"`)) {
 		t.Fatalf("finish_reason: %s", resp.Raw)
+	}
+}
+
+func TestChatToResponsesKeepsImageURL(t *testing.T) {
+	out, err := chatToResponses([]byte(`{"model":"gpt-5","messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"https://example.com/pea.png"}}]}]}`), "gpt-5", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{`"type":"input_image"`, `https://example.com/pea.png`, `"text":"look"`} {
+		if !bytes.Contains(out, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, out)
+		}
 	}
 }
 
@@ -880,6 +896,36 @@ func TestResponsesToChatCompletionCarriesReasoningOpaque(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte(`"reasoning_opaque"`)) || !bytes.Contains(out, []byte(`"responses_reasoning"`)) || !bytes.Contains(out, []byte(`"rs_9"`)) {
 		t.Fatalf("missing carry: %s", out)
+	}
+}
+
+func TestResponsesStreamKeepsDeltaTextWhenCompletedObjectIsEmpty(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"pon"}`,
+		`data: {"type":"response.output_text.delta","delta":"g"}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"reasoning","id":"rs_9","summary":[{"type":"summary_text","text":"skip me"}]}]}}`,
+		`data: [DONE]`,
+	}, "\n")
+	out, err := responsesStreamToJSON([]byte(sse))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, content, err := responsesToChatCompletion("gpt-5.5", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "pong" {
+		t.Fatalf("content %q from %s", content, out)
+	}
+	if !bytes.Contains(out, []byte(`"rs_9"`)) {
+		t.Fatalf("reasoning dropped: %s", out)
+	}
+}
+
+func TestResponsesStreamFailedIsAnError(t *testing.T) {
+	sse := "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_1\",\"status\":\"failed\"}}\n"
+	if _, err := responsesStreamToJSON([]byte(sse)); err == nil {
+		t.Fatal("failed stream returned success")
 	}
 }
 

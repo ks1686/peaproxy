@@ -2,13 +2,17 @@
 package opencodezen
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"io"
 	"strings"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapter/openai_compat"
 	"github.com/ks1686/peaproxy/internal/catalog"
+	"github.com/ks1686/peaproxy/internal/jsonx"
 )
 
 const (
@@ -16,7 +20,10 @@ const (
 	DefaultBaseURL = "https://opencode.ai/zen/v1"
 	// UserAgent matches the official client (opencode/<release>). Zen free
 	// models reject any other caller with 403 FreeTierError.
-	UserAgent = "opencode/1.18.32"
+	UserAgent = "opencode/1.18.33"
+	// freeTools is the shell+read pair the Zen free-tier gate requires when the
+	// caller did not send tools. Official OpenCode always declares its own tools.
+	freeTools = `[{"type":"function","function":{"name":"shell","description":"Run a shell command","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}},{"type":"function","function":{"name":"read","description":"Read a file","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}}]`
 )
 
 // Adapter wraps openai_compat against OpenCode Zen and tags free/privacy models.
@@ -36,11 +43,9 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 	}
 	session := strings.TrimSpace(opts.SessionID)
 	if session == "" {
-		session = opts.ID
+		session = newOpenCodeSessionID()
 	}
-	if session == "" {
-		session = Name
-	}
+	requestID := newOpenCodeRequestID()
 	if opts.ExtraHeaders == nil {
 		opts.ExtraHeaders = map[string]string{}
 	}
@@ -54,7 +59,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		opts.ExtraHeaders["x-opencode-session"] = session
 	}
 	if opts.ExtraHeaders["x-opencode-request"] == "" {
-		opts.ExtraHeaders["x-opencode-request"] = session
+		opts.ExtraHeaders["x-opencode-request"] = requestID
 	}
 	inner, err := openai_compat.New(opts)
 	if err != nil {
@@ -98,10 +103,29 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 }
 
 func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.ChatResponse, error) {
-	return a.inner.Chat(ctx, req)
+	if !looksFree(requestModel(req)) {
+		return a.inner.Chat(ctx, req)
+	}
+	raw, err := prepareFreeChat(req)
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	inner, ok := a.inner.(*openai_compat.Adapter)
+	if !ok {
+		req.Raw = raw
+		return a.inner.Chat(ctx, req)
+	}
+	return inner.Complete(ctx, requestModel(req), raw)
 }
 
 func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.Writer) error {
+	if looksFree(requestModel(req)) {
+		raw, err := prepareFreeChat(req)
+		if err != nil {
+			return err
+		}
+		req.Raw = raw
+	}
 	return a.inner.ChatStream(ctx, req, w)
 }
 
@@ -115,6 +139,70 @@ func (a *Adapter) EditImage(ctx context.Context, req adapter.ImageRequest) (adap
 
 func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
 	return adapter.EmbedFrom(a.inner, ctx, req)
+}
+
+func requestModel(req adapter.ChatRequest) string {
+	if req.Model != "" {
+		return req.Model
+	}
+	return jsonx.PeekBody(req.Raw).Model
+}
+
+// prepareFreeChat matches the Zen free-tier gate: stream must be true, and the
+// body must declare shell and read when the caller sent no tools.
+func prepareFreeChat(req adapter.ChatRequest) ([]byte, error) {
+	raw := req.Raw
+	if len(raw) == 0 {
+		var err error
+		raw, err = json.Marshal(map[string]any{
+			"model":    req.Model,
+			"messages": req.Messages,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	raw = jsonx.SetStream(raw, true)
+	return ensureFreeTools(raw), nil
+}
+
+func ensureFreeTools(raw []byte) []byte {
+	var probe struct {
+		Tools json.RawMessage `json:"tools"`
+	}
+	if json.Unmarshal(raw, &probe) == nil {
+		trimmed := bytes.TrimSpace(probe.Tools)
+		if len(trimmed) > 2 && trimmed[0] == '[' {
+			return raw
+		}
+	}
+	return jsonx.SetTopLevelRaw(raw, "tools", []byte(freeTools))
+}
+
+const openCodeAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+func newOpenCodeSessionID() string {
+	return "ses_" + newOpenCodeSuffix()
+}
+
+func newOpenCodeRequestID() string {
+	return newOpenCodeSuffix()
+}
+
+func newOpenCodeSuffix() string {
+	var buf [20]byte
+	_, _ = rand.Read(buf[:])
+	hexPart := make([]byte, 12)
+	const hexdigits = "0123456789abcdef"
+	for i := 0; i < 6; i++ {
+		hexPart[i*2] = hexdigits[buf[i]>>4]
+		hexPart[i*2+1] = hexdigits[buf[i]&0x0f]
+	}
+	rest := make([]byte, 14)
+	for i := range rest {
+		rest[i] = openCodeAlphabet[int(buf[6+i])%len(openCodeAlphabet)]
+	}
+	return string(hexPart) + string(rest)
 }
 
 func looksFree(id string) bool {
