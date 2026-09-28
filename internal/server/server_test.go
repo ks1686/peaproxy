@@ -1049,3 +1049,32 @@ func TestClientsVerifyAgainstLocalAdapter(t *testing.T) {
 		}
 	}
 }
+
+func TestMalformedChatJSONIs400(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not-json"))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid character") {
+		t.Fatalf("body %s", rr.Body)
+	}
+}
+
+func TestFaviconIsServed(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "image/png" {
+		t.Fatalf("content-type %q", ct)
+	}
+	if rr.Body.Len() == 0 {
+		t.Fatal("empty favicon")
+	}
+}

@@ -150,6 +150,14 @@ func AccountsForModel(models []Model, q Query, id string) []string {
 }
 
 func annotate(m Model, q Query) Model {
+	// A ListModels failure is a health sentinel, not a model. Hide/expose must
+	// not turn "<account>:unavailable" into a client id that can be routed.
+	if m.Status == "auth_error" || strings.HasSuffix(m.ID, ":unavailable") {
+		m.Hidden = true
+		m.Exposed = false
+		m.Routable = false
+		return m
+	}
 	hidden := slices.Contains(q.HideProviders, m.Provider) || slices.Contains(q.HideModels, m.ID)
 	exposed := !hidden
 	if q.ForClients && len(q.ExposeModels) > 0 && !slices.Contains(q.ExposeModels, m.ID) {

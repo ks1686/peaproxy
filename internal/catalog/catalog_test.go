@@ -306,3 +306,41 @@ func TestPinAndRenameDoNotChangeHideRouting(t *testing.T) {
 		t.Fatalf("annotated hidden pin: %#v", hidden)
 	}
 }
+
+func TestAuthErrorSentinelStaysUnlistedAndUnroutable(t *testing.T) {
+	models := append(sampleModels(), Model{
+		ID:        "down:unavailable",
+		Provider:  "openai_compat",
+		AccountID: "down",
+		Tier:      TierPaid,
+		Status:    "auth_error",
+		Exposed:   false,
+		Routable:  false,
+	})
+	q := Query{ForClients: true}
+	for _, m := range List(models, q) {
+		if m.ID == "down:unavailable" {
+			t.Fatalf("sentinel listed: %#v", m)
+		}
+	}
+	if _, ok := FindRoutable(models, q, "down:unavailable"); ok {
+		t.Fatal("sentinel is routable")
+	}
+	if got := AccountsForModel(models, q, "down:unavailable"); len(got) != 0 {
+		t.Fatalf("accounts %v", got)
+	}
+	ann := AllAnnotated(models, Query{})
+	var saw bool
+	for _, m := range ann {
+		if m.ID != "down:unavailable" {
+			continue
+		}
+		saw = true
+		if m.Exposed || m.Routable || m.Status != "auth_error" {
+			t.Fatalf("flags %#v", m)
+		}
+	}
+	if !saw {
+		t.Fatal("sentinel dropped from the annotated catalog")
+	}
+}

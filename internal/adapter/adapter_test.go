@@ -228,6 +228,95 @@ func TestZenTagsFreeAndPrivacy(t *testing.T) {
 	}
 }
 
+func TestZenChatSendsOpenCodeClientIdentity(t *testing.T) {
+	var ua, client, session, request string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "mimo-v2.5-free"}, {"id": "big-pickle"}}})
+		case "/v1/chat/completions":
+			ua = r.Header.Get("User-Agent")
+			client = r.Header.Get("x-opencode-client")
+			session = r.Header.Get("x-opencode-session")
+			request = r.Header.Get("x-opencode-request")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	a, err := opencodezen.New(adapter.Options{ID: "zen", BaseURL: srv.URL + "/v1", APIKey: "sk-zen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := a.ListModels(context.Background())
+	if err != nil || len(models) != 2 {
+		t.Fatalf("%v %#v", err, models)
+	}
+	if models[0].Tier != catalog.TierFree || models[1].Tier != catalog.TierFree {
+		t.Fatalf("free tiers: %#v %#v", models[0], models[1])
+	}
+	if _, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "mimo-v2.5-free",
+		Raw:   []byte(`{"model":"mimo-v2.5-free","messages":[{"role":"user","content":"hi"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if ua != opencodezen.UserAgent || client != "cli" || session == "" || request == "" {
+		t.Fatalf("ua=%q client=%q session=%q request=%q", ua, client, session, request)
+	}
+}
+
+func TestWorkersAICatalogUsesModelsSearch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/ai/v1/models") {
+			t.Errorf("GET %s must not be used", r.URL.Path)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path != "/client/v4/accounts/abc/ai/models/search" {
+			t.Errorf("path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("page") != "1" {
+			t.Errorf("page %s", r.URL.RawQuery)
+		}
+		if r.Header.Get("Authorization") != "Bearer cf-token" {
+			t.Errorf("auth %s", r.Header.Get("Authorization"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result": []map[string]any{
+				{"name": "@cf/meta/llama-3.1-8b-instruct", "task": map[string]string{"name": "Text Generation"}},
+				{"name": "@cf/baai/bge-small-en-v1.5", "task": map[string]string{"name": "Text Embeddings"}},
+			},
+			"result_info": map[string]int{"page": 1, "per_page": 100, "count": 2, "total_count": 2},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a, err := adapters.DefaultRegistry().Open("workers_ai", adapter.Options{
+		ID:      "workers-ai",
+		BaseURL: srv.URL + "/client/v4/accounts/abc/ai/v1",
+		APIKey:  "cf-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := a.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0].ID != "@cf/meta/llama-3.1-8b-instruct" || models[1].ID != "@cf/baai/bge-small-en-v1.5" {
+		t.Fatalf("%#v", models)
+	}
+	if !containsStr(models[1].Modalities, "embeddings") {
+		t.Fatalf("embeddings: %#v", models[1].Modalities)
+	}
+}
+
 func TestOpenAIDefaultsBaseURL(t *testing.T) {
 	a, err := openai.New(adapter.Options{ID: "oa", APIKey: "sk-test"})
 	if err != nil {

@@ -488,17 +488,23 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 	if err := a.ensureToken(ctx); err != nil {
 		return adapter.ChatResponse{}, err
 	}
-	raw, err := chatToResponses(req.Raw, req.Model, false)
+	// Codex rejects stream:false. Non-stream clients still get one JSON body;
+	// the upstream call is a stream that we assemble locally.
+	raw, err := chatToResponses(req.Raw, req.Model, true)
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
 	if raw == nil {
-		raw, err = chatToResponsesFromMessages(req.Model, req.Messages, false)
+		raw, err = chatToResponsesFromMessages(req.Model, req.Messages, true)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
 	}
-	body, err := a.postResponses(ctx, raw, false)
+	body, err := a.postResponses(ctx, raw, true)
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	body, err = responsesStreamToJSON(body)
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
@@ -539,7 +545,11 @@ func (a *Adapter) Responses(ctx context.Context, raw []byte) ([]byte, error) {
 	if err := a.ensureToken(ctx); err != nil {
 		return nil, err
 	}
-	return a.postResponses(ctx, prepareResponses(raw, false), false)
+	body, err := a.postResponses(ctx, prepareResponses(raw, true), true)
+	if err != nil {
+		return nil, err
+	}
+	return responsesStreamToJSON(body)
 }
 
 func (a *Adapter) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) error {
@@ -731,9 +741,102 @@ func chatMessagesHaveTools(msgs []chatInboundMessage) bool {
 func prepareResponses(raw []byte, stream bool) []byte {
 	// chatgpt.com Codex OAuth rejects stream_options, max_output_tokens, and
 	// any store value other than false (omit or true → HTTP 400).
+	// OpenAI accepts input as a string; Codex requires a message list.
 	raw = jsonx.DropTopLevelKeys(raw, "stream_options", "max_output_tokens", "store")
+	raw = coerceResponsesInput(raw)
 	raw = jsonx.SetStream(raw, stream)
 	return jsonx.SetBool(raw, "store", false)
+}
+
+func coerceResponsesInput(raw []byte) []byte {
+	var probe struct {
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(raw, &probe) != nil {
+		return raw
+	}
+	in := bytes.TrimSpace(probe.Input)
+	if len(in) == 0 || in[0] != '"' {
+		return raw
+	}
+	var text string
+	if json.Unmarshal(in, &text) != nil {
+		return raw
+	}
+	item, err := marshalResponsesMessage("user", "input_text", text)
+	if err != nil {
+		return raw
+	}
+	list, err := json.Marshal([]json.RawMessage{item})
+	if err != nil {
+		return raw
+	}
+	return jsonx.SetTopLevelRaw(raw, "input", list)
+}
+
+// responsesStreamToJSON turns a Codex SSE body into the completed response
+// object. A JSON object is returned unchanged so a non-stream payload still parses.
+func responsesStreamToJSON(body []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty responses body")
+	}
+	if trimmed[0] == '{' {
+		return trimmed, nil
+	}
+	var completed []byte
+	var text strings.Builder
+	sc := bufio.NewScanner(bytes.NewReader(trimmed))
+	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var ev struct {
+			Type     string          `json:"type"`
+			Delta    string          `json:"delta"`
+			Response json.RawMessage `json:"response"`
+		}
+		if json.Unmarshal([]byte(payload), &ev) != nil {
+			continue
+		}
+		switch ev.Type {
+		case "response.completed", "response.incomplete", "response.failed":
+			resp := bytes.TrimSpace(ev.Response)
+			if len(resp) > 0 && resp[0] == '{' {
+				completed = append([]byte(nil), resp...)
+			}
+		}
+		if strings.HasSuffix(ev.Type, "output_text.delta") {
+			text.WriteString(ev.Delta)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(completed) > 0 {
+		return completed, nil
+	}
+	if text.Len() == 0 {
+		return nil, fmt.Errorf("responses stream ended without a completed response")
+	}
+	return json.Marshal(map[string]any{
+		"output_text": text.String(),
+		"output": []any{
+			map[string]any{
+				"type": "message",
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": text.String()},
+				},
+			},
+		},
+	})
 }
 
 func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bool) ([]byte, error) {

@@ -1335,3 +1335,77 @@ func mustCandidates(t *testing.T, gw *Gateway, model string) []instance {
 	}
 	return cands
 }
+
+func TestUnknownModelDoesNotFanOut(t *testing.T) {
+	hitsA, hitsB := 0, 0
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "alpha"}}})
+				return
+			}
+			hitsA++
+			w.WriteHeader(http.StatusTooManyRequests)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "beta"}}})
+				return
+			}
+			hitsB++
+			w.WriteHeader(http.StatusOK)
+		},
+	)
+	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"missing-model","messages":[{"role":"user","content":"hi"}]}`))
+	if !errors.Is(err, router.ErrNoAccount) {
+		t.Fatalf("err = %v", err)
+	}
+	if hitsA != 0 || hitsB != 0 {
+		t.Fatalf("upstream hits a=%d b=%d", hitsA, hitsB)
+	}
+}
+
+func TestAuthErrorSentinelIsNotListedOrRouted(t *testing.T) {
+	var chatHits int
+	gw := twoAccountGateway(t,
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			chatHits++
+			w.WriteHeader(http.StatusOK)
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "ok-model"}}})
+				return
+			}
+		},
+	)
+	for _, m := range gw.Listed("") {
+		if strings.HasSuffix(m.ID, ":unavailable") {
+			t.Fatalf("sentinel listed: %+v", m)
+		}
+	}
+	var saw bool
+	for _, m := range gw.Annotated("") {
+		if m.ID != "acct-a:unavailable" {
+			continue
+		}
+		saw = true
+		if m.Exposed || m.Routable || m.Status != "auth_error" {
+			t.Fatalf("sentinel flags: %+v", m)
+		}
+	}
+	if !saw {
+		t.Fatal("sentinel missing from annotated catalog")
+	}
+	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"acct-a:unavailable","messages":[{"role":"user","content":"hi"}]}`))
+	if !errors.Is(err, router.ErrNoAccount) {
+		t.Fatalf("err = %v", err)
+	}
+	if chatHits != 0 {
+		t.Fatalf("sentinel was routed, hits=%d", chatHits)
+	}
+}

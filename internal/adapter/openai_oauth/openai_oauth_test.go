@@ -168,7 +168,7 @@ func TestChatPostsResponsesWithBearerAndAccountHeader(t *testing.T) {
 	if !bytes.Contains(body, []byte(`"input"`)) {
 		t.Fatalf("missing input: %s", body)
 	}
-	assertCodexResponsesBody(t, body, false)
+	assertCodexResponsesBody(t, body, true)
 }
 
 func TestResponsesPassthroughKeepsInput(t *testing.T) {
@@ -226,12 +226,12 @@ func TestResponsesDropsStreamOptionsForCodexOAuth(t *testing.T) {
 		{
 			name: "top-level stream_options dropped",
 			raw:  `{"model":"gpt-5","input":"codex ping","stream_options":{"include_usage":true}}`,
-			keep: []string{`"input":"codex ping"`},
+			keep: []string{`"text":"codex ping"`, `"input_text"`},
 		},
 		{
 			name: "quoted stream_options in input kept",
 			raw:  `{"model":"gpt-5","input":"mention stream_options please","stream_options":{"include_usage":true},"max_output_tokens":16}`,
-			keep: []string{`"input":"mention stream_options please"`},
+			keep: []string{`"text":"mention stream_options please"`, `"input_text"`},
 		},
 		{
 			name: "nested stream_options in tools kept",
@@ -251,7 +251,7 @@ func TestResponsesDropsStreamOptionsForCodexOAuth(t *testing.T) {
 			if bytes.Contains(gotBody, []byte(`"max_output_tokens"`)) {
 				t.Fatalf("Codex OAuth must omit max_output_tokens: %s", gotBody)
 			}
-			assertCodexResponsesBody(t, gotBody, false)
+			assertCodexResponsesBody(t, gotBody, true)
 			for _, k := range tc.keep {
 				if !bytes.Contains(gotBody, []byte(k)) {
 					t.Fatalf("must keep %s: %s", k, gotBody)
@@ -310,13 +310,13 @@ func TestResponsesForwardsToolsAndFunctionCallOutput(t *testing.T) {
 	if gotAuth != "Bearer tok" || gotAcct != "acct_99" {
 		t.Fatalf("auth=%q acct=%q", gotAuth, gotAcct)
 	}
-	if gotAccept != "application/json" {
+	if gotAccept != "text/event-stream" {
 		t.Fatalf("accept %s", gotAccept)
 	}
 	if bytes.Contains(gotBody, []byte("stream_options")) {
 		t.Fatalf("must drop stream_options: %s", gotBody)
 	}
-	assertCodexResponsesBody(t, gotBody, false)
+	assertCodexResponsesBody(t, gotBody, true)
 	for _, key := range []string{`"tools"`, `"tool_choice"`, `"function_call_output"`, `"function_call"`, `"reasoning"`, `"lookup"`} {
 		if !bytes.Contains(gotBody, []byte(key)) {
 			t.Fatalf("forwarded body missing %s: %s", key, gotBody)
@@ -625,9 +625,11 @@ func TestPrepareResponsesForcesStoreFalseAndDropsMaxOutputTokens(t *testing.T) {
 			if bytes.Contains(out, []byte(`"max_output_tokens":16`)) {
 				t.Fatalf("max_output_tokens must be omitted: %s", out)
 			}
-			if strings.Contains(tc.in, `mention max_output_tokens please`) &&
-				!bytes.Contains(out, []byte(`"input":"mention max_output_tokens please"`)) {
-				t.Fatalf("quoted max_output_tokens in input rewritten: %s", out)
+			if strings.Contains(tc.in, `mention max_output_tokens please`) {
+				if !bytes.Contains(out, []byte(`mention max_output_tokens please`)) ||
+					bytes.Contains(out, []byte(`"input":"mention max_output_tokens please"`)) {
+					t.Fatalf("string input must become a list that keeps the text: %s", out)
+				}
 			}
 		})
 	}
@@ -704,7 +706,7 @@ func TestChatPostsResponsesForcesStoreFalse(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertCodexResponsesBody(t, gotBody, false)
+	assertCodexResponsesBody(t, gotBody, true)
 	if bytes.Contains(gotBody, []byte(`"max_output_tokens"`)) {
 		t.Fatalf("posted max_output_tokens: %s", gotBody)
 	}
@@ -714,7 +716,7 @@ func TestChatPostsResponsesForcesStoreFalse(t *testing.T) {
 	if _, err := a.Responses(context.Background(), raw); err != nil {
 		t.Fatal(err)
 	}
-	assertCodexResponsesBody(t, gotBody, false)
+	assertCodexResponsesBody(t, gotBody, true)
 	if bytes.Contains(gotBody, []byte(`"max_output_tokens"`)) {
 		t.Fatalf("posted max_output_tokens: %s", gotBody)
 	}
@@ -878,6 +880,59 @@ func TestResponsesToChatCompletionCarriesReasoningOpaque(t *testing.T) {
 	}
 	if !bytes.Contains(out, []byte(`"reasoning_opaque"`)) || !bytes.Contains(out, []byte(`"responses_reasoning"`)) || !bytes.Contains(out, []byte(`"rs_9"`)) {
 		t.Fatalf("missing carry: %s", out)
+	}
+}
+
+func TestNonStreamAssemblesCodexSSEAndStringInput(t *testing.T) {
+	var gotBody []byte
+	var gotAccept string
+	sse := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"pon"}`,
+		``,
+		`data: {"type":"response.completed","response":{"id":"resp_1","output_text":"pong","output":[{"type":"message","content":[{"type":"output_text","text":"pong"}]}]}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			http.NotFound(w, r)
+			return
+		}
+		gotAccept = r.Header.Get("Accept")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, sse)
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gpt-5",
+		Raw:   []byte(`{"model":"gpt-5","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if err != nil || resp.Content != "pong" {
+		t.Fatalf("%v %#v", err, resp)
+	}
+	assertCodexResponsesBody(t, gotBody, true)
+	if gotAccept != "text/event-stream" {
+		t.Fatalf("accept %s", gotAccept)
+	}
+
+	gotBody = nil
+	out, err := a.Responses(context.Background(), []byte(`{"model":"gpt-5","input":"Reply with the single word pong."}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(gotBody, []byte(`"input":"Reply with the single word pong."`)) {
+		t.Fatalf("string input forwarded: %s", gotBody)
+	}
+	if !bytes.Contains(gotBody, []byte(`"type":"input_text"`)) || !bytes.Contains(gotBody, []byte(`Reply with the single word pong.`)) {
+		t.Fatalf("input list: %s", gotBody)
+	}
+	if bytes.Contains(out, []byte(`"type":"response.completed"`)) || !bytes.Contains(out, []byte(`"output_text":"pong"`)) {
+		t.Fatalf("assembled response %s", out)
 	}
 }
 

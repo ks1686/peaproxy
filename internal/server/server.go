@@ -101,6 +101,7 @@ func New(opts Options) *Server {
 		uiFS = ui.FS
 	}
 	mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServer(http.FS(uiFS))))
+	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	addr := "127.0.0.1:8317"
@@ -138,6 +139,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.http.Shutdown(ctx)
 }
 
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	data, err := ui.FS.ReadFile("web/favicon.png")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(data)
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	_ = r
 	data, err := ui.FS.ReadFile("web/index.html")
@@ -168,7 +180,7 @@ func (s *Server) handleCatalogAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	raw, err := readBody(r)
+	raw, err := readJSONBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
 		return
@@ -201,7 +213,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	raw, err := readBody(r)
+	raw, err := readJSONBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
 		return
@@ -230,7 +242,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	raw, err := readBody(r)
+	raw, err := readJSONBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
 		return
@@ -263,6 +275,12 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ct := r.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(ct), "multipart/") {
+		if err := validateJSONObject(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, errJSON(err))
+			return
+		}
+	}
 	model := gateway.ImageEditModel(raw, ct)
 	resp, account, err := s.gw.EditImage(requestCtx(r, raw), raw, ct)
 	if err != nil {
@@ -285,7 +303,7 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	raw, err := readBody(r)
+	raw, err := readJSONBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
 		return
@@ -313,7 +331,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
-	raw, err := readBody(r)
+	raw, err := readJSONBody(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errJSON(err))
 		return
@@ -946,6 +964,30 @@ func readBody(r *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("request body exceeds %d bytes", maxBody)
 	}
 	return raw, nil
+}
+
+func readJSONBody(r *http.Request) ([]byte, error) {
+	raw, err := readBody(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateJSONObject(raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func validateJSONObject(raw []byte) error {
+	trimmed := bytes.TrimSpace(raw)
+	var doc json.RawMessage
+	if err := json.Unmarshal(trimmed, &doc); err != nil {
+		return err
+	}
+	doc = bytes.TrimSpace(doc)
+	if len(doc) == 0 || doc[0] != '{' {
+		return errors.New("json body must be an object")
+	}
+	return nil
 }
 
 func statusOf(err error) int {

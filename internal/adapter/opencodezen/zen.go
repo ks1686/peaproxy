@@ -14,6 +14,9 @@ import (
 const (
 	Name           = "opencode_zen"
 	DefaultBaseURL = "https://opencode.ai/zen/v1"
+	// UserAgent matches the official client (opencode/<release>). Zen free
+	// models reject any other caller with 403 FreeTierError.
+	UserAgent = "opencode/1.18.32"
 )
 
 // Adapter wraps openai_compat against OpenCode Zen and tags free/privacy models.
@@ -30,6 +33,28 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 	}
 	if opts.Tier == "" {
 		opts.Tier = catalog.TierFree
+	}
+	session := strings.TrimSpace(opts.SessionID)
+	if session == "" {
+		session = opts.ID
+	}
+	if session == "" {
+		session = Name
+	}
+	if opts.ExtraHeaders == nil {
+		opts.ExtraHeaders = map[string]string{}
+	}
+	if opts.ExtraHeaders["User-Agent"] == "" {
+		opts.ExtraHeaders["User-Agent"] = UserAgent
+	}
+	if opts.ExtraHeaders["x-opencode-client"] == "" {
+		opts.ExtraHeaders["x-opencode-client"] = "cli"
+	}
+	if opts.ExtraHeaders["x-opencode-session"] == "" {
+		opts.ExtraHeaders["x-opencode-session"] = session
+	}
+	if opts.ExtraHeaders["x-opencode-request"] == "" {
+		opts.ExtraHeaders["x-opencode-request"] = session
 	}
 	inner, err := openai_compat.New(opts)
 	if err != nil {
@@ -97,7 +122,7 @@ func looksFree(id string) bool {
 	if strings.HasSuffix(lower, "-free") || strings.Contains(lower, "-free-") || strings.Contains(lower, " free") {
 		return true
 	}
-	for _, n := range []string{"big pickle", "space bunny", "jev 1.13"} {
+	for _, n := range []string{"big pickle", "big-pickle", "space bunny", "jev 1.13"} {
 		if strings.Contains(lower, n) {
 			return true
 		}

@@ -1448,20 +1448,23 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	}
 	q := g.queryLocked()
 	ids := catalog.AccountsForModel(g.models, q, model)
+	// An id nobody lists must not be fanned out. A typo would otherwise spend
+	// quota on every account.
+	if len(ids) == 0 {
+		return nil, 0
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
 	var matched []instance
-	if len(ids) > 0 {
-		want := make(map[string]struct{}, len(ids))
-		for _, id := range ids {
-			want[id] = struct{}{}
-		}
-		for _, inst := range g.inst {
-			if _, ok := want[inst.Provider.ID]; ok {
-				matched = append(matched, inst)
-			}
+	for _, inst := range g.inst {
+		if _, ok := want[inst.Provider.ID]; ok {
+			matched = append(matched, inst)
 		}
 	}
 	if len(matched) == 0 {
-		matched = append(matched, g.inst...)
+		return nil, 0
 	}
 	hot := make([]instance, 0, len(matched))
 	var until time.Time

@@ -79,6 +79,9 @@ func (a *Adapter) Validate(ctx context.Context) error {
 }
 
 func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
+	if a.provider == "workers_ai" {
+		return a.listWorkersAIModels(ctx)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL+"/models", nil)
 	if err != nil {
 		return nil, err
@@ -141,6 +144,137 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// listWorkersAIModels uses Cloudflare's catalog. GET {base}/models is
+// /ai/v1/models, which Workers AI answers 405. The live list is
+// GET /accounts/{id}/ai/models/search. Model ids are the name field
+// (@cf/…), which the OpenAI-compat chat route accepts.
+func (a *Adapter) listWorkersAIModels(ctx context.Context) ([]catalog.Model, error) {
+	var out []catalog.Model
+	seen := map[string]struct{}{}
+	for page := 1; page <= 20; page++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, workersSearchURL(a.baseURL, page), nil)
+		if err != nil {
+			return nil, err
+		}
+		a.auth(req)
+		client := a.client
+		if client.Timeout == 0 {
+			c := *a.client
+			c.Timeout = 5 * time.Second
+			client = &c
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("%s list models: %w", a.provider, err)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, adapter.NewHTTPError(resp, truncate(body))
+		}
+		var pageBody struct {
+			Success bool `json:"success"`
+			Result  []struct {
+				Name string          `json:"name"`
+				ID   string          `json:"id"`
+				Task json.RawMessage `json:"task"`
+			} `json:"result"`
+			ResultInfo struct {
+				Count      int `json:"count"`
+				TotalCount int `json:"total_count"`
+			} `json:"result_info"`
+		}
+		if err := json.Unmarshal(body, &pageBody); err != nil {
+			return nil, err
+		}
+		if !pageBody.Success && len(pageBody.Result) == 0 {
+			return nil, fmt.Errorf("%s list models: %s", a.provider, truncate(body))
+		}
+		if len(pageBody.Result) == 0 {
+			break
+		}
+		for _, m := range pageBody.Result {
+			id := m.Name
+			if id == "" {
+				id = m.ID
+			}
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, catalog.Model{
+				ID:         id,
+				Provider:   a.provider,
+				AccountID:  a.id,
+				Tier:       a.tier,
+				Modalities: catalog.ModalitiesFromLive(id, nil, workersOutput(m.Task)),
+				Status:     "ready",
+				Exposed:    true,
+				Routable:   true,
+			})
+		}
+		if pageBody.ResultInfo.TotalCount > 0 && len(out) >= pageBody.ResultInfo.TotalCount {
+			break
+		}
+		if pageBody.ResultInfo.Count > 0 && len(pageBody.Result) < pageBody.ResultInfo.Count {
+			break
+		}
+		if len(pageBody.Result) < 100 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func workersSearchURL(base string, page int) string {
+	base = strings.TrimRight(base, "/")
+	root := base
+	if strings.HasSuffix(base, "/ai/v1") {
+		root = strings.TrimSuffix(base, "/v1")
+	}
+	return fmt.Sprintf("%s/models/search?page=%d&per_page=100", root, page)
+}
+
+func workersOutput(task json.RawMessage) []string {
+	name := workersTaskName(task)
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "embedding"):
+		return []string{"embeddings"}
+	case strings.Contains(lower, "image"):
+		return []string{"image"}
+	default:
+		return []string{"text"}
+	}
+}
+
+func workersTaskName(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	if raw[0] == '"' {
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return ""
+		}
+		return s
+	}
+	var obj struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(raw, &obj) != nil {
+		return ""
+	}
+	return obj.Name
 }
 
 func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.ChatResponse, error) {
