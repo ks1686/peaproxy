@@ -11,12 +11,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -680,11 +682,13 @@ func chatHTTPError(resp *http.Response, body string) error {
 }
 
 func (a *Adapter) generateURL(stream bool) string {
+	// Consumer chat goes to the daily Cloud Code host. The production host
+	// answers generateContent with 429 even when the account still has quota.
 	op := "generateContent"
 	if stream {
 		op = "streamGenerateContent?alt=sse"
 	}
-	return strings.TrimRight(a.apiBase, "/") + "/" + APIVersion + ":" + op
+	return strings.TrimRight(a.dailyAPI, "/") + "/" + APIVersion + ":" + op
 }
 
 type geminiPart struct {
@@ -726,6 +730,7 @@ type geminiInnerRequest struct {
 	SystemInstruction *geminiContent          `json:"systemInstruction,omitempty"`
 	GenerationConfig  *geminiGenerationConfig `json:"generationConfig,omitempty"`
 	Tools             []geminiTool            `json:"tools,omitempty"`
+	SessionID         string                  `json:"sessionId,omitempty"`
 }
 
 type geminiEnvelope struct {
@@ -799,6 +804,9 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 		RequestID:   newAgentRequestID(reqType),
 		Request:     geminiInnerRequest{Contents: contents},
 	}
+	if reqType != "image_gen" {
+		env.Request.SessionID = newSessionID()
+	}
 	if len(tools) > 0 {
 		env.Request.Tools = []geminiTool{{FunctionDeclarations: tools}}
 	}
@@ -806,6 +814,16 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 		env.Request.SystemInstruction = &geminiContent{Parts: []geminiPart{{Text: sys.String()}}}
 	}
 	return json.Marshal(env)
+}
+
+func newSessionID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	n := int64(binary.BigEndian.Uint64(b[:]) & 0x7fffffffffffffff)
+	if n == 0 {
+		n = 1
+	}
+	return "-" + strconv.FormatInt(n, 10)
 }
 
 func newAgentRequestID(reqType string) string {

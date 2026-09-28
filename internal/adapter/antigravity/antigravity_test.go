@@ -156,6 +156,7 @@ func TestListModelsAndChatUseCloudCode(t *testing.T) {
 	if !strings.Contains(modelPath, "fetchAvailableModels") {
 		t.Fatalf("path %s", modelPath)
 	}
+	a.apiBase = "https://cloudcode-pa.googleapis.com"
 	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
 		Model:    "gemini-2.5-flash",
 		Messages: []adapter.Message{{Role: "user", Content: "hi"}},
@@ -175,7 +176,7 @@ func TestListModelsAndChatUseCloudCode(t *testing.T) {
 	if chatUA != UserAgent || strings.Contains(chatUA, "linux/amd64") || strings.Contains(chatUA, "2.9.1") {
 		t.Fatalf("user agent %s", chatUA)
 	}
-	for _, needle := range []string{`"userAgent":"antigravity"`, `"requestType":"agent"`, `"requestId":"agent-`} {
+	for _, needle := range []string{`"userAgent":"antigravity"`, `"requestType":"agent"`, `"requestId":"agent-`, `"sessionId":"-`} {
 		if !bytes.Contains(chatBody, []byte(needle)) {
 			t.Fatalf("missing %s in %s", needle, chatBody)
 		}
