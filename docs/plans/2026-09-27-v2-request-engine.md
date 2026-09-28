@@ -585,6 +585,6 @@ Remaining work against this plan. A box is checked only after its proof command 
 - [x] Parse Retry-After on the remaining adapter responses that still build HTTPError by hand
 - [x] Cover messages, responses, 429 failover, and pre-commit stream failure in the end-to-end fixture
 - [x] Keep a cancellation soak from growing goroutines, including a 10-minute run
-- [ ] Run the Playwright smoke in CI
+- [x] Run the Playwright smoke in CI
 - [x] Record that installed harness versions were not live-tested
 - [x] Return guided setup for Pi instead of writing a config file
