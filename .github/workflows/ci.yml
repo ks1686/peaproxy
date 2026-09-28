@@ -39,3 +39,21 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: check
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: scripts/package-lock.json
+      - name: Install Playwright
+        run: npm ci --prefix scripts && npx --prefix scripts playwright install --with-deps chromium
+      - name: UI smoke
+        env:
+          PEAPROXY_SECRET_BACKEND: file
+        run: node scripts/v2-ui-smoke.mjs

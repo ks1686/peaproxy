@@ -13,6 +13,20 @@ func TestCapabilityEvidenceEligibilityRequiresPositiveSupport(t *testing.T) {
 	}
 }
 
+func TestBundledProfileFillsUnknownOnly(t *testing.T) {
+	filled := FillUnknown("anthropic-claude", CapabilityEvidence{})
+	if filled.Tools != SupportYes || filled.Vision != SupportYes {
+		t.Fatalf("bundled profile did not fill unknown facts: %+v", filled)
+	}
+	kept := FillUnknown("anthropic-claude", CapabilityEvidence{Tools: SupportNo})
+	if kept.Tools != SupportNo {
+		t.Fatalf("live no was overwritten: %+v", kept)
+	}
+	if got := FillUnknown("missing", CapabilityEvidence{}); got.Tools != "" && got.Tools != SupportUnknown {
+		t.Fatalf("unknown profile invented support: %+v", got)
+	}
+}
+
 func TestEligibilityUnknownIsNotSupported(t *testing.T) {
 	if (CapabilityEvidence{}).Supports(RequirementTools) {
 		t.Fatal("unknown capability counted as support")

@@ -131,7 +131,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 			"device_code": {pending.DeviceCode},
 			"client_id":   {ClientID},
 		}
-		raw, status, perr := a.postFormStatus(ctx, a.tokenURL, form)
+		raw, status, _, perr := a.postFormStatus(ctx, a.tokenURL, form)
 		if perr != nil && status == 0 {
 			return oauth.DevicePollResult{}, perr
 		}
@@ -193,7 +193,7 @@ func (a *Adapter) mintKey(ctx context.Context, dca string) (mintedKey, error) {
 		return mintedKey{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return mintedKey{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return mintedKey{}, adapter.NewHTTPError(resp, truncate(raw))
 	}
 	var minted mintedKey
 	if err := json.Unmarshal(raw, &minted); err != nil {
@@ -215,34 +215,34 @@ func (a *Adapter) storeToken(tok oauth.Token) error {
 }
 
 func (a *Adapter) postForm(ctx context.Context, endpoint string, form url.Values) ([]byte, error) {
-	raw, status, err := a.postFormStatus(ctx, endpoint, form)
+	raw, status, hdr, err := a.postFormStatus(ctx, endpoint, form)
 	if err != nil {
 		return nil, err
 	}
 	if status >= 300 {
-		return nil, adapter.HTTPError{Status: status, Body: truncate(raw)}
+		return nil, adapter.NewHTTPError(&http.Response{StatusCode: status, Header: hdr}, truncate(raw))
 	}
 	return raw, nil
 }
 
-func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {
+func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.Values) ([]byte, int, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", UserAgent)
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, resp.Header.Clone(), err
 	}
-	return raw, resp.StatusCode, nil
+	return raw, resp.StatusCode, resp.Header.Clone(), nil
 }
 
 func (a *Adapter) ensureToken(ctx context.Context) error {

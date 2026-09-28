@@ -101,7 +101,7 @@ func (a *Adapter) listTags(ctx context.Context) ([]catalog.Model, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: string(body)}
+		return nil, adapter.NewHTTPError(resp, string(body))
 	}
 	var parsed struct {
 		Models []struct {

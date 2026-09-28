@@ -170,7 +170,7 @@ func (a *Adapter) startDevice(ctx context.Context) (adapter.AuthSession, error) 
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 300 {
-		return adapter.AuthSession{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return adapter.AuthSession{}, adapter.NewHTTPError(resp, truncate(raw))
 	}
 	var parsed struct {
 		DeviceAuthID string `json:"device_auth_id"`
@@ -276,7 +276,7 @@ func (a *Adapter) completeDevice(ctx context.Context, pending *pendingAuth) erro
 			}
 		}
 		if resp.StatusCode >= 300 {
-			return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+			return adapter.NewHTTPError(resp, truncate(raw))
 		}
 		var parsed struct {
 			AuthorizationCode string `json:"authorization_code"`
@@ -350,7 +350,7 @@ func (a *Adapter) postForm(ctx context.Context, form url.Values) (oauth.Token, e
 		return oauth.Token{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return oauth.Token{}, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return oauth.Token{}, adapter.NewHTTPError(resp, truncate(raw))
 	}
 	return oauth.ParseTokenResponse(raw)
 }
@@ -431,7 +431,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	ids := parseModelIDs(body)
 	out := make([]catalog.Model, 0, len(ids))

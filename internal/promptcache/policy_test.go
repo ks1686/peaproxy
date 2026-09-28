@@ -3,6 +3,8 @@ package promptcache
 import (
 	"bytes"
 	"testing"
+
+	"github.com/ks1686/peaproxy/internal/compatdata"
 )
 
 func TestCacheCountersProviderSemantics(t *testing.T) {
@@ -24,6 +26,22 @@ func TestPreserveCallerBreakpoints(t *testing.T) {
 	}
 	if string(out) != string(in) {
 		t.Fatalf("preserve changed bytes: %s", out)
+	}
+}
+
+func TestBundledOffDisablesOptimize(t *testing.T) {
+	prev := profiles["anthropic-claude"]
+	t.Cleanup(func() { profiles["anthropic-claude"] = prev })
+	ApplyDocument(compatdata.Document{Schema: 1, Profiles: map[string]compatdata.Profile{
+		"anthropic-claude": {Cache: "off"},
+	}})
+	in := []byte(`{"system":[{"type":"text","text":"hi"}]}`)
+	out, err := Apply(in, ModeOptimize, "anthropic-claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(in) {
+		t.Fatalf("off profile added a breakpoint: %s", out)
 	}
 }
 

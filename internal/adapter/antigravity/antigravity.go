@@ -442,7 +442,7 @@ func (a *Adapter) do(req *http.Request) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return nil, adapter.NewHTTPError(resp, truncate(raw))
 	}
 	return raw, nil
 }
@@ -516,7 +516,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return nil, adapter.NewHTTPError(resp, truncate(raw))
 	}
 	ids := parseAntigravityModels(raw)
 	out := make([]catalog.Model, 0, len(ids))

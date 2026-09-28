@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +19,9 @@ var beforeWrite = func(string) error { return nil }
 
 // ErrUnknownClient means the name is not a managed integration.
 var ErrUnknownClient = errors.New("unknown managed client")
+
+// ErrGuidedSetup means the harness has no writable config. Callers show the preset snippet.
+var ErrGuidedSetup = errors.New("guided setup")
 
 // Layout resolves config paths under root instead of the real home directory.
 type Layout struct {
@@ -50,7 +54,7 @@ func (l Layout) path(name string) string {
 	case "opencode":
 		return filepath.Join(l.Root, "opencode.json")
 	case "continue":
-		return filepath.Join(l.Root, ".continue", "config.json")
+		return filepath.Join(l.Root, ".continue", "config.yaml")
 	case "codex":
 		return filepath.Join(l.Root, ".codex", "config.toml")
 	case "claude-code":
@@ -62,6 +66,9 @@ func (l Layout) path(name string) string {
 
 // Connect records a PeaProxy provider without removing unrelated keys.
 func (l Layout) Connect(name, baseURL, model string) error {
+	if name == "pi" {
+		return ErrGuidedSetup
+	}
 	path := l.path(name)
 	if path == "" {
 		return ErrUnknownClient
@@ -117,6 +124,8 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 	switch name {
 	case "codex":
 		return insertCodex(raw, baseURL, model), nil
+	case "continue":
+		return insertContinue(raw, baseURL, model), nil
 	default:
 		return insertJSON(raw, baseURL, model)
 	}
@@ -126,25 +135,26 @@ func removeOwned(name string, raw []byte) ([]byte, error) {
 	switch name {
 	case "codex":
 		return []byte(removeCodex(string(raw))), nil
+	case "continue":
+		return []byte(removeContinue(string(raw))), nil
 	default:
 		return removeJSON(raw)
 	}
 }
 
 func insertJSON(raw []byte, baseURL, model string) ([]byte, error) {
-	root := map[string]any{}
-	text := strings.TrimSpace(string(raw))
-	if text != "" {
-		if err := json.Unmarshal(stripJSONC(raw), &root); err != nil {
-			return nil, err
-		}
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		body = []byte("{}")
 	}
-	root["peaproxy"] = map[string]any{"baseURL": baseURL, "model": model}
-	out, err := json.MarshalIndent(root, "", "  ")
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	next, err := upsertJSONKey(body, "peaproxy", map[string]any{"baseURL": baseURL, "model": model})
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(out, '\n')...), nil
+	return append(commentPrefix(raw), append(next, '\n')...), nil
 }
 
 func commentPrefix(raw []byte) []byte {
@@ -161,19 +171,18 @@ func commentPrefix(raw []byte) []byte {
 }
 
 func removeJSON(raw []byte) ([]byte, error) {
-	if len(strings.TrimSpace(string(raw))) == 0 {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
 		return raw, nil
 	}
-	root := map[string]any{}
-	if err := json.Unmarshal(stripJSONC(raw), &root); err != nil {
-		return nil, err
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
 	}
-	delete(root, "peaproxy")
-	out, err := json.MarshalIndent(root, "", "  ")
+	next, err := deleteJSONKey(body, "peaproxy")
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(out, '\n')...), nil
+	return append(commentPrefix(raw), append(next, '\n')...), nil
 }
 
 func stripJSONC(raw []byte) []byte {
@@ -205,6 +214,45 @@ func removeCodex(text string) string {
 			skip = trim == "[model_providers.peaproxy]"
 		}
 		if skip {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func insertContinue(raw []byte, baseURL, model string) []byte {
+	text := strings.TrimRight(removeContinue(string(raw)), "\n")
+	block := "  # peaproxy-owned-start\n  - name: PeaProxy\n    provider: openai\n    model: " + quote(model) + "\n    apiBase: " + quote(baseURL) + "\n    apiKey: peaproxy\n  # peaproxy-owned-end\n"
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "models:" {
+			out := append([]string{}, lines[:i+1]...)
+			out = append(out, strings.TrimRight(block, "\n"))
+			out = append(out, lines[i+1:]...)
+			return []byte(strings.Join(out, "\n") + "\n")
+		}
+	}
+	if text != "" {
+		text += "\n"
+	}
+	return []byte(text + "models:\n" + block)
+}
+
+func removeContinue(text string) string {
+	lines := strings.Split(text, "\n")
+	var out []string
+	skip := false
+	for _, line := range lines {
+		trim := strings.TrimSpace(line)
+		if trim == "# peaproxy-owned-start" {
+			skip = true
+			continue
+		}
+		if skip {
+			if trim == "# peaproxy-owned-end" {
+				skip = false
+			}
 			continue
 		}
 		out = append(out, line)

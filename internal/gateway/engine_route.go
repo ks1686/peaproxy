@@ -167,7 +167,7 @@ func evidenceFor(inst instance) catalog.CapabilityEvidence {
 	if caps.VisionIn {
 		evidence.Vision = catalog.SupportYes
 	}
-	return evidence
+	return catalog.FillUnknown(promptcache.ProfileForAdapter(inst.Provider.Adapter), evidence)
 }
 
 func filterExactLocal(model string, models []catalog.Model, cands []instance) []instance {

@@ -334,20 +334,21 @@ func (a *Adapter) postJSON(ctx context.Context, endpoint string, body []byte) ([
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, tokenStatusError(resp.StatusCode, raw)
+		return nil, tokenStatusError(resp, raw)
 	}
 	return raw, nil
 }
 
-func tokenStatusError(status int, raw []byte) error {
+func tokenStatusError(resp *http.Response, raw []byte) error {
 	body := truncate(raw)
-	if status == http.StatusForbidden {
+	if resp != nil && resp.StatusCode == http.StatusForbidden {
 		if body != "" {
-			return adapter.HTTPError{Status: status, Body: cloudflare403 + " Upstream: " + body}
+			body = cloudflare403 + " Upstream: " + body
+		} else {
+			body = cloudflare403
 		}
-		return adapter.HTTPError{Status: status, Body: cloudflare403}
 	}
-	return adapter.HTTPError{Status: status, Body: body}
+	return adapter.NewHTTPError(resp, body)
 }
 
 func (a *Adapter) ensureToken(ctx context.Context) error {
@@ -416,7 +417,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
-		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
+		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	var list struct {
 		Data []struct {

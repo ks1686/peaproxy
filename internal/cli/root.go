@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -473,7 +474,14 @@ func clientsCmd() *cobra.Command {
 		Short: "Add the PeaProxy block to a managed harness config",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return layout().Connect(args[0], baseURL, model)
+			err := layout().Connect(args[0], baseURL, model)
+			if errors.Is(err, clients.ErrGuidedSetup) {
+				if preset, ok := clients.Get(args[0]); ok {
+					_, _ = fmt.Fprint(cmd.OutOrStdout(), preset.Snippet)
+				}
+				return nil
+			}
+			return err
 		},
 	}
 	disconnect := &cobra.Command{

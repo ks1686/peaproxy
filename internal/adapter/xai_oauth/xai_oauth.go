@@ -129,7 +129,7 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 			"device_code": {pending.DeviceCode},
 			"client_id":   {ClientID},
 		}
-		raw, status, perr := a.postFormStatus(ctx, a.tokenURL, form)
+		raw, status, _, perr := a.postFormStatus(ctx, a.tokenURL, form)
 		if perr != nil && status == 0 {
 			return oauth.DevicePollResult{}, perr
 		}
@@ -177,7 +177,7 @@ func (a *Adapter) ensureEndpoints(ctx context.Context) error {
 		return err
 	}
 	if resp.StatusCode >= 300 {
-		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(raw)}
+		return adapter.NewHTTPError(resp, truncate(raw))
 	}
 	var disc struct {
 		DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
@@ -223,33 +223,33 @@ func (a *Adapter) refresh(ctx context.Context, refreshToken string) (oauth.Token
 }
 
 func (a *Adapter) postForm(ctx context.Context, endpoint string, form url.Values) ([]byte, error) {
-	raw, status, err := a.postFormStatus(ctx, endpoint, form)
+	raw, status, hdr, err := a.postFormStatus(ctx, endpoint, form)
 	if err != nil {
 		return nil, err
 	}
 	if status >= 300 {
-		return nil, adapter.HTTPError{Status: status, Body: truncate(raw)}
+		return nil, adapter.NewHTTPError(&http.Response{StatusCode: status, Header: hdr}, truncate(raw))
 	}
 	return raw, nil
 }
 
-func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.Values) ([]byte, int, error) {
+func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.Values) ([]byte, int, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, resp.Header.Clone(), err
 	}
-	return raw, resp.StatusCode, nil
+	return raw, resp.StatusCode, resp.Header.Clone(), nil
 }
 
 func (a *Adapter) ensureToken(ctx context.Context) error {

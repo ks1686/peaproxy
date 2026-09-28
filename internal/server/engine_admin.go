@@ -33,6 +33,14 @@ func (s *Server) handleClientConnect(w http.ResponseWriter, r *http.Request) {
 		body.BaseURL = "http://127.0.0.1:8317/v1"
 	}
 	if err := s.clientLayout().Connect(name, body.BaseURL, body.Model); err != nil {
+		if errors.Is(err, clients.ErrGuidedSetup) {
+			snippet := ""
+			if preset, ok := clients.Get(name); ok {
+				snippet = preset.Snippet
+			}
+			writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "guided", "snippet": snippet})
+			return
+		}
 		writeClientErr(w, err)
 		return
 	}

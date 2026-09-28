@@ -240,7 +240,30 @@ func (g *Gateway) Refresh(ctx context.Context) {
 		health = append(health, h)
 		all = append(all, models...)
 	}
+	okAccounts := map[string]bool{}
+	seen := map[string]map[string]struct{}{}
+	for _, m := range all {
+		if strings.HasSuffix(m.ID, ":unavailable") {
+			continue
+		}
+		okAccounts[m.AccountID] = true
+		if seen[m.AccountID] == nil {
+			seen[m.AccountID] = map[string]struct{}{}
+		}
+		seen[m.AccountID][m.ID] = struct{}{}
+	}
 	g.mu.Lock()
+	if g.responses != nil {
+		for _, old := range g.models {
+			if !okAccounts[old.AccountID] {
+				continue
+			}
+			if _, ok := seen[old.AccountID][old.ID]; ok {
+				continue
+			}
+			g.responses.InvalidateAccountModel(old.AccountID, old.ID)
+		}
+	}
 	g.models = all
 	g.health = health
 	g.mu.Unlock()

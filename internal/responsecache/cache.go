@@ -2,6 +2,7 @@
 package responsecache
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -94,6 +95,25 @@ func (c *Cache) InvalidatePrefix(prefix string) {
 		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
 			c.deleteLocked(key)
 		}
+	}
+}
+
+// InvalidateAccountModel drops entries for one account and model.
+func (c *Cache) InvalidateAccountModel(account, model string) {
+	if c == nil || account == "" || model == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var drop []string
+	for key := range c.items {
+		parts := strings.Split(key, "\x00")
+		if len(parts) >= 3 && parts[0] == account && parts[2] == model {
+			drop = append(drop, key)
+		}
+	}
+	for _, key := range drop {
+		c.deleteLocked(key)
 	}
 }
 

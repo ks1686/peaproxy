@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+
+	"github.com/ks1686/peaproxy/internal/compatdata"
 )
 
 // Mode controls PeaProxy-owned cache edits.
@@ -30,6 +32,25 @@ type Profile struct {
 // Known profiles. Anything else is treated as unknown.
 var profiles = map[string]Profile{
 	"anthropic-claude": {Name: "anthropic-claude", MaxBreakpoints: 4},
+}
+
+func init() {
+	ApplyDocument(compatdata.Bundled())
+}
+
+// ApplyDocument turns off added breakpoints when a bundled profile says cache is off.
+// It does not create profiles, so metadata cannot invent an optimize target.
+func ApplyDocument(doc compatdata.Document) {
+	for name, fact := range doc.Profiles {
+		cur, ok := profiles[name]
+		if !ok {
+			continue
+		}
+		if fact.Cache == "off" {
+			cur.MaxBreakpoints = 0
+			profiles[name] = cur
+		}
+	}
 }
 
 // NormalizeMode returns preserve for an empty value.

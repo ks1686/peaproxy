@@ -313,6 +313,49 @@ func TestInFlightChatCoalescesEligibleCalls(t *testing.T) {
 	}
 }
 
+func TestRefreshDropsRemovedModelCache(t *testing.T) {
+	var mu sync.Mutex
+	modelID := "m"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			mu.Lock()
+			id := modelID
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": id}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}}})
+	}))
+	t.Cleanup(upstream.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Providers: []config.Provider{{
+			ID: "only", Adapter: "openai_compat", Tier: "paid", BaseURL: upstream.URL + "/v1",
+		}},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	gw.cfg.RequestEngine.CacheResponses = true
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if _, _, err := gw.Chat(context.Background(), body); err != nil {
+		t.Fatal(err)
+	}
+	endpoint := upstream.URL + "/v1"
+	if _, ok := gw.cachedChat("only", endpoint, "m", body); !ok {
+		t.Fatal("expected a cached response")
+	}
+	mu.Lock()
+	modelID = "other"
+	mu.Unlock()
+	gw.Refresh(context.Background())
+	if _, ok := gw.cachedChat("only", endpoint, "m", body); ok {
+		t.Fatal("cached response survived model removal")
+	}
+}
+
 func TestRemoveProviderDropsCachedResponses(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.cfg.RequestEngine.CacheResponses = true

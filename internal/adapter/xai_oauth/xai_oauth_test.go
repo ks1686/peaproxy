@@ -3,6 +3,7 @@ package xai_oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,20 @@ func TestAuthStartPostsDeviceCode(t *testing.T) {
 	})
 	if err != nil || resp.Content != "hi grok" {
 		t.Fatalf("%v %#v", err, resp)
+	}
+}
+
+func TestPostFormParsesRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "12")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	_, err := a.postForm(context.Background(), srv.URL+"/token", url.Values{})
+	var he adapter.HTTPError
+	if !errors.As(err, &he) || he.RetryAfter != 12*time.Second || he.Status != http.StatusTooManyRequests {
+		t.Fatalf("%v", err)
 	}
 }
 
