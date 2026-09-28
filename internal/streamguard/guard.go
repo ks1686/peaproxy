@@ -85,7 +85,11 @@ func (g *Guard) Bound(parent context.Context) (context.Context, context.CancelFu
 	stop := make(chan struct{})
 	var once sync.Once
 	go func() {
-		defer cancel()
+		defer func() {
+			if !g.Committed() {
+				cancel()
+			}
+		}()
 		for {
 			g.mu.Lock()
 			deadline := g.deadline
