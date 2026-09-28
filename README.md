@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **1.6.x** on main (latest GitHub Release **v1.6.9**). Formal **v1.0.0** is an honesty/marketing tag the coordinator cuts from `main` after [docs/V1.md](docs/V1.md) — not from a feature branch, and not a second 1.6 release. Subsequent work stays 1.x.y.
+Status: **v2.0.0** on main. Schema stays 1. Request-engine behavior is in [docs/V2.md](docs/V2.md).
 
 **Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
@@ -34,11 +34,11 @@ peaproxy --version
 peaproxy serve
 ```
 
-Alternatively, follow `main` with Go `@latest`, or pin a tagged 1.6.x:
+Alternatively, follow `main` with Go `@latest`, or pin the tag:
 
 ```bash
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
-# or pin a tagged 1.6.x, e.g. @v1.6.9
+# or pin a tag, e.g. @v2.0.0
 peaproxy --version
 peaproxy serve
 ```
