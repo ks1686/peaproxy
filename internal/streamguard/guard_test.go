@@ -2,6 +2,7 @@ package streamguard
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -64,6 +65,46 @@ func TestPreludeBounded(t *testing.T) {
 	}
 	if dst.Len() != 0 {
 		t.Fatal("bounded prelude was forwarded")
+	}
+}
+
+func TestBoundHonorsKeepalive(t *testing.T) {
+	var dst bytes.Buffer
+	g := New(&dst, 1024, 50*time.Millisecond)
+	ctx, stop := g.Bound(context.Background())
+	defer stop()
+	time.Sleep(20 * time.Millisecond)
+	if _, err := g.Write([]byte(": ping\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("canceled while keepalives were extending the prelude")
+	case <-time.After(40 * time.Millisecond):
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(80 * time.Millisecond):
+		t.Fatal("prelude did not time out after keepalives stopped")
+	}
+}
+
+func TestKeepaliveIsNotBuffered(t *testing.T) {
+	var dst bytes.Buffer
+	g := New(&dst, 64, time.Minute)
+	for i := 0; i < 20; i++ {
+		if _, err := g.Write([]byte(": ping\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := g.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(dst.String(), ": ping") {
+		t.Fatalf("keepalives were forwarded: %s", dst.String())
+	}
+	if !strings.Contains(dst.String(), "hi") {
+		t.Fatalf("commit missing: %s", dst.String())
 	}
 }
 

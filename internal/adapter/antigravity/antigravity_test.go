@@ -210,6 +210,33 @@ func TestChatKeepsImageAndTool(t *testing.T) {
 	}
 }
 
+func TestChatStripsSchemaMetaFromTools(t *testing.T) {
+	var chatBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "generateContent") {
+			chatBody, _ = io.ReadAll(r.Body)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"response": map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": "seen"}}}}}},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "live-at", ExpiresAt: time.Now().Add(time.Hour), Extra: map[string]string{"project_id": "proj-1"}}
+	raw := []byte(`{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"path":{"type":"string","$id":"path"}}}}}]}`)
+	if _, err := a.Chat(context.Background(), adapter.ChatRequest{Model: "gemini-2.5-flash", Raw: raw}); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(chatBody, []byte(`$schema`)) || bytes.Contains(chatBody, []byte(`$id`)) {
+		t.Fatalf("schema meta leaked: %s", chatBody)
+	}
+	if !bytes.Contains(chatBody, []byte(`"name":"lookup"`)) || !bytes.Contains(chatBody, []byte(`"path"`)) {
+		t.Fatalf("tool parameters dropped: %s", chatBody)
+	}
+}
+
 func TestValidateRequiresToken(t *testing.T) {
 	a := testAdapter(t, httptest.NewServer(http.NotFoundHandler()))
 	if err := a.Validate(context.Background()); err == nil {

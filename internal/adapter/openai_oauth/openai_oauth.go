@@ -1346,6 +1346,12 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 			return err
 		}
 		if !ok {
+			// Reasoning and lifecycle events can run for a long time before the
+			// first text delta. A comment keeps the prelude timer alive so a
+			// live Codex stream is not canceled and failed over.
+			if _, err := io.WriteString(w, ": ping\n"); err != nil {
+				return err
+			}
 			continue
 		}
 		if tools {

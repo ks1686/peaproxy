@@ -863,9 +863,49 @@ func geminiFunctions(raw json.RawMessage) []geminiFunction {
 		if fn.Name == "" {
 			continue
 		}
+		fn.Parameters = sanitizeGeminiSchema(fn.Parameters)
 		out = append(out, fn)
 	}
 	return out
+}
+
+// sanitizeGeminiSchema removes JSON Schema meta keys. Cloud Code rejects
+// `$schema` (and the rest of the `$` vocabulary) inside function declarations.
+func sanitizeGeminiSchema(raw json.RawMessage) json.RawMessage {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return raw
+	}
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return raw
+	}
+	out, err := json.Marshal(dropSchemaMeta(v))
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func dropSchemaMeta(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if strings.HasPrefix(k, "$") {
+				delete(x, k)
+				continue
+			}
+			x[k] = dropSchemaMeta(child)
+		}
+		return x
+	case []any:
+		for i := range x {
+			x[i] = dropSchemaMeta(x[i])
+		}
+		return x
+	default:
+		return v
+	}
 }
 
 func geminiPartsFromContent(raw json.RawMessage) []geminiPart {

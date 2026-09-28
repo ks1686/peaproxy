@@ -78,20 +78,50 @@ func (g *Guard) Reset() {
 }
 
 // Bound cancels ctx if no valid event arrives before the prelude timeout.
+// A keepalive extends that deadline; the timer follows the new deadline
+// instead of the original one-shot wait.
 func (g *Guard) Bound(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
-	timer := time.AfterFunc(g.timeout, func() {
-		if !g.Committed() {
+	stop := make(chan struct{})
+	var once sync.Once
+	go func() {
+		defer cancel()
+		for {
 			g.mu.Lock()
-			if g.failed == nil {
-				g.failed = ErrTimeout
-			}
+			deadline := g.deadline
+			committed := g.committed
 			g.mu.Unlock()
-			cancel()
+			if committed {
+				return
+			}
+			wait := time.Until(deadline)
+			if wait < 0 {
+				wait = 0
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-stop:
+				timer.Stop()
+				return
+			case <-parent.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				g.mu.Lock()
+				committed = g.committed
+				remain := time.Until(g.deadline)
+				if !committed && remain <= 0 && g.failed == nil {
+					g.failed = ErrTimeout
+				}
+				g.mu.Unlock()
+				if committed || remain <= 0 {
+					return
+				}
+			}
 		}
-	})
+	}()
 	return ctx, func() {
-		timer.Stop()
+		once.Do(func() { close(stop) })
 		cancel()
 	}
 }
@@ -144,26 +174,41 @@ func (g *Guard) Finish() error {
 
 func (g *Guard) scanLocked() (keepalive bool, err error) {
 	raw := g.buf.Bytes()
-	for {
-		i := bytes.IndexByte(raw, '\n')
-		if i < 0 {
-			return keepalive, nil
+	var kept []byte
+	i := 0
+	for i < len(raw) {
+		nl := bytes.IndexByte(raw[i:], '\n')
+		if nl < 0 {
+			kept = append(kept, raw[i:]...)
+			break
 		}
-		line := string(bytes.TrimRight(raw[:i], "\r"))
-		raw = raw[i+1:]
+		end := i + nl + 1
+		line := string(bytes.TrimRight(raw[i:i+nl], "\r"))
 		switch classifyLine(line) {
 		case lineKeepalive:
 			keepalive = true
 			g.deadline = time.Now().Add(g.timeout)
+			i = end
 		case lineError:
 			return keepalive, ErrPrelude
 		case lineCommit:
 			g.committed = true
-			_, err = g.dst.Write(g.buf.Bytes())
+			payload := append(append([]byte{}, kept...), raw[i:]...)
+			_, err = g.dst.Write(payload)
 			g.buf.Reset()
 			return keepalive, err
+		default:
+			kept = append(kept, raw[i:end]...)
+			i = end
 		}
 	}
+	if keepalive {
+		g.buf.Reset()
+		if len(kept) > 0 {
+			g.buf.Write(kept)
+		}
+	}
+	return keepalive, nil
 }
 
 type lineKind uint8

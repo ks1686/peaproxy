@@ -65,6 +65,60 @@ func countOK(hits *int, content string) http.HandlerFunc {
 	}
 }
 
+func TestSharedModelSkipsZenAlias(t *testing.T) {
+	hitsSub, hitsZen := 0, 0
+	sub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "gpt-6-astra"}}})
+			return
+		}
+		hitsSub++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "from-sub"}}},
+		})
+	}))
+	t.Cleanup(sub.Close)
+	zen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/models") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "gpt-6-astra"}, {"id": "big-pickle"}}})
+			return
+		}
+		hitsZen++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "from-zen"}}},
+		})
+	}))
+	t.Cleanup(zen.Close)
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{
+			{ID: "openai-oauth", Adapter: "openai_compat", Tier: "paid", BaseURL: sub.URL + "/v1"},
+			{ID: "opencode-zen", Adapter: "opencode_zen", Tier: "free", BaseURL: zen.URL + "/v1"},
+		},
+	}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"gpt-6-astra","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "openai-oauth" || resp.Content != "from-sub" || hitsZen != 0 || hitsSub == 0 {
+		t.Fatalf("alias route account=%s content=%q sub=%d zen=%d err=%v", account, resp.Content, hitsSub, hitsZen, err)
+	}
+	resp, account, err = gw.Chat(context.Background(), []byte(`{"model":"big-pickle","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account != "opencode-zen" || hitsZen == 0 {
+		t.Fatalf("zen-only model account=%s hits=%d content=%q", account, hitsZen, resp.Content)
+	}
+}
+
 func TestChatFailsover429ToNextAccount(t *testing.T) {
 	hitsA, hitsB := 0, 0
 	gw := twoAccountGateway(t,

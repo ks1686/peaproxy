@@ -1453,6 +1453,32 @@ func (g *Gateway) probeQuota(ctx context.Context, inst []instance) {
 	}
 }
 
+// omitZenAlias drops OpenCode Zen when another account lists the same model.
+// Zen bills those ids as its own credits, so a 402 from Zen was surfacing as
+// "insufficient funds" on ChatGPT, Claude, and Gemini subscriptions.
+func omitZenAlias(matched []instance) []instance {
+	zen := false
+	other := false
+	for _, inst := range matched {
+		if inst.Provider.Adapter == "opencode_zen" {
+			zen = true
+		} else {
+			other = true
+		}
+	}
+	if !zen || !other {
+		return matched
+	}
+	out := make([]instance, 0, len(matched)-1)
+	for _, inst := range matched {
+		if inst.Provider.Adapter == "opencode_zen" {
+			continue
+		}
+		out = append(out, inst)
+	}
+	return out
+}
+
 func containsID(ids []string, want string) bool {
 	for _, id := range ids {
 		if id == want {
@@ -1490,6 +1516,7 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 			matched = append(matched, inst)
 		}
 	}
+	matched = omitZenAlias(matched)
 	if len(matched) == 0 {
 		return nil, 0
 	}
