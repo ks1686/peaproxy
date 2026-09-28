@@ -474,6 +474,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	raw = a.shapeOAuthBody(raw)
+	raw, restore := aliasOAuthToolNames(raw)
 	raw = jsonx.SetStream(raw, false)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.messagesURL(), bytes.NewReader(raw))
 	if err != nil {
@@ -493,7 +494,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 	if resp.StatusCode >= 300 {
 		return nil, adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
 	}
-	return body, nil
+	return restoreOAuthToolNames(body, restore), nil
 }
 
 func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) error {
@@ -501,6 +502,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 		return err
 	}
 	raw = a.shapeOAuthBody(raw)
+	raw, restore := aliasOAuthToolNames(raw)
 	raw = jsonx.SetStream(raw, true)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.messagesURL(), bytes.NewReader(raw))
 	if err != nil {
@@ -517,7 +519,11 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return adapter.HTTPError{Status: resp.StatusCode, Body: truncate(body)}
 	}
-	_, err = io.Copy(w, resp.Body)
+	filter := &oAuthToolSSEFilter{dst: w, reverse: restore}
+	_, err = io.Copy(filter, resp.Body)
+	if flushErr := filter.Flush(); err == nil {
+		err = flushErr
+	}
 	return err
 }
 
