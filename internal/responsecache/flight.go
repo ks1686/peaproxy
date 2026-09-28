@@ -56,21 +56,32 @@ func (f *Flight) waiters(key string) int {
 func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, error) {
 	select {
 	case <-ctx.Done():
-		f.mu.Lock()
-		c.waiters--
-		last := c.waiters == 0
-		f.mu.Unlock()
-		if last {
-			c.cancel()
-		}
+		f.abandon(c)
 		return nil, ctx.Err()
 	case <-c.done:
-		f.mu.Lock()
-		c.waiters--
-		f.mu.Unlock()
-		if c.err != nil {
-			return nil, c.err
-		}
-		return append([]byte(nil), c.body...), nil
+	}
+	// select picks at random when the caller is already cancelled and the
+	// shared call finishes in the same instant. A cancelled waiter must not
+	// observe success, and must not cancel peers who are still waiting.
+	if err := ctx.Err(); err != nil {
+		f.abandon(c)
+		return nil, err
+	}
+	f.mu.Lock()
+	c.waiters--
+	f.mu.Unlock()
+	if c.err != nil {
+		return nil, c.err
+	}
+	return append([]byte(nil), c.body...), nil
+}
+
+func (f *Flight) abandon(c *call) {
+	f.mu.Lock()
+	c.waiters--
+	last := c.waiters == 0
+	f.mu.Unlock()
+	if last {
+		c.cancel()
 	}
 }
