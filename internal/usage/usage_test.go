@@ -3,6 +3,7 @@ package usage
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,7 +157,9 @@ func TestRequestLogRotatesWhenOverMaxBytes(t *testing.T) {
 	if info.Size() > 200+80 {
 		t.Fatalf("log not rotated: size=%d", info.Size())
 	}
-	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode: %v %v", st, err)
+	if runtime.GOOS != "windows" {
+		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+			t.Fatalf("mode: %v %v", st, err)
+		}
 	}
 }
