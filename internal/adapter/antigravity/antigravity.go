@@ -703,11 +703,16 @@ func chatHTTPError(resp *http.Response, body []byte) error {
 	}
 	if e.RetryAfter == 0 {
 		if d, ok := cloudCodeResetDelay(body); ok {
-			e.RetryAfter = min(max(d, time.Second), time.Hour)
+			e.RetryAfter = min(max(d, time.Second), maxCloudCodeReset)
 		}
 	}
 	return e
 }
+
+// maxCloudCodeReset bounds the body reset hint. Cloud Code's largest quota
+// window is weekly ("Resets in 166h59m50s"); the cooldown is model-scoped
+// and in memory, so honouring it costs nothing but the hourly failed probe.
+const maxCloudCodeReset = 7 * 24 * time.Hour
 
 var resetsInPattern = regexp.MustCompile(`Resets in ([0-9][0-9hms.]*)`)
 
@@ -1486,12 +1491,44 @@ func streamEventError(event []byte) error {
 	}
 	body := []byte(`{"error":` + string(status) + `}`)
 	var fields struct {
-		Code int `json:"code"`
+		Code   int    `json:"code"`
+		Status string `json:"status"`
 	}
-	if json.Unmarshal(status, &fields) == nil && fields.Code > 0 {
-		return chatHTTPError(&http.Response{StatusCode: fields.Code}, body)
+	if json.Unmarshal(status, &fields) == nil {
+		code := fields.Code
+		if code == 0 {
+			code = googleStatusCodes[fields.Status]
+		}
+		if _, hasReset := cloudCodeResetDelay(body); code == 0 && hasReset {
+			code = http.StatusTooManyRequests
+		}
+		if code > 0 {
+			return chatHTTPError(&http.Response{StatusCode: code}, body)
+		}
 	}
 	return fmt.Errorf("antigravity: stream error: %s", truncate(body))
+}
+
+// googleStatusCodes maps google.rpc.Code names, which a stream error may carry
+// without the numeric code, to the HTTP status the same error has on a
+// non-streaming reply.
+var googleStatusCodes = map[string]int{
+	"INVALID_ARGUMENT":    http.StatusBadRequest,
+	"FAILED_PRECONDITION": http.StatusBadRequest,
+	"OUT_OF_RANGE":        http.StatusBadRequest,
+	"UNAUTHENTICATED":     http.StatusUnauthorized,
+	"PERMISSION_DENIED":   http.StatusForbidden,
+	"NOT_FOUND":           http.StatusNotFound,
+	"ABORTED":             http.StatusConflict,
+	"ALREADY_EXISTS":      http.StatusConflict,
+	"RESOURCE_EXHAUSTED":  http.StatusTooManyRequests,
+	"CANCELLED":           499,
+	"INTERNAL":            http.StatusInternalServerError,
+	"UNKNOWN":             http.StatusInternalServerError,
+	"DATA_LOSS":           http.StatusInternalServerError,
+	"UNIMPLEMENTED":       http.StatusNotImplemented,
+	"UNAVAILABLE":         http.StatusServiceUnavailable,
+	"DEADLINE_EXCEEDED":   http.StatusGatewayTimeout,
 }
 
 func (a *Adapter) headers(req *http.Request) {

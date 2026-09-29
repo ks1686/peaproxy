@@ -257,14 +257,15 @@ func TestGeminiStreamErrorPayloadFailsTheStream(t *testing.T) {
 		})
 	}
 	t.Run("status without a code", func(t *testing.T) {
-		// Given a first event whose error carries no status code.
+		// Given a first event whose error carries only the google.rpc status name.
 		var out bytes.Buffer
 		// When translating the stream.
 		err := geminiSSEToOpenAI(strings.NewReader("data: "+`{"error":{"message":"Internal error encountered.","status":"INTERNAL"}}`+"\n\n"), &out, "gemini-3-flash")
-		// Then it fails as a plain error, having no status to classify, and writes nothing.
+		// Then it fails as the HTTP status that name means on a non-streaming
+		// reply, so the gateway classifies it the same way, and writes nothing.
 		var he adapter.HTTPError
-		if err == nil || errors.As(err, &he) || out.Len() != 0 {
-			t.Fatalf("err = %#v, output %q; want a plain error and no output", err, out.String())
+		if !errors.As(err, &he) || he.Status != http.StatusInternalServerError || out.Len() != 0 {
+			t.Fatalf("err = %#v, output %q; want a 500 and no output", err, out.String())
 		}
 	})
 }
@@ -762,7 +763,8 @@ func TestCloudCode429UsesBodyResetDelay(t *testing.T) {
 		{"retry info", `{"error":{"code":429,"message":"slow down","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3.5s"}]}}`, 3500 * time.Millisecond},
 		{"quota reset metadata", `{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{"quotaResetDelay":"754.431528ms","model":"gemini-3-flash"}}]}}`, time.Second},
 		{"resets in zero", `{"error":{"code":429,"message":"You have exhausted your capacity on this model. Resets in 0s.","status":"RESOURCE_EXHAUSTED"}}`, time.Second},
-		{"weekly quota is capped", `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 166h59m50s.","status":"RESOURCE_EXHAUSTED"}}`, time.Hour},
+		{"weekly quota is honoured", `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 166h59m50s.","status":"RESOURCE_EXHAUSTED"}}`, 166*time.Hour + 59*time.Minute + 50*time.Second},
+		{"hint beyond a week is capped", `{"error":{"code":429,"message":"Resets in 400h.","status":"RESOURCE_EXHAUSTED"}}`, 7 * 24 * time.Hour},
 		{"no hint keeps default", `{"error":{"code":429,"message":"Resource has been exhausted"}}`, 0},
 	}
 	for _, tc := range cases {
@@ -943,5 +945,36 @@ func TestSanitizeGeminiSchemaArrayParentGetsBranchItems(t *testing.T) {
 				t.Fatalf("got  %s\nwant %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStreamErrorWithoutCodeStillClassifies(t *testing.T) {
+	cases := []struct {
+		name   string
+		event  string
+		status int
+		retry  time.Duration
+	}{
+		{"status string", `{"error":{"message":"Individual quota reached. Resets in 2h.","status":"RESOURCE_EXHAUSTED"}}`, http.StatusTooManyRequests, 2 * time.Hour},
+		{"nested response error", `{"response":{"error":{"status":"UNAVAILABLE","message":"try later"}}}`, http.StatusServiceUnavailable, 0},
+		{"reset hint alone means quota", `{"error":{"message":"slow down","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"9s"}]}}`, http.StatusTooManyRequests, 9 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := streamEventError([]byte(tc.event))
+			var he adapter.HTTPError
+			if !errors.As(err, &he) {
+				t.Fatalf("not an HTTPError: %v", err)
+			}
+			if he.Status != tc.status || he.RetryAfter != tc.retry {
+				t.Fatalf("status %d retry %s, want %d %s", he.Status, he.RetryAfter, tc.status, tc.retry)
+			}
+			if he.Scope != adapter.ScopeModel {
+				t.Fatalf("scope %q, want model", he.Scope)
+			}
+		})
+	}
+	if err := streamEventError([]byte(`{"error":{"message":"odd","status":"SOMETHING_NEW"}}`)); err == nil || errors.As(err, new(adapter.HTTPError)) {
+		t.Fatalf("an unknown status without a code must stay a plain error: %v", err)
 	}
 }
