@@ -18,6 +18,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
+	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +31,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/translate"
 )
 
 const (
@@ -634,14 +639,17 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, err
 	}
 	if resp.StatusCode >= 300 {
-		return adapter.ChatResponse{}, chatHTTPError(resp, truncate(body))
+		return adapter.ChatResponse{}, chatHTTPError(resp, body)
 	}
-	content := extractGeminiText(body)
-	oa, err := toOpenAIChatJSON(req.Model, content)
+	message, finish, err := geminiChatMessage(body)
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
-	return adapter.ChatResponse{Model: req.Model, Raw: oa, Content: content}, nil
+	oa, err := toOpenAIChatJSON(req.Model, message, finish)
+	if err != nil {
+		return adapter.ChatResponse{}, err
+	}
+	return adapter.ChatResponse{Model: req.Model, Raw: oa, Content: message.Content}, nil
 }
 
 func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.Writer) error {
@@ -666,19 +674,77 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return chatHTTPError(resp, truncate(body))
+		return chatHTTPError(resp, body)
 	}
 	return geminiSSEToOpenAI(resp.Body, w, req.Model)
 }
 
-func chatHTTPError(resp *http.Response, body string) error {
-	e := adapter.NewHTTPError(resp, body)
-	// Cloud Code does not send X-Ratelimit-Scope. A 429 is this model, not the
-	// whole Google account, so the next model can still be tried.
-	if e.Status == http.StatusTooManyRequests && e.Scope == adapter.ScopeAccount {
+// fetchAvailableModels advertises the "-pro-high" slots, but v1internal
+// answers them with HTTP 400. The live id for that tier is gemini-pro-agent.
+var upstreamModelIDs = map[string]string{
+	"gemini-3.1-pro-high": "gemini-pro-agent",
+	"gemini-3-pro-high":   "gemini-pro-agent",
+}
+
+func upstreamModelID(model string) string {
+	if id, ok := upstreamModelIDs[model]; ok {
+		return id
+	}
+	return model
+}
+
+func chatHTTPError(resp *http.Response, body []byte) error {
+	e := adapter.NewHTTPError(resp, truncate(body))
+	// Cloud Code does not send X-Ratelimit-Scope. A 429, or a 503 "No capacity
+	// available for model X", is this model, not the whole Google account, so
+	// the next model can still be tried.
+	if (e.Status == http.StatusTooManyRequests || e.Status == http.StatusServiceUnavailable) && e.Scope == adapter.ScopeAccount {
 		e.Scope = adapter.ScopeModel
 	}
+	if e.RetryAfter == 0 {
+		if d, ok := cloudCodeResetDelay(body); ok {
+			e.RetryAfter = min(max(d, time.Second), time.Hour)
+		}
+	}
 	return e
+}
+
+var resetsInPattern = regexp.MustCompile(`Resets in ([0-9][0-9hms.]*)`)
+
+// cloudCodeResetDelay reads the reset hint Cloud Code puts in the error body
+// instead of a Retry-After header: RetryInfo.retryDelay, then
+// ErrorInfo.metadata.quotaResetDelay, then "Resets in 1h2m3s" in the message.
+func cloudCodeResetDelay(body []byte) (time.Duration, bool) {
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+			Details []struct {
+				RetryDelay string `json:"retryDelay"`
+				Metadata   struct {
+					QuotaResetDelay string `json:"quotaResetDelay"`
+				} `json:"metadata"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return 0, false
+	}
+	var hints []string
+	for _, d := range parsed.Error.Details {
+		hints = append(hints, d.RetryDelay)
+	}
+	for _, d := range parsed.Error.Details {
+		hints = append(hints, d.Metadata.QuotaResetDelay)
+	}
+	if m := resetsInPattern.FindStringSubmatch(parsed.Error.Message); m != nil {
+		hints = append(hints, strings.TrimRight(m[1], "."))
+	}
+	for _, h := range hints {
+		if d, err := time.ParseDuration(h); err == nil && d >= 0 {
+			return d, true
+		}
+	}
+	return 0, false
 }
 
 func (a *Adapter) generateURL(stream bool) string {
@@ -692,9 +758,45 @@ func (a *Adapter) generateURL(stream bool) string {
 }
 
 type geminiPart struct {
-	Text       string            `json:"text,omitempty"`
-	InlineData *geminiInlineData `json:"inlineData,omitempty"`
-	FileData   *geminiFileData   `json:"fileData,omitempty"`
+	Text             string                  `json:"text,omitempty"`
+	InlineData       *geminiInlineData       `json:"inlineData,omitempty"`
+	FileData         *geminiFileData         `json:"fileData,omitempty"`
+	FunctionCall     *geminiFunctionCall     `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFunctionResponse `json:"functionResponse,omitempty"`
+	ThoughtSignature string                  `json:"thoughtSignature,omitempty"`
+	Thought          bool                    `json:"thought,omitempty"`
+}
+
+type geminiFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
+type geminiFunctionResponse struct {
+	Name     string             `json:"name"`
+	Response geminiToolResponse `json:"response"`
+}
+
+type geminiToolResponse struct {
+	Content json.RawMessage `json:"content"`
+}
+
+type chatToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type chatToolCall struct {
+	Index    *int             `json:"index,omitempty"`
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function chatToolFunction `json:"function"`
+}
+
+type chatMessage struct {
+	Role      string         `json:"role,omitempty"`
+	Content   string         `json:"content,omitempty"`
+	ToolCalls []chatToolCall `json:"tool_calls,omitempty"`
 }
 
 type geminiInlineData struct {
@@ -752,8 +854,10 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	a.mu.Unlock()
 	model := req.Model
 	type inbound struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		ToolCalls  []chatToolCall  `json:"tool_calls"`
+		ToolCallID string          `json:"tool_call_id"`
 	}
 	var msgs []inbound
 	var tools []geminiFunction
@@ -777,20 +881,71 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 			msgs = append(msgs, inbound{Role: m.Role, Content: raw})
 		}
 	}
+	type toolCall struct {
+		name  string
+		order int
+	}
 	var sys strings.Builder
 	var contents []geminiContent
+	calls := make(map[string]toolCall)
+	var groupOrder []int
+	previousRole := ""
 	for _, m := range msgs {
-		switch strings.ToLower(m.Role) {
+		role := strings.ToLower(m.Role)
+		switch role {
 		case "system", "developer":
 			if sys.Len() > 0 {
 				sys.WriteByte('\n')
 			}
 			sys.WriteString(messageText(m.Content))
 		case "assistant":
-			contents = append(contents, geminiContent{Role: "model", Parts: geminiPartsFromContent(m.Content)})
+			calls = make(map[string]toolCall)
+			var parts []geminiPart
+			if messageText(m.Content) != "" {
+				parts = geminiPartsFromContent(m.Content)
+			}
+			for i, call := range m.ToolCalls {
+				args := bytes.TrimSpace([]byte(call.Function.Arguments))
+				if len(args) == 0 || args[0] != '{' || !json.Valid(args) || call.Function.Name == "" {
+					return nil, fmt.Errorf("antigravity: invalid function call %q", call.ID)
+				}
+				calls[call.ID] = toolCall{name: call.Function.Name, order: i}
+				parts = append(parts, geminiPart{
+					FunctionCall: &geminiFunctionCall{Name: call.Function.Name, Args: args},
+					// Cloud Code accepts this sentinel for unsigned OpenAI history;
+					// OpenAI-compatible clients do not round-trip Gemini signatures.
+					ThoughtSignature: "skip_thought_signature_validator",
+				})
+			}
+			if len(parts) > 0 {
+				contents = append(contents, geminiContent{Role: "model", Parts: parts})
+			}
+		case "tool":
+			call, known := calls[m.ToolCallID]
+			if !known {
+				contents = append(contents, geminiContent{Role: "user", Parts: geminiPartsFromContent(m.Content)})
+				previousRole = "user"
+				continue
+			}
+			content := m.Content
+			if len(content) == 0 {
+				content = json.RawMessage("null")
+			}
+			part := geminiPart{FunctionResponse: &geminiFunctionResponse{Name: call.name, Response: geminiToolResponse{Content: content}}}
+			if previousRole != "tool" {
+				contents = append(contents, geminiContent{Role: "user"})
+				groupOrder = nil
+			}
+			// A functionResponse carries only the function name, so Gemini pairs
+			// it with its functionCall by position, not by tool_call_id.
+			at := sort.Search(len(groupOrder), func(j int) bool { return groupOrder[j] > call.order })
+			group := &contents[len(contents)-1]
+			group.Parts = slices.Insert(group.Parts, at, part)
+			groupOrder = slices.Insert(groupOrder, at, call.order)
 		default:
 			contents = append(contents, geminiContent{Role: "user", Parts: geminiPartsFromContent(m.Content)})
 		}
+		previousRole = role
 	}
 	reqType := "agent"
 	if strings.Contains(strings.ToLower(model), "image") {
@@ -798,7 +953,7 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	}
 	env := geminiEnvelope{
 		Project:     project,
-		Model:       model,
+		Model:       upstreamModelID(model),
 		UserAgent:   "antigravity",
 		RequestType: reqType,
 		RequestID:   newAgentRequestID(reqType),
@@ -869,8 +1024,9 @@ func geminiFunctions(raw json.RawMessage) []geminiFunction {
 	return out
 }
 
-// sanitizeGeminiSchema removes JSON Schema meta keys. Cloud Code rejects
-// `$schema` (and the rest of the `$` vocabulary) inside function declarations.
+// sanitizeGeminiSchema reduces a JSON Schema to the fields of the Gemini
+// Schema proto. Cloud Code rejects the whole request on any unknown field
+// ($schema, additionalProperties, exclusiveMinimum, const, oneOf, ...).
 func sanitizeGeminiSchema(raw json.RawMessage) json.RawMessage {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
@@ -880,32 +1036,160 @@ func sanitizeGeminiSchema(raw json.RawMessage) json.RawMessage {
 	if json.Unmarshal(raw, &v) != nil {
 		return raw
 	}
-	out, err := json.Marshal(dropSchemaMeta(v))
+	out, err := json.Marshal(geminiSchema(v))
 	if err != nil {
 		return raw
 	}
 	return out
 }
 
-func dropSchemaMeta(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, child := range x {
-			if strings.HasPrefix(k, "$") {
-				delete(x, k)
-				continue
-			}
-			x[k] = dropSchemaMeta(child)
-		}
-		return x
-	case []any:
-		for i := range x {
-			x[i] = dropSchemaMeta(x[i])
-		}
-		return x
-	default:
+var geminiSchemaFields = map[string]bool{
+	"type": true, "format": true, "title": true, "description": true, "nullable": true,
+	"enum": true, "default": true, "example": true, "required": true, "propertyOrdering": true,
+	"minItems": true, "maxItems": true, "minProperties": true, "maxProperties": true,
+	"minLength": true, "maxLength": true, "pattern": true, "minimum": true, "maximum": true,
+}
+
+// geminiSchema walks schema positions only (property values, items, anyOf),
+// so property names such as "type" or "title" are never mistaken for keywords.
+func geminiSchema(v any) any {
+	in, ok := v.(map[string]any)
+	if !ok {
 		return v
 	}
+	out := map[string]any{}
+	var anyOf, types []any
+	for k, val := range in {
+		switch k {
+		case "properties":
+			if props, ok := val.(map[string]any); ok {
+				clean := make(map[string]any, len(props))
+				for name, child := range props {
+					clean[name] = geminiSchema(child)
+				}
+				out[k] = clean
+			}
+		case "items":
+			if tuple, ok := val.([]any); ok {
+				if len(tuple) > 0 {
+					out[k] = geminiSchema(tuple[0])
+				}
+			} else {
+				out[k] = geminiSchema(val)
+			}
+		case "anyOf", "oneOf":
+			if list, ok := val.([]any); ok {
+				for _, child := range list {
+					anyOf = append(anyOf, geminiSchema(child))
+				}
+			}
+		case "type":
+			if list, ok := val.([]any); ok {
+				for _, t := range list {
+					if t == "null" {
+						out["nullable"] = true
+					} else {
+						types = append(types, t)
+					}
+				}
+			} else {
+				out[k] = val
+			}
+		case "exclusiveMinimum", "exclusiveMaximum":
+			bound := "minimum"
+			if k == "exclusiveMaximum" {
+				bound = "maximum"
+			}
+			if _, isNum := val.(float64); isNum {
+				if _, set := in[bound]; !set {
+					out[bound] = val
+				}
+			}
+		case "enum":
+			// The Schema proto's enum is a list of strings; Cloud Code rejects others.
+			if list, isList := val.([]any); isList && allStrings(list) {
+				out[k] = list
+			}
+		case "const":
+			if _, set := in["enum"]; !set {
+				if s, isStr := val.(string); isStr {
+					out["enum"] = []any{s}
+				}
+			}
+		default:
+			if geminiSchemaFields[k] {
+				out[k] = val
+			}
+		}
+	}
+	switch {
+	case len(types) == 1:
+		out["type"] = types[0]
+	case len(types) > 1:
+		anyOf = append(typeUnion(out, types), anyOf...)
+	}
+	return collapseNullable(out, anyOf)
+}
+
+// typeUnion turns a multi-type list into anyOf branches. The array branch takes
+// the items, because Cloud Code rejects an array schema without its own items.
+func typeUnion(out map[string]any, types []any) []any {
+	items, hasItems := out["items"]
+	branches := make([]any, 0, len(types))
+	for _, t := range types {
+		branch := map[string]any{"type": t}
+		if t == "array" && hasItems {
+			branch["items"] = items
+			delete(out, "items")
+		}
+		branches = append(branches, branch)
+	}
+	return branches
+}
+
+// collapseNullable folds a {"type":"null"} branch into nullable. When one
+// branch is left and none of its keys conflict with the parent, it is merged
+// into the parent, because Gemini requires an array schema to carry its own
+// items (Optional[list] is anyOf[array, null]).
+func collapseNullable(out map[string]any, anyOf []any) map[string]any {
+	branches := anyOf[:0]
+	for _, b := range anyOf {
+		if m, ok := b.(map[string]any); ok && m["type"] == "null" && len(m) == 1 {
+			out["nullable"] = true
+			continue
+		}
+		branches = append(branches, b)
+	}
+	if len(branches) == 1 {
+		if only, ok := branches[0].(map[string]any); ok && mergesLosslessly(out, only) {
+			for k, v := range only {
+				out[k] = v
+			}
+			return out
+		}
+	}
+	if len(branches) > 0 {
+		out["anyOf"] = branches
+	}
+	return out
+}
+
+func mergesLosslessly(parent, branch map[string]any) bool {
+	for k, v := range branch {
+		if pv, set := parent[k]; set && !reflect.DeepEqual(pv, v) {
+			return false
+		}
+	}
+	return true
+}
+
+func allStrings(list []any) bool {
+	for _, v := range list {
+		if _, isStr := v.(string); !isStr {
+			return false
+		}
+	}
+	return true
 }
 
 func geminiPartsFromContent(raw json.RawMessage) []geminiPart {
@@ -1003,73 +1287,123 @@ func messageText(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func extractGeminiText(body []byte) string {
+func geminiChatMessage(body []byte) (chatMessage, string, error) {
+	type candidate struct {
+		Content      geminiContent `json:"content"`
+		FinishReason string        `json:"finishReason"`
+	}
 	var parsed struct {
 		Response struct {
-			Candidates []struct {
-				Content struct {
-					Parts []struct {
-						Text string `json:"text"`
-					} `json:"parts"`
-				} `json:"content"`
-			} `json:"candidates"`
+			Candidates []candidate `json:"candidates"`
 		} `json:"response"`
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
+		Candidates []candidate `json:"candidates"`
 	}
-	if json.Unmarshal(body, &parsed) != nil {
-		return ""
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return chatMessage{}, "", err
 	}
 	cands := parsed.Response.Candidates
 	if len(cands) == 0 {
 		cands = parsed.Candidates
 	}
 	var b strings.Builder
-	for _, c := range cands {
-		for _, p := range c.Content.Parts {
+	message := chatMessage{Role: "assistant"}
+	finish := ""
+	if len(cands) > 0 {
+		finish = cands[0].FinishReason
+		for _, p := range cands[0].Content.Parts {
+			if p.Thought {
+				continue
+			}
 			b.WriteString(p.Text)
+			if p.FunctionCall != nil {
+				args := p.FunctionCall.Args
+				if len(args) == 0 || bytes.Equal(bytes.TrimSpace(args), []byte("null")) {
+					args = json.RawMessage("{}")
+				}
+				message.ToolCalls = append(message.ToolCalls, chatToolCall{
+					ID: "call_" + strings.TrimPrefix(newAgentRequestID("agent"), "agent-"), Type: "function",
+					Function: chatToolFunction{Name: p.FunctionCall.Name, Arguments: string(args)},
+				})
+			}
 		}
 	}
-	return b.String()
+	message.Content = b.String()
+	return message, finish, nil
 }
 
-func toOpenAIChatJSON(model, content string) ([]byte, error) {
+func toOpenAIChatJSON(model string, message chatMessage, finish string) ([]byte, error) {
 	return json.Marshal(map[string]any{
 		"id":      "peaproxy-antigravity",
 		"object":  "chat.completion",
 		"model":   model,
-		"choices": []map[string]any{{"index": 0, "message": map[string]string{"role": "assistant", "content": content}, "finish_reason": "stop"}},
+		"choices": []map[string]any{{"index": 0, "message": message, "finish_reason": geminiFinishReason(len(message.ToolCalls), finish)}},
 	})
 }
 
+func geminiFinishReason(calls int, upstream string) string {
+	if upstream == "MAX_TOKENS" {
+		return "length"
+	}
+	if calls > 0 {
+		return "tool_calls"
+	}
+	return "stop"
+}
+
 func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
+	// The role chunk commits the gateway's prelude guard, so it waits for the
+	// first real upstream event; a stalled account can then still fail over.
+	wroteRole := false
+	writeRole := func() error {
+		if wroteRole {
+			return nil
+		}
+		wroteRole = true
+		return translate.WriteOpenAIChatSSERole(w, "peaproxy-antigravity", model)
+	}
+	calls := 0
+	upstreamFinish := ""
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for sc.Scan() {
 		line := sc.Text()
 		payload := strings.TrimSpace(line)
-		if strings.HasPrefix(payload, "data:") {
-			payload = strings.TrimSpace(strings.TrimPrefix(payload, "data:"))
-		}
-		if payload == "" || payload == "[DONE]" {
+		if !strings.HasPrefix(payload, "data:") {
 			continue
 		}
-		delta := extractGeminiText([]byte(payload))
-		if delta == "" {
+		payload = strings.TrimSpace(strings.TrimPrefix(payload, "data:"))
+		if payload == "[DONE]" {
+			break
+		}
+		if payload == "" {
 			continue
+		}
+		delta, finish, err := geminiChatMessage([]byte(payload))
+		if err != nil {
+			continue
+		}
+		if finish != "" {
+			upstreamFinish = finish
+		}
+		if delta.Content == "" && len(delta.ToolCalls) == 0 {
+			continue
+		}
+		delta.Role = ""
+		for i := range delta.ToolCalls {
+			index := calls
+			delta.ToolCalls[i].Index = &index
+			calls++
 		}
 		chunk, err := json.Marshal(map[string]any{
 			"id":      "peaproxy-antigravity",
 			"object":  "chat.completion.chunk",
 			"model":   model,
-			"choices": []map[string]any{{"index": 0, "delta": map[string]string{"content": delta}}},
+			"choices": []map[string]any{{"index": 0, "delta": delta}},
 		})
 		if err != nil {
+			return err
+		}
+		if err := writeRole(); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", chunk); err != nil {
@@ -1079,8 +1413,10 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	if err := sc.Err(); err != nil {
 		return err
 	}
-	_, err := io.WriteString(w, "data: [DONE]\n\n")
-	return err
+	if err := writeRole(); err != nil {
+		return err
+	}
+	return translate.WriteOpenAIChatSSEFinish(w, "peaproxy-antigravity", model, geminiFinishReason(calls, upstreamFinish))
 }
 
 func (a *Adapter) headers(req *http.Request) {
