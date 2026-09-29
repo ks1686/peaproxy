@@ -27,6 +27,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
@@ -585,7 +586,8 @@ func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byt
 		sessionID = a.sessionID
 	}
 	req.Header.Set("anthropic-version", APIVersion)
-	req.Header.Set("anthropic-beta", oauthBetas(model, body))
+	meta, _ := requestmeta.FromContext(req.Context())
+	req.Header.Set("anthropic-beta", requestmeta.MergeAnthropicBeta(oauthBetas(model, body), meta.AnthropicBeta))
 	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	req.Header.Set("x-app", "cli")
 	req.Header.Set("User-Agent", MessagesUserAgent)

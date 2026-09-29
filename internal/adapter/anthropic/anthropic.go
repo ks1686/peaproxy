@@ -13,6 +13,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
@@ -226,6 +227,7 @@ func withThinking(raw []byte, budget int) []byte {
 }
 
 func setThinkingBeta(req *http.Request, raw []byte) {
+	defer mergeClientBetas(req)
 	if !bytes.Contains(raw, []byte(`"budget_tokens"`)) {
 		return
 	}
@@ -239,6 +241,13 @@ func setThinkingBeta(req *http.Request, raw []byte) {
 		return
 	}
 	req.Header.Set("anthropic-beta", cur+","+beta)
+}
+
+func mergeClientBetas(req *http.Request) {
+	meta, _ := requestmeta.FromContext(req.Context())
+	if merged := requestmeta.MergeAnthropicBeta(req.Header.Get("anthropic-beta"), meta.AnthropicBeta); merged != "" {
+		req.Header.Set("anthropic-beta", merged)
+	}
 }
 
 func (a *Adapter) headers(req *http.Request) {

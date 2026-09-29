@@ -32,6 +32,9 @@ type Request struct {
 	Model        string
 	Wire         Wire
 	Requirements Requirements
+	// AnthropicBeta is the client's anthropic-beta header, normalized by
+	// NormalizeAnthropicBeta. Anthropic adapters merge it into their own list.
+	AnthropicBeta string
 }
 
 type contextKey struct{}
