@@ -846,7 +846,11 @@ function clientsPage(root) {
         btn.addEventListener("click", async () => {
           const name = btn.dataset.connect || "";
           try {
-            await sendJSON("/admin/clients/" + encodeURIComponent(name) + "/connect", "POST", { model: "" });
+            const data = await sendJSON("/admin/clients/" + encodeURIComponent(name) + "/connect", "POST", { model: "" });
+            if (data.status === "guided") {
+              toast(name + " needs manual setup: use Copy snippet and paste it into its config");
+              return;
+            }
             btn.textContent = "Connected";
             toast("Connected " + name, "ok");
           } catch (err) {

@@ -125,24 +125,34 @@ try {
   }
 
   await page.getByRole("button", { name: "Clients" }).click();
-  const connect = page.locator("[data-connect='opencode']");
-  await connect.waitFor();
-  await connect.click();
-  await page.getByText("Connected opencode").waitFor();
-  const written = await readFile(join(clientRoot, "opencode.json"), "utf8");
-  if (!written.includes("peaproxy")) {
-    throw new Error("connect did not write the isolated config");
+  const guided = page.locator("[data-connect='opencode']");
+  await guided.waitFor();
+  await guided.click();
+  await page.getByText("opencode needs manual setup").waitFor();
+  if ((await guided.textContent()) !== "Connect") {
+    throw new Error("guided connect was reported as connected");
+  }
+  if (await readFile(join(clientRoot, "opencode.json"), "utf8").then(() => true, () => false)) {
+    throw new Error("guided connect wrote opencode.json");
   }
 
-  await page.route("**/admin/clients/opencode/verify", (route) => route.abort());
-  await page.locator("[data-probe='opencode']").click();
+  const settingsPath = join(clientRoot, ".claude", "settings.json");
+  await page.locator("[data-connect='claude-code']").click();
+  await page.getByText("Connected claude-code").waitFor();
+  const written = JSON.parse(await readFile(settingsPath, "utf8"));
+  if (written.env?.ANTHROPIC_API_KEY !== "peaproxy") {
+    throw new Error("connect did not write the claude-code env");
+  }
+
+  await page.route("**/admin/clients/claude-code/verify", (route) => route.abort());
+  await page.locator("[data-probe='claude-code']").click();
   await page.locator("#toasts").getByText(/aborted|failed|error/i).waitFor();
 
-  await page.locator("[data-disconnect='opencode']").click();
-  await page.getByText("Disconnected opencode").waitFor();
-  const after = await readFile(join(clientRoot, "opencode.json"), "utf8");
-  if (after.includes('"peaproxy"')) {
-    throw new Error("disconnect left the PeaProxy block");
+  await page.locator("[data-disconnect='claude-code']").click();
+  await page.getByText("Disconnected claude-code").waitFor();
+  const after = await readFile(settingsPath, "utf8");
+  if (after.includes("ANTHROPIC_")) {
+    throw new Error("disconnect left the PeaProxy env");
   }
 
   await page.evaluate((origin) => {
