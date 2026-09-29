@@ -20,7 +20,7 @@ Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log t
 |---|---|---|---|---|
 | Cursor | OpenAI chat completions | `http://127.0.0.1:8317/v1` | off | Override OpenAI Base URL |
 | Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | opt-in (client-side only) | Preset does not inject thinking. `anthropic_oauth` upstream still applies system cloak |
-| OpenCode | OpenAI-compat **and** Anthropic | both use `.../v1` | off | Separate snippet from Claude Code |
+| OpenCode | Anthropic, OpenAI **Responses**, OpenAI-compat | all use `.../v1` | off | Custom providers need per-model `limit` / `variants`; GPT on `@ai-sdk/openai`; ids must not be `anthropic` / `openai` |
 | Pi | Anthropic **and** OpenAI (both documented) | Anthropic: no `/v1`; OpenAI: includes `/v1` | off | Do not apply Claude-Code cloak defaults to the Pi preset |
 | Codex | OpenAI **Responses** (`POST /v1/responses`) | `.../v1` | off | `wire_api = "responses"` only. Codex OAuth forces `store: false`; omits `stream_options` / `max_output_tokens` |
 | Continue | OpenAI-compat | `.../v1` | off | `apiBase` in `~/.continue/config.yaml` |
@@ -44,20 +44,59 @@ export ANTHROPIC_API_KEY=peaproxy
 
 ## OpenCode (includes /v1)
 
+A custom OpenCode provider gets **no models.dev metadata**, so a provider block with only `npm` + `options` produces models that OpenCode treats as having no context limit and no variants. Three things follow (all live-verified, 2026-09-29):
+
+- **Declare each model.** Without `limit` compaction never fires, and without `variants` the effort picker is empty. Copy `limit`, `modalities` and `variants` from OpenCode's own catalog (`opencode models anthropic --verbose`, `opencode models openai --verbose`) and trim to the models you use.
+- **GPT goes through `@ai-sdk/openai` (Responses).** It is the only wire that carries `reasoningEffort` variants to Codex. `@ai-sdk/openai-compatible` (chat completions) is right for everything else, including Antigravity Gemini.
+- **Do not name a provider `anthropic`, `openai`, or `google`.** With `opencode-claude-auth` (or another auth plugin) installed, a provider under the built-in id is also rewritten by the plugin. `peaproxy-*` ids keep the plugins out of the way and leave the direct providers usable.
+
+Where your model name differs from the id PeaProxy serves, add `"id"` on the model (for example `"claude-haiku-4-5": { "id": "claude-haiku-4-5-20251001", ... }`); no PeaProxy catalog route is needed. Unknown top-level keys in `opencode.json` are ignored silently, so a typo is not reported.
+
 ```json
 {
   "provider": {
-    "peaproxy-openai": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
-    },
     "peaproxy-anthropic": {
       "npm": "@ai-sdk/anthropic",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "claude-opus-5-5": {
+          "reasoning": true, "attachment": true, "tool_call": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 128000 },
+          "variants": {
+            "high": { "thinking": { "type": "adaptive" }, "effort": "high" },
+            "max": { "thinking": { "type": "adaptive" }, "effort": "max" }
+          }
+        }
+      }
+    },
+    "peaproxy-openai": {
+      "npm": "@ai-sdk/openai",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "gpt-5.6-sol": {
+          "reasoning": true, "attachment": true, "tool_call": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 400000, "input": 272000, "output": 128000 },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "high": { "reasoningEffort": "high" }
+          }
+        }
+      }
+    },
+    "peaproxy-compat": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "llama3.2": { "tool_call": true, "limit": { "context": 128000, "output": 8192 } }
+      }
     }
   }
 }
 ```
+
+If you run oh-my-opencode, its image resizer only runs for the built-in `anthropic` provider, so a very large screenshot sent through `peaproxy-anthropic` reaches Anthropic at full size and can hit its image limit.
 
 ## Pi (both wires)
 

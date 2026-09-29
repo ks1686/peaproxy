@@ -29,7 +29,7 @@ Adapters in this repo today (2.0.x):
 | `openai_compat` | Generic base URL + optional key, stream + non-stream | none / API key | required `baseURL` |
 | `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
 | `opencode_go` | Named OpenCode Go subscription client (distinct from Zen) | official API key from [opencode.ai/auth](https://opencode.ai/auth) | `https://opencode.ai/zen/go/v1` |
-| `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer) + Claude Code fingerprint / **system cloak**. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
+| `anthropic_oauth` | Claude Pro/Max/Team/Enterprise subscription OAuth + Messages (Bearer) + Claude Code fingerprint / **system cloak**. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
 | `openai_oauth` | ChatGPT/Codex subscription OAuth + native Responses tools pass-through (`store: false`; omit `max_output_tokens`). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
 | `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent, tool calling both directions. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
 | `xai_oauth` | xAI Grok subscription device OAuth + CLI chat proxy. **ToS/ban risk.** | OAuth (`--provider xai`) | `https://cli-chat-proxy.grok.com/v1` |
@@ -62,7 +62,7 @@ Antigravity details:
 
 ## Paid / subscription
 
-**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
+**P0 OAuth (shipped):** Anthropic Claude Pro/Max/Team/Enterprise, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
 **P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
 

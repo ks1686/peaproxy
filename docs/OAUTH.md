@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **2.0.x**: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, and GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **2.0.x**: Claude Pro/Max/Team/Enterprise (Team/Enterprise since v2.0.8), ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, and GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
 
 ## Liability (read this)
 
@@ -113,7 +113,7 @@ These are accepted 1.6.x / 1.0 residuals — [V1.md](V1.md), [PLAN.md](PLAN.md).
 
 ## Manual smoke
 
-**Done on Mac (not CI):** Claude Pro/Max (`--provider anthropic`) and ChatGPT/Codex (`--provider openai`) subscription OAuth login + a tiny completion. Do not treat this as GitHub Actions coverage.
+**Done on Mac (not CI):** Claude Pro/Max and Enterprise (`--provider anthropic`) and ChatGPT/Codex (`--provider openai`) subscription OAuth login + a tiny completion (Enterprise: OpenCode tool-call turns, 2026-09-29). Do not treat this as GitHub Actions coverage.
 
 1. `peaproxy auth login --provider anthropic` — complete browser login. If this returns HTTP 403/Cloudflare, use an API key instead (see Residual gaps).
 2. `peaproxy serve` and Catalog filter **Subscription OAuth**.
