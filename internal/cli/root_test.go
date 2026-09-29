@@ -151,11 +151,14 @@ func TestClientsShowPiBothWires(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := out.String()
-	if !strings.Contains(s, "ANTHROPIC_BASE_URL=http://127.0.0.1:8317\n") {
+	if !strings.Contains(s, `"anthropic": { "baseUrl": "http://127.0.0.1:8317"`) {
 		t.Fatalf("%s", s)
 	}
-	if !strings.Contains(s, "OPENAI_BASE_URL=http://127.0.0.1:8317/v1") {
+	if !strings.Contains(s, `"openai": { "baseUrl": "http://127.0.0.1:8317/v1"`) {
 		t.Fatalf("%s", s)
+	}
+	if strings.Contains(s, "_BASE_URL=") {
+		t.Fatalf("pi does not read base URLs from the environment: %s", s)
 	}
 }
 

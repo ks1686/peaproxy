@@ -32,14 +32,47 @@ func TestGetPiDocumentsCloakWarning(t *testing.T) {
 	if !strings.Contains(p.Notes, "#6120") {
 		t.Fatal("pi notes should cite CLIProxyAPI cloak issue")
 	}
-	if !strings.Contains(p.Snippet, "ANTHROPIC_BASE_URL=http://127.0.0.1:8317\n") {
-		t.Fatalf("pi anthropic wire must omit /v1: %s", p.Snippet)
-	}
-	if !strings.Contains(p.Snippet, "OPENAI_BASE_URL=http://127.0.0.1:8317/v1") {
-		t.Fatalf("pi openai wire must include /v1: %s", p.Snippet)
-	}
 	if strings.Contains(strings.ToLower(p.Snippet), "clear_thinking") {
 		t.Fatal("pi snippet must not inject clear_thinking")
+	}
+}
+
+// Pi reads provider endpoints from <agent-dir>/models.json only. It never
+// reads ANTHROPIC_BASE_URL or OPENAI_BASE_URL (pi 0.87.1: only the Azure and
+// Cloudflare base URLs come from the environment), so the old env-export
+// snippet configured nothing. Overriding the built-in providers keeps pi's
+// bundled model metadata (thinking levels, compat flags, cache lifetimes).
+func TestPiSnippetIsModelsJSON(t *testing.T) {
+	p, _ := Get("pi")
+	for _, deny := range []string{"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "export "} {
+		if strings.Contains(p.Snippet, deny) {
+			t.Fatalf("pi snippet must not rely on %s, pi does not read it:\n%s", deny, p.Snippet)
+		}
+	}
+	var parsed struct {
+		Providers map[string]struct {
+			BaseURL string `json:"baseUrl"`
+			APIKey  string `json:"apiKey"`
+			API     string `json:"api"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(p.Snippet), &parsed); err != nil {
+		t.Fatalf("pi snippet is not a valid models.json: %v\n%s", err, p.Snippet)
+	}
+	anth, ok := parsed.Providers["anthropic"]
+	if !ok || anth.BaseURL != "http://127.0.0.1:8317" || anth.APIKey == "" {
+		t.Fatalf("providers.anthropic must override baseUrl WITHOUT /v1 (the SDK appends /v1/messages) and set apiKey: %+v", anth)
+	}
+	oai, ok := parsed.Providers["openai"]
+	if !ok || oai.BaseURL != "http://127.0.0.1:8317/v1" || oai.APIKey == "" {
+		t.Fatalf("providers.openai must override baseUrl WITH /v1 (the SDK appends /responses) and set apiKey: %+v", oai)
+	}
+	compat, ok := parsed.Providers["peaproxy"]
+	if !ok || compat.API != "openai-completions" || compat.BaseURL != "http://127.0.0.1:8317/v1" {
+		t.Fatalf("a peaproxy provider on openai-completions should carry the rest of the catalog: %+v", compat)
+	}
+	if !strings.Contains(p.Notes, "models.json") {
+		t.Fatalf("pi notes must point at models.json: %s", p.Notes)
 	}
 }
 

@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -42,18 +43,128 @@ func TestConnectPreservesJSONKeyOrder(t *testing.T) {
 	}
 }
 
-func TestPiConnectIsGuided(t *testing.T) {
+func TestPiConnectWritesModelsJSON(t *testing.T) {
 	root := t.TempDir()
-	err := (Layout{Root: root}).Connect("pi", "http://127.0.0.1:8317/v1", "model")
-	if !errors.Is(err, ErrGuidedSetup) {
+	layout := Layout{Root: root}
+	if err := layout.Connect("pi", "http://127.0.0.1:8317/v1", ""); err != nil {
 		t.Fatalf("connect pi: %v", err)
 	}
-	entries, err := os.ReadDir(root)
+	path := filepath.Join(root, ".pi", "agent", "models.json")
+	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("pi wrote %d files", len(entries))
+	var parsed struct {
+		Providers map[string]map[string]any `json:"providers"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("models.json invalid: %v\n%s", err, got)
+	}
+	if parsed.Providers["anthropic"]["baseUrl"] != "http://127.0.0.1:8317" || parsed.Providers["anthropic"]["apiKey"] != "peaproxy" {
+		t.Fatalf("anthropic must be overridden without /v1: %s", got)
+	}
+	if parsed.Providers["openai"]["baseUrl"] != "http://127.0.0.1:8317/v1" || parsed.Providers["openai"]["apiKey"] != "peaproxy" {
+		t.Fatalf("openai must be overridden with /v1: %s", got)
+	}
+	found := layout.Detect()
+	if len(found) != 1 || found[0].Name != "pi" || found[0].Path != path {
+		t.Fatalf("detect = %+v", found)
+	}
+	if err := layout.Disconnect("pi"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after), "peaproxy") || strings.Contains(string(after), "8317") {
+		t.Fatalf("disconnect left owned fields: %s", after)
+	}
+}
+
+func TestPiConnectMergesIntoUserProviders(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".pi", "agent", "models.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := `{
+  "providers": {
+    "ollama": {"baseUrl": "http://localhost:11434/v1", "api": "openai-completions", "apiKey": "ollama", "models": [{"id": "qwen2.5-coder:7b"}]},
+    "anthropic": {"modelOverrides": {"claude-opus-5-5": {"promptCache": {"short": 300}}}}
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := Layout{Root: root}
+	for i := 0; i < 2; i++ {
+		if err := layout.Connect("pi", "http://127.0.0.1:8317/v1", "ignored"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if strings.Count(text, `"apiKey":"peaproxy"`) != 2 {
+		t.Fatalf("connect must be idempotent and own exactly anthropic+openai: %s", text)
+	}
+	if !strings.Contains(text, "qwen2.5-coder:7b") || !strings.Contains(text, `"modelOverrides"`) {
+		t.Fatalf("user providers or fields lost: %s", text)
+	}
+	if strings.Index(text, `"ollama"`) > strings.Index(text, `"anthropic"`) {
+		t.Fatalf("provider order changed: %s", text)
+	}
+	if strings.Contains(text, "ignored") {
+		t.Fatalf("--model must not be recorded for pi (the whole catalog routes through): %s", text)
+	}
+	if err := layout.Disconnect("pi"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Providers map[string]map[string]any `json:"providers"`
+	}
+	if err := json.Unmarshal(after, &parsed); err != nil {
+		t.Fatalf("after disconnect invalid: %v\n%s", err, after)
+	}
+	if _, ok := parsed.Providers["openai"]; ok {
+		t.Fatalf("an openai entry we created must be removed whole: %s", after)
+	}
+	anth := parsed.Providers["anthropic"]
+	if _, ok := anth["modelOverrides"]; !ok || anth["baseUrl"] != nil || anth["apiKey"] != nil {
+		t.Fatalf("disconnect must strip only baseUrl/apiKey from a user-owned anthropic entry: %s", after)
+	}
+	if parsed.Providers["ollama"]["apiKey"] != "ollama" {
+		t.Fatalf("disconnect touched an unrelated provider: %s", after)
+	}
+}
+
+func TestPiDisconnectLeavesForeignBaseURL(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".pi", "agent", "models.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"providers":{"anthropic":{"baseUrl":"https://gateway.example/anthropic","apiKey":"$MY_KEY"}}}`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Layout{Root: root}).Disconnect("pi"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "gateway.example") || !strings.Contains(string(after), "$MY_KEY") {
+		t.Fatalf("disconnect must only remove entries whose apiKey is peaproxy: %s", after)
 	}
 }
 

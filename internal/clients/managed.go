@@ -37,7 +37,7 @@ type ManagedClient struct {
 // Detect lists managed clients that have a config file under the layout.
 func (l Layout) Detect() []ManagedClient {
 	var out []ManagedClient
-	for _, name := range []string{"opencode", "continue", "codex", "claude-code"} {
+	for _, name := range []string{"opencode", "pi", "continue", "codex", "claude-code"} {
 		path := l.path(name)
 		if path == "" {
 			continue
@@ -53,6 +53,8 @@ func (l Layout) path(name string) string {
 	switch name {
 	case "opencode":
 		return filepath.Join(l.Root, "opencode.json")
+	case "pi":
+		return filepath.Join(l.Root, ".pi", "agent", "models.json")
 	case "continue":
 		return filepath.Join(l.Root, ".continue", "config.yaml")
 	case "codex":
@@ -66,9 +68,6 @@ func (l Layout) path(name string) string {
 
 // Connect records a PeaProxy provider without removing unrelated keys.
 func (l Layout) Connect(name, baseURL, model string) error {
-	if name == "pi" {
-		return ErrGuidedSetup
-	}
 	path := l.path(name)
 	if path == "" {
 		return ErrUnknownClient
@@ -126,6 +125,8 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 		return insertCodex(raw, baseURL, model), nil
 	case "continue":
 		return insertContinue(raw, baseURL, model), nil
+	case "pi":
+		return insertPi(raw, baseURL)
 	default:
 		return insertJSON(raw, baseURL, model)
 	}
@@ -137,6 +138,8 @@ func removeOwned(name string, raw []byte) ([]byte, error) {
 		return []byte(removeCodex(string(raw))), nil
 	case "continue":
 		return []byte(removeContinue(string(raw))), nil
+	case "pi":
+		return removePi(raw)
 	default:
 		return removeJSON(raw)
 	}
@@ -151,6 +154,99 @@ func insertJSON(raw []byte, baseURL, model string) ([]byte, error) {
 		return nil, errors.New("client config is not json")
 	}
 	next, err := upsertJSONKey(body, "peaproxy", map[string]any{"baseURL": baseURL, "model": model})
+	if err != nil {
+		return nil, err
+	}
+	return append(commentPrefix(raw), append(next, '\n')...), nil
+}
+
+const piOwnedKey = "peaproxy"
+
+var piOverrides = []struct {
+	provider string
+	trimV1   bool
+}{
+	{"anthropic", true},
+	{"openai", false},
+}
+
+func insertPi(raw []byte, baseURL string) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	providers, ok := getJSONKey(body, "providers")
+	if !ok {
+		providers = []byte("{}")
+	}
+	for _, o := range piOverrides {
+		entry, ok := getJSONKey(providers, o.provider)
+		if !ok {
+			entry = []byte("{}")
+		}
+		url := baseURL
+		if o.trimV1 {
+			url = strings.TrimSuffix(strings.TrimRight(url, "/"), "/v1")
+		}
+		var err error
+		if entry, err = upsertJSONKey(entry, "baseUrl", url); err != nil {
+			return nil, err
+		}
+		if entry, err = upsertJSONKey(entry, "apiKey", piOwnedKey); err != nil {
+			return nil, err
+		}
+		if providers, err = upsertJSONKey(providers, o.provider, json.RawMessage(entry)); err != nil {
+			return nil, err
+		}
+	}
+	next, err := upsertJSONKey(body, "providers", json.RawMessage(providers))
+	if err != nil {
+		return nil, err
+	}
+	return append(commentPrefix(raw), append(next, '\n')...), nil
+}
+
+func removePi(raw []byte) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		return raw, nil
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	providers, ok := getJSONKey(body, "providers")
+	if !ok {
+		return raw, nil
+	}
+	for _, o := range piOverrides {
+		entry, ok := getJSONKey(providers, o.provider)
+		if !ok {
+			continue
+		}
+		key, _ := getJSONKey(entry, "apiKey")
+		if string(key) != `"`+piOwnedKey+`"` {
+			continue
+		}
+		var err error
+		if entry, err = deleteJSONKey(entry, "baseUrl"); err != nil {
+			return nil, err
+		}
+		if entry, err = deleteJSONKey(entry, "apiKey"); err != nil {
+			return nil, err
+		}
+		if string(entry) == "{}" {
+			providers, err = deleteJSONKey(providers, o.provider)
+		} else {
+			providers, err = upsertJSONKey(providers, o.provider, json.RawMessage(entry))
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	next, err := upsertJSONKey(body, "providers", json.RawMessage(providers))
 	if err != nil {
 		return nil, err
 	}

@@ -98,16 +98,25 @@ export ANTHROPIC_API_KEY=peaproxy
 	"pi": {
 		Name:       "pi",
 		BaseURL:    "http://127.0.0.1:8317",
-		AuthHeader: "depends on anthropic-messages vs OpenAI path",
+		AuthHeader: "x-api-key (anthropic-messages) or Authorization: Bearer (openai-responses / openai-completions); PeaProxy accepts any value",
 		Cloak:      "off",
-		Notes:      "Pi speaks both wires. Anthropic path has no /v1; OpenAI path includes /v1. PeaProxy cloak defaults are off (CLIProxyAPI #6120) — do not apply Claude-Code cloak / clear_thinking to Pi. verify --chat hits both wires.",
-		Snippet: `# Pi — Anthropic-messages wire (NO /v1; Pi appends /v1/messages)
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-export ANTHROPIC_API_KEY=peaproxy
-
-# Pi — OpenAI chat-completions wire (includes /v1)
-export OPENAI_BASE_URL=http://127.0.0.1:8317/v1
-export OPENAI_API_KEY=peaproxy
+		Notes:      "Pi reads endpoints from ~/.pi/agent/models.json only (PI_CODING_AGENT_DIR); it does not read ANTHROPIC_BASE_URL or OPENAI_BASE_URL. Override the built-in anthropic (baseUrl WITHOUT /v1, the SDK appends /v1/messages) and openai (WITH /v1, Responses) providers so pi keeps its bundled model metadata: thinking levels, compat flags, cache lifetimes. apiKey is what makes the provider show in /model; a stored /login credential for the same provider takes precedence but still goes to PeaProxy. Models PeaProxy serves that pi's catalog lacks need a models entry with their own metadata (custom entries default to 128k context, no reasoning, text only). Put non-Claude/GPT catalog models under a peaproxy provider on openai-completions. /model reloads the file. `clients connect pi` writes the two overrides and ignores --model. PeaProxy cloak defaults are off (CLIProxyAPI #6120) — do not apply Claude-Code cloak / clear_thinking to Pi. verify --chat hits both wires.",
+		Snippet: `{
+  "providers": {
+    "anthropic": { "baseUrl": "http://127.0.0.1:8317", "apiKey": "peaproxy",
+      "models": [
+        { "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "reasoning": true, "input": ["text", "image"],
+          "contextWindow": 1000000, "maxTokens": 128000,
+          "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" },
+          "compat": { "forceAdaptiveThinking": true, "supportsTemperature": false, "supportsStrictTools": true } }
+      ] },
+    "openai": { "baseUrl": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+    "peaproxy": { "baseUrl": "http://127.0.0.1:8317/v1", "api": "openai-completions", "apiKey": "peaproxy",
+      "models": [
+        { "id": "REPLACE_WITH_CATALOG_ID", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 }
+      ] }
+  }
+}
 `,
 		VerifyTODO: "peaproxy clients verify pi --chat",
 	},
