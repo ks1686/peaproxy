@@ -182,6 +182,26 @@ func TestAliasOAuthToolNamesUsesClaudeCodeCoreNames(t *testing.T) {
 	}
 }
 
+func TestAliasOAuthToolNamesCoreNameCollisionAndStream(t *testing.T) {
+	raw := []byte(`{"tools":[{"name":"read","input_schema":{"type":"object"}},{"name":"Read","input_schema":{"type":"object"}},{"name":"bash","input_schema":{"type":"object"}}]}`)
+	out, reverse := aliasOAuthToolNames(raw)
+	if names := strings.Join(toolNames(t, out), ","); names != "read,Read,Bash" {
+		t.Fatalf("tool names = %s", names)
+	}
+	if _, ok := reverse["Read"]; ok {
+		t.Fatalf("colliding Read must not be reversed: %#v", reverse)
+	}
+
+	var buf bytes.Buffer
+	filter := &oAuthToolSSEFilter{dst: &buf, reverse: reverse}
+	if _, err := filter.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}}\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `"name":"bash"`) || strings.Contains(buf.String(), `"name":"Bash"`) {
+		t.Fatalf("stream = %s", buf.String())
+	}
+}
+
 func TestAliasOAuthToolNamesSkipsCollision(t *testing.T) {
 	raw := []byte(`{"tools":[{"name":"todowrite","description":"a","input_schema":{"type":"object"}},{"name":"TodoWrite","description":"b","input_schema":{"type":"object"}},{"name":"mcp_manage","description":"c","input_schema":{"type":"object"}},{"name":"use_mcp","description":"d","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"todowrite"},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"todowrite","input":{}},{"type":"tool_use","id":"toolu_2","name":"mcp_manage","input":{}}]}]}`)
 	out, reverse := aliasOAuthToolNames(raw)
