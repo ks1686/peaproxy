@@ -18,6 +18,14 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 		return err
 	}
 	var carried []opaqueEntry
+	// Anthropic consumers finalize a tool_use input at its content_block_stop,
+	// but OpenAI may interleave argument deltas across parallel tool calls. Text
+	// streams into block 0; tool calls are buffered per OpenAI index and written
+	// whole, in first-seen order, after the text block closes.
+	var calls []*pendingToolUse
+	callsByIndex := map[int]*pendingToolUse{}
+	finish := ""
+	var usage *claudeUsage
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -32,11 +40,16 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
-					Content         string          `json:"content"`
-					ReasoningOpaque json.RawMessage `json:"reasoning_opaque"`
+					Content         string                 `json:"content"`
+					ToolCalls       []openAIStreamToolCall `json:"tool_calls"`
+					ReasoningOpaque json.RawMessage        `json:"reasoning_opaque"`
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
@@ -44,13 +57,16 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
+		if chunk.Usage != nil {
+			usage = &claudeUsage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}
+		}
 		if !started {
 			started = true
 			id := chunk.ID
 			if id == "" {
 				id = "msg_peaproxy"
 			}
-			if err := writeEvent("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%s,"type":"message","role":"assistant","model":%s,"content":[]}}`, jsonString(id), jsonString(model))); err != nil {
+			if err := writeEvent("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%s,"type":"message","role":"assistant","model":%s,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`, jsonString(id), jsonString(model))); err != nil {
 				return err
 			}
 			if err := writeEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`); err != nil {
@@ -68,24 +84,32 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 				}
 			}
 		}
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			body := struct {
-				Type  string `json:"type"`
-				Index int    `json:"index"`
-				Delta struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"delta"`
-			}{Type: "content_block_delta", Index: 0}
-			body.Delta.Type = "text_delta"
-			body.Delta.Text = chunk.Choices[0].Delta.Content
-			raw, err := json.Marshal(body)
-			if err != nil {
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		choice := chunk.Choices[0]
+		if choice.FinishReason != "" {
+			finish = choice.FinishReason
+		}
+		if choice.Delta.Content != "" {
+			if err := writeClaudeDelta(writeEvent, 0, map[string]string{"type": "text_delta", "text": choice.Delta.Content}); err != nil {
 				return err
 			}
-			if err := writeEvent("content_block_delta", string(raw)); err != nil {
-				return err
+		}
+		for _, tc := range choice.Delta.ToolCalls {
+			call, seen := callsByIndex[tc.Index]
+			if !seen {
+				call = &pendingToolUse{}
+				callsByIndex[tc.Index] = call
+				calls = append(calls, call)
 			}
+			if tc.ID != "" {
+				call.id = tc.ID
+			}
+			if tc.Function.Name != "" {
+				call.name = tc.Function.Name
+			}
+			call.arguments.WriteString(tc.Function.Arguments)
 		}
 	}
 	if !started {
@@ -95,18 +119,68 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 	if err := writeEvent("content_block_stop", `{"type":"content_block_stop","index":0}`); err != nil {
 		return err
 	}
-	for i, e := range carried {
-		if err := writeClaudeOpaqueBlock(writeEvent, i+1, e); err != nil {
+	for i, call := range calls {
+		if err := writeClaudeToolUseBlock(writeEvent, i+1, call); err != nil {
 			return err
 		}
 	}
-	if err := writeEvent("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null}}`); err != nil {
+	for i, e := range carried {
+		if err := writeClaudeOpaqueBlock(writeEvent, len(calls)+1+i, e); err != nil {
+			return err
+		}
+	}
+	deltaUsage := `{"output_tokens":0}`
+	if usage != nil {
+		deltaUsage = fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d}`, usage.InputTokens, usage.OutputTokens)
+	}
+	if err := writeEvent("message_delta", fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":%s,"stop_sequence":null},"usage":%s}`, jsonString(claudeStopReason(finish, len(calls) > 0)), deltaUsage)); err != nil {
 		return err
 	}
 	if err := writeEvent("message_stop", `{"type":"message_stop"}`); err != nil {
 		return err
 	}
 	return sc.Err()
+}
+
+type pendingToolUse struct {
+	id, name  string
+	arguments strings.Builder
+}
+
+func writeClaudeToolUseBlock(writeEvent func(event, data string) error, index int, call *pendingToolUse) error {
+	id := call.id
+	if id == "" {
+		id = fmt.Sprintf("toolu_peaproxy_%d", index)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"type":          "content_block_start",
+		"index":         index,
+		"content_block": map[string]any{"type": "tool_use", "id": id, "name": call.name, "input": map[string]any{}},
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeEvent("content_block_start", string(raw)); err != nil {
+		return err
+	}
+	if call.arguments.Len() > 0 {
+		if err := writeClaudeDelta(writeEvent, index, map[string]string{"type": "input_json_delta", "partial_json": call.arguments.String()}); err != nil {
+			return err
+		}
+	}
+	return writeEvent("content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, index))
+}
+
+func writeClaudeDelta(writeEvent func(event, data string) error, index int, delta any) error {
+	raw, err := json.Marshal(struct {
+		Type  string `json:"type"`
+		Index int    `json:"index"`
+		Delta any    `json:"delta"`
+	}{"content_block_delta", index, delta})
+	if err != nil {
+		return err
+	}
+	return writeEvent("content_block_delta", string(raw))
 }
 
 type openAIChatDelta struct {

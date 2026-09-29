@@ -225,6 +225,34 @@ func TestFromOpenAIToolCallsBecomeToolUse(t *testing.T) {
 	}
 }
 
+func TestFromOpenAILengthDuringToolUse(t *testing.T) {
+	in := []byte(`{
+		"id":"chatcmpl-1",
+		"model":"m",
+		"choices":[{
+			"message":{
+				"role":"assistant",
+				"content":null,
+				"tool_calls":[{"id":"call_1","type":"function","function":{"name":"write","arguments":"{\"path\":\"a.txt\",\"body\":\"tru"}}]
+			},
+			"finish_reason":"length"
+		}]
+	}`)
+	out, err := FromOpenAI(in, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		StopReason string `json:"stop_reason"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.StopReason != "max_tokens" {
+		t.Fatalf("stop_reason %q, want max_tokens so the client does not run a truncated call: %s", got.StopReason, out)
+	}
+}
+
 func TestRefusesUnknownNonTextClaudeBlock(t *testing.T) {
 	in := []byte(`{"model":"m","messages":[{"role":"user","content":[{"type":"thinking","thinking":"x"}]}]}`)
 	_, _, err := ToOpenAI(in)

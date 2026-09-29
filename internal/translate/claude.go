@@ -213,12 +213,14 @@ func FromOpenAI(raw []byte, model string) ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// claudeStopReason reports truncation before tool use: a turn cut off at the
+// token limit may end inside a tool call, and clients must not run that call.
 func claudeStopReason(finish string, hadToolCalls bool) string {
-	if hadToolCalls || finish == "tool_calls" {
-		return "tool_use"
-	}
 	if finish == "length" {
 		return "max_tokens"
+	}
+	if hadToolCalls || finish == "tool_calls" {
+		return "tool_use"
 	}
 	return "end_turn"
 }
