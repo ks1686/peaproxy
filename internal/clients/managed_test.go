@@ -58,6 +58,42 @@ func TestConnectPreservesJSONKeyOrder(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeReconnectDropsModelAndTrimsV1Slash(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	layout := Layout{Root: root}
+	readEnv := func() map[string]string {
+		t.Helper()
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Env map[string]string `json:"env"`
+		}
+		if err := json.Unmarshal(got, &parsed); err != nil {
+			t.Fatalf("settings invalid: %v\n%s", err, got)
+		}
+		return parsed.Env
+	}
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1", "claude-opus-5-5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1/", ""); err != nil {
+		t.Fatal(err)
+	}
+	env := readEnv()
+	if _, ok := env["ANTHROPIC_MODEL"]; ok {
+		t.Fatalf("empty model must delete ANTHROPIC_MODEL: %v", env)
+	}
+	if env["ANTHROPIC_API_KEY"] != "peaproxy" {
+		t.Fatalf("api key lost on reconnect: %v", env)
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "http://127.0.0.1:8317" {
+		t.Fatalf("base url = %q, want no /v1 and no trailing slash", got)
+	}
+}
+
 func TestClaudeCodeDisconnectRemovesEmptyEnvAndLegacyKey(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, ".claude", "settings.json")
