@@ -49,3 +49,26 @@ func TestMessagesForwardsClientBetas(t *testing.T) {
 		t.Fatalf("upstream calls = %d, want 2", len(got))
 	}
 }
+
+func TestMessagesForwardsClientBetasWithoutThinkingBudget(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("anthropic-beta")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"type":"message","content":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	adp, err := New(adapter.Options{ID: "anthropic", BaseURL: srv.URL, APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := requestmeta.WithRequest(context.Background(), requestmeta.Request{AnthropicBeta: "oauth-2025-04-20,thinking-binding-controls-2026-08-01"})
+	body := []byte(`{"model":"claude-opus-5-5","max_tokens":8,"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"hi"}]}`)
+
+	if _, err := adp.(*Adapter).Messages(ctx, body); err != nil {
+		t.Fatal(err)
+	}
+	if got != "thinking-binding-controls-2026-08-01" {
+		t.Fatalf("anthropic-beta = %q, want only the non-OAuth client beta", got)
+	}
+}

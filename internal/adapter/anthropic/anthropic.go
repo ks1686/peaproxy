@@ -154,7 +154,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.headers(httpReq)
-	setThinkingBeta(httpReq, raw)
+	setBetas(httpReq, raw)
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -179,7 +179,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
 	a.headers(httpReq)
-	setThinkingBeta(httpReq, raw)
+	setBetas(httpReq, raw)
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return err
@@ -226,8 +226,12 @@ func withThinking(raw []byte, budget int) []byte {
 	return translate.ApplyThinkingBudget(raw, budget)
 }
 
+func setBetas(req *http.Request, raw []byte) {
+	setThinkingBeta(req, raw)
+	mergeClientBetas(req)
+}
+
 func setThinkingBeta(req *http.Request, raw []byte) {
-	defer mergeClientBetas(req)
 	if !bytes.Contains(raw, []byte(`"budget_tokens"`)) {
 		return
 	}
@@ -243,9 +247,11 @@ func setThinkingBeta(req *http.Request, raw []byte) {
 	req.Header.Set("anthropic-beta", cur+","+beta)
 }
 
+// mergeClientBetas drops OAuth-only betas, which conflict with x-api-key auth.
 func mergeClientBetas(req *http.Request) {
 	meta, _ := requestmeta.FromContext(req.Context())
-	if merged := requestmeta.MergeAnthropicBeta(req.Header.Get("anthropic-beta"), meta.AnthropicBeta); merged != "" {
+	client := requestmeta.DropAnthropicBeta(meta.AnthropicBeta, "oauth-")
+	if merged := requestmeta.MergeAnthropicBeta(req.Header.Get("anthropic-beta"), client); merged != "" {
 		req.Header.Set("anthropic-beta", merged)
 	}
 }

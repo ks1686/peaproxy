@@ -34,6 +34,16 @@ func TestNormalizeAnthropicBetaCapsCount(t *testing.T) {
 	}
 }
 
+func TestDropAnthropicBeta(t *testing.T) {
+	got := DropAnthropicBeta("oauth-2025-04-20,context-1m-2025-08-07,keep-1,oauth-x", "oauth-", "context-1m-")
+	if got != "keep-1" {
+		t.Fatalf("DropAnthropicBeta = %q, want %q", got, "keep-1")
+	}
+	if got := DropAnthropicBeta("", "oauth-"); got != "" {
+		t.Fatalf("empty = %q", got)
+	}
+}
+
 func TestMergeAnthropicBeta(t *testing.T) {
 	own := "claude-code-20250219,oauth-2025-04-20"
 	cases := []struct {

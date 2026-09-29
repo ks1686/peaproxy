@@ -44,6 +44,21 @@ func MergeAnthropicBeta(own, client string) string {
 	return strings.Join(parts, ",")
 }
 
+// DropAnthropicBeta removes the betas whose names start with any of prefixes.
+func DropAnthropicBeta(betas string, prefixes ...string) string {
+	var kept []string
+	for _, name := range strings.Split(betas, ",") {
+		drop := name == ""
+		for _, p := range prefixes {
+			drop = drop || strings.HasPrefix(name, p)
+		}
+		if !drop {
+			kept = append(kept, name)
+		}
+	}
+	return strings.Join(kept, ",")
+}
+
 func validBetaName(name string) bool {
 	if name == "" || len(name) > maxAnthropicBetaLen {
 		return false

@@ -30,7 +30,7 @@ func TestMessagesForwardsClientBetas(t *testing.T) {
 	t.Cleanup(srv.Close)
 	a := testAdapter(t, srv.URL)
 	a.token = oauth.Token{AccessToken: "oauth-at", ExpiresAt: time.Now().Add(time.Hour)}
-	client := "thinking-binding-controls-2026-08-01,oauth-2025-04-20,structured-outputs-2025-11-13"
+	client := "thinking-binding-controls-2026-08-01,oauth-2025-04-20,context-1m-2025-08-07,structured-outputs-2025-11-13"
 	ctx := requestmeta.WithRequest(context.Background(), requestmeta.Request{AnthropicBeta: client})
 	body := []byte(`{"model":"claude-opus-5-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`)
 

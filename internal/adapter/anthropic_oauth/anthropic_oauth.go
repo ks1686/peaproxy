@@ -586,8 +586,11 @@ func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byt
 		sessionID = a.sessionID
 	}
 	req.Header.Set("anthropic-version", APIVersion)
+	// context-1m is never forwarded: without extra usage the subscription lane
+	// rejects it, and 1M context works without the beta.
 	meta, _ := requestmeta.FromContext(req.Context())
-	req.Header.Set("anthropic-beta", requestmeta.MergeAnthropicBeta(oauthBetas(model, body), meta.AnthropicBeta))
+	client := requestmeta.DropAnthropicBeta(meta.AnthropicBeta, "context-1m-")
+	req.Header.Set("anthropic-beta", requestmeta.MergeAnthropicBeta(oauthBetas(model, body), client))
 	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	req.Header.Set("x-app", "cli")
 	req.Header.Set("User-Agent", MessagesUserAgent)
