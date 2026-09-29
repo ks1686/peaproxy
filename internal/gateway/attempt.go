@@ -52,6 +52,26 @@ func (c *attemptCoordinator) take() error {
 	return nil
 }
 
+// final reports whether candidate i is the last one this request can reach,
+// either because it is the last reachable index or the attempt budget is spent.
+func (c *attemptCoordinator) final(i, last int) bool {
+	return i >= last || c.used >= c.max
+}
+
+// lastReachable is the index of the last candidate a stream loop can call.
+// A body that failed translation only reaches adapters that implement N.
+func lastReachable[N any](cands []instance, translated bool) int {
+	if translated {
+		return len(cands) - 1
+	}
+	for i := len(cands) - 1; i >= 0; i-- {
+		if _, ok := cands[i].Adapter.(N); ok {
+			return i
+		}
+	}
+	return -1
+}
+
 // run tries candidate accounts within one request-wide attempt budget. Calls
 // that may have reached a side-effecting endpoint are never replayed.
 func (c *attemptCoordinator) run(ctx context.Context, accounts []string, sideEffecting bool, call func(context.Context, string) (string, error)) (string, error) {

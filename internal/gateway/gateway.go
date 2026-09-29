@@ -471,8 +471,9 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
+	var slowSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
-	for _, inst := range cands {
+	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		dest := newRouteRewriter(guard, model, client)
 		lastAccount = inst.Provider.ID
@@ -482,11 +483,14 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 				return lastAccount, errAttemptBudgetExhausted
 			}
 			guard.Reset()
+			if budgetAttempts.final(i, len(cands)-1) {
+				guard.Unbounded()
+			}
 			before := cw.n
 			attemptCtx, stop := guard.Bound(ctx)
 			callErr = noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, model, raw, true, budget), dest))
 			stop()
-			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !preludeFailover(callErr)) || attempt == 1 {
+			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
 				break
 			}
 		}
@@ -499,11 +503,19 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		if cw.n > 0 {
 			return lastAccount, callErr
 		}
+		if slowPrelude(callErr) {
+			slowSkipped = true
+			continue
+		}
 		if retryable(callErr) || router.Transient(callErr) || preludeFailover(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return lastAccount, callErr
+	}
+	// A slow account was skipped without a cooldown, so not every account is cooling.
+	if slowSkipped {
+		return lastAccount, last
 	}
 	return lastAccount, cooldownErr(last)
 }
@@ -876,8 +888,10 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
+	var slowSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
-	for _, inst := range cands {
+	reachable := lastReachable[adapter.NativeResponses](cands, xerr == nil)
+	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
@@ -889,6 +903,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 				return lastAccount, errAttemptBudgetExhausted
 			}
 			guard.Reset()
+			if budgetAttempts.final(i, reachable) {
+				guard.Unbounded()
+			}
 			attemptCtx, stop := guard.Bound(ctx)
 			err := noteStream(guard, nr.ResponsesStream(attemptCtx, jsonx.SetStream(raw, true), dest))
 			stop()
@@ -901,6 +918,10 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			if cw.n > 0 {
 				return lastAccount, err
 			}
+			if slowPrelude(err) {
+				slowSkipped = true
+				continue
+			}
 			if retryable(err) {
 				g.markCooldown(inst.Provider.ID, model, err)
 				continue
@@ -908,13 +929,18 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			return lastAccount, err
 		}
 		if xerr != nil {
-			last = xerr
+			if !slowPrelude(last) {
+				last = xerr
+			}
 			continue
 		}
 		if err := budgetAttempts.take(); err != nil {
 			return lastAccount, errAttemptBudgetExhausted
 		}
 		guard.Reset()
+		if budgetAttempts.final(i, reachable) {
+			guard.Unbounded()
+		}
 		attemptCtx, stop := guard.Bound(ctx)
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
@@ -935,6 +961,10 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		if cw.n > 0 {
 			return lastAccount, err
 		}
+		if slowPrelude(err) {
+			slowSkipped = true
+			continue
+		}
 		if retryable(err) {
 			g.markCooldown(inst.Provider.ID, model, err)
 			continue
@@ -947,7 +977,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if last == nil {
 		last = router.ErrNoAccount
 	}
-	if retryable(last) {
+	if retryable(last) && !slowSkipped {
 		return lastAccount, cooldownErr(last)
 	}
 	return lastAccount, last
@@ -1066,8 +1096,10 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
+	var slowSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
-	for _, inst := range cands {
+	reachable := lastReachable[adapter.NativeMessages](cands, xerr == nil)
+	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
@@ -1079,6 +1111,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 				return lastAccount, errAttemptBudgetExhausted
 			}
 			guard.Reset()
+			if budgetAttempts.final(i, reachable) {
+				guard.Unbounded()
+			}
 			attemptCtx, stop := guard.Bound(ctx)
 			err := noteStream(guard, nm.MessagesStream(attemptCtx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest))
 			stop()
@@ -1091,6 +1126,10 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			if cw.n > 0 {
 				return lastAccount, err
 			}
+			if slowPrelude(err) {
+				slowSkipped = true
+				continue
+			}
 			if retryable(err) {
 				g.markCooldown(inst.Provider.ID, model, err)
 				continue
@@ -1098,13 +1137,18 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			return lastAccount, err
 		}
 		if xerr != nil {
-			last = xerr
+			if !slowPrelude(last) {
+				last = xerr
+			}
 			continue
 		}
 		if err := budgetAttempts.take(); err != nil {
 			return lastAccount, errAttemptBudgetExhausted
 		}
 		guard.Reset()
+		if budgetAttempts.final(i, reachable) {
+			guard.Unbounded()
+		}
 		attemptCtx, stop := guard.Bound(ctx)
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
@@ -1125,6 +1169,10 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		if cw.n > 0 {
 			return lastAccount, err
 		}
+		if slowPrelude(err) {
+			slowSkipped = true
+			continue
+		}
 		if retryable(err) {
 			g.markCooldown(inst.Provider.ID, model, err)
 			continue
@@ -1137,7 +1185,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	if last == nil {
 		last = router.ErrNoAccount
 	}
-	if retryable(last) {
+	if retryable(last) && !slowSkipped {
 		return lastAccount, cooldownErr(last)
 	}
 	return lastAccount, last
@@ -1183,6 +1231,12 @@ func preludeFailover(err error) bool {
 	return errors.Is(err, streamguard.ErrPrelude) || errors.Is(err, streamguard.ErrTimeout)
 }
 
+// slowPrelude is a first event that took too long. It moves on to the next
+// account but is not an account failure, so it never starts a cooldown.
+func slowPrelude(err error) bool {
+	return errors.Is(err, streamguard.ErrTimeout)
+}
+
 func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += n
@@ -1194,7 +1248,12 @@ func retryable(err error) bool {
 }
 
 func cooldownErr(last error) error {
-	return router.CooldownError{RetryAfter: cooldownTTL, Err: last}
+	wait := cooldownTTL
+	var he adapter.HTTPError
+	if errors.As(last, &he) && he.RetryAfter > 0 {
+		wait = he.RetryAfter
+	}
+	return router.CooldownError{RetryAfter: wait, Err: last}
 }
 
 func (g *Gateway) rememberSuccess(session, model, account string) {
@@ -1259,11 +1318,32 @@ func (g *Gateway) route(ctx context.Context, raw []byte, model string) ([]instan
 	cands, retry := g.candidates(model, session)
 	if len(cands) == 0 {
 		if retry > 0 {
-			return nil, session, router.CooldownError{RetryAfter: retry}
+			return nil, session, router.CooldownError{RetryAfter: retry, Err: g.cooldownCause(model)}
 		}
 		return nil, session, router.ErrNoAccount
 	}
 	return cands, session, nil
+}
+
+// cooldownCause names each cooled account that serves model and why, so a
+// proxy-side cooldown is not mistaken for a provider usage limit.
+func (g *Gateway) cooldownCause(model string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	var parts []string
+	for _, id := range catalog.AccountsForModel(g.models, g.queryLocked(), model) {
+		c, ok := g.cool[id]
+		if !ok || !now.Before(c.Until) || (c.Model != "" && c.Model != model) {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s after %s, %ds left", id, c.Reason, int(time.Until(c.Until).Round(time.Second).Seconds())))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	sort.Strings(parts)
+	return errors.New(strings.Join(parts, "; "))
 }
 
 func (g *Gateway) markCooldown(id, model string, err error) {

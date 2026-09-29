@@ -45,17 +45,26 @@ func (e CooldownError) Unwrap() error {
 	return ErrNoAccount
 }
 
-// RetryAfterSeconds returns the Retry-After header value for cooldown errors.
+// maxClientRetryAfter caps the Retry-After sent to clients. The internal
+// cooldown still honors the upstream reset; OpenCode waits out Retry-After
+// uncapped, so an hour-long quota reset would stall a session silently.
+const maxClientRetryAfter = 60
+
+// RetryAfterSeconds returns the Retry-After header value for cooldown errors
+// and upstream errors that carried a reset hint.
 func RetryAfterSeconds(err error) int {
+	var wait time.Duration
 	var ce CooldownError
-	if !errors.As(err, &ce) {
+	var he adapter.HTTPError
+	switch {
+	case errors.As(err, &ce):
+		wait = ce.RetryAfter
+	case errors.As(err, &he) && he.RetryAfter > 0:
+		wait = he.RetryAfter
+	default:
 		return 0
 	}
-	sec := int(ce.RetryAfter.Seconds())
-	if sec < 1 {
-		return 1
-	}
-	return sec
+	return min(max(int(wait.Seconds()), 1), maxClientRetryAfter)
 }
 
 // RouteError is a terminal or retryable upstream failure.

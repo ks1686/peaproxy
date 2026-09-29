@@ -9,6 +9,7 @@ import (
 const (
 	defaultRequestMaxAttempts = 3
 	defaultRequestDeadline    = 2 * time.Minute
+	defaultPreludeTimeout     = 30 * time.Second
 )
 
 // RequestEnginePrefs bounds work across retries and accounts. It is additive
@@ -76,7 +77,7 @@ func (c Config) StreamPreludeTimeout() time.Duration {
 	if d, err := time.ParseDuration(strings.TrimSpace(c.RequestEngine.PreludeTimeout)); err == nil && d > 0 {
 		return d
 	}
-	return 5 * time.Second
+	return defaultPreludeTimeout
 }
 
 func (c Config) validateRequestEngine() error {

@@ -15,6 +15,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/localruntime"
+	"github.com/ks1686/peaproxy/internal/router"
 )
 
 func TestLoadingLocalExtendsPreludeOnly(t *testing.T) {
@@ -22,6 +23,7 @@ func TestLoadingLocalExtendsPreludeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	gw.cfg.RequestEngine.PreludeTimeout = "5s"
 	gw.models = []catalog.Model{{
 		ID: "llama", Tier: catalog.TierLocal, Status: string(localruntime.StateLoading),
 	}}
@@ -393,5 +395,119 @@ func TestDisabledAutomaticRouteDoesNotMatchAllAccounts(t *testing.T) {
 	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"pea/auto","messages":[{"role":"user","content":"hi"}]}`))
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func slowStream(delay time.Duration, hits *int, mu *sync.Mutex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		mu.Lock()
+		*hits++
+		mu.Unlock()
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pea\"}}]}\n\ndata: [DONE]\n\n")
+	}
+}
+
+func TestCooldownErrorNamesAccountAndCause(t *testing.T) {
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.mu.Lock()
+	for _, id := range []string{"acct-a", "acct-b"} {
+		gw.cool[id] = Cooldown{AccountID: id, Until: time.Now().Add(time.Minute), Reason: "HTTP 429 (rate-limit)"}
+	}
+	gw.mu.Unlock()
+	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
+	if err == nil {
+		t.Fatal("expected cooldown error")
+	}
+	for _, want := range []string{"all matching accounts in cooldown", "acct-a after HTTP 429 (rate-limit)", "acct-b after HTTP 429 (rate-limit)", "s left"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestCooldownRetryAfterFollowsUpstream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"type":"rate_limit_error","message":"slow down"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{SchemaVersion: 1, Providers: []config.Provider{
+		{ID: "only", Adapter: "openai_compat", Tier: "paid", BaseURL: srv.URL + "/v1"},
+	}}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	body := []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	_, err = gw.ChatStream(context.Background(), body, io.Discard)
+	if got := router.RetryAfterSeconds(err); got != 2 {
+		t.Fatalf("first failure Retry-After = %d, want the upstream's 2 (err=%v)", got, err)
+	}
+	_, err = gw.ChatStream(context.Background(), body, io.Discard)
+	if got := router.RetryAfterSeconds(err); got < 1 || got > 2 {
+		t.Fatalf("cooled follow-up Retry-After = %d, want <= 2 (err=%v)", got, err)
+	}
+}
+
+func TestSlowPreludeOnOnlyAccountStreams(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	srv := httptest.NewServer(slowStream(200*time.Millisecond, &hits, &mu))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{SchemaVersion: 1, Providers: []config.Provider{
+		{ID: "only", Adapter: "openai_compat", Tier: "paid", BaseURL: srv.URL + "/v1"},
+	}}
+	cfg.RequestEngine.PreludeTimeout = "20ms"
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	var out strings.Builder
+	if _, err := gw.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), &out); err != nil {
+		t.Fatalf("slow first event on the only account failed: %v", err)
+	}
+	if !strings.Contains(out.String(), "pea") || hits != 1 {
+		t.Fatalf("hits=%d out=%q", hits, out.String())
+	}
+	if len(gw.Cooldowns()) != 0 {
+		t.Fatalf("slow prelude cooled the account: %+v", gw.Cooldowns())
+	}
+}
+
+func TestSlowPreludeFailsOverWithoutCooldown(t *testing.T) {
+	var mu sync.Mutex
+	hitsA, hitsB := 0, 0
+	gw := twoAccountGateway(t, slowStream(time.Second, &hitsA, &mu), slowStream(0, &hitsB, &mu))
+	gw.cfg.Failover.Policy = "fill-first"
+	gw.cfg.RequestEngine.PreludeTimeout = "20ms"
+	var out strings.Builder
+	account, err := gw.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if account != "acct-b" || hitsA != 1 || hitsB != 1 {
+		t.Fatalf("account=%s hits a=%d b=%d", account, hitsA, hitsB)
+	}
+	if len(gw.Cooldowns()) != 0 {
+		t.Fatalf("slow prelude cooled the account: %+v", gw.Cooldowns())
 	}
 }

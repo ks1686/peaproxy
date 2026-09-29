@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -135,5 +136,22 @@ func TestCooldownErrorRetryAfter(t *testing.T) {
 	}
 	if !errors.Is(err, err.Err) {
 		t.Fatal("unwrap inner")
+	}
+}
+
+func TestUpstreamRetryAfterSurvivesWithoutCooldownWrap(t *testing.T) {
+	upstream := adapter.HTTPError{Status: 429, RetryAfter: 7 * time.Second}
+	if got := RetryAfterSeconds(fmt.Errorf("stream: %w", upstream)); got != 7 {
+		t.Fatalf("Retry-After %d, want the upstream's 7", got)
+	}
+	if got := RetryAfterSeconds(adapter.HTTPError{Status: 429}); got != 0 {
+		t.Fatalf("no upstream hint: Retry-After %d, want 0", got)
+	}
+}
+
+func TestClientRetryAfterIsCappedForLongQuotaResets(t *testing.T) {
+	long := CooldownError{RetryAfter: time.Hour, Err: errors.New("quota reached. Resets in 166h")}
+	if got := RetryAfterSeconds(long); got != 60 {
+		t.Fatalf("Retry-After %d, want 60 so clients that honor it uncapped do not stall for an hour", got)
 	}
 }

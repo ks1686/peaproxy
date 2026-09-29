@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultMaxBytes = 64 << 10
-	DefaultTimeout  = 5 * time.Second
+	DefaultTimeout  = 30 * time.Second
 )
 
 var (
@@ -36,6 +36,7 @@ type Guard struct {
 	committed bool
 	failed    error
 	deadline  time.Time
+	unbounded bool
 }
 
 func New(dst io.Writer, maxBytes int, timeout time.Duration) *Guard {
@@ -74,17 +75,36 @@ func (g *Guard) Reset() {
 	}
 	g.buf.Reset()
 	g.failed = nil
+	g.unbounded = false
 	g.deadline = time.Now().Add(g.timeout)
+}
+
+// Unbounded drops the prelude deadline until the next Reset. Use it when no
+// other account can take over, so a slow first event is not aborted.
+func (g *Guard) Unbounded() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.unbounded = true
+	g.deadline = time.Time{}
 }
 
 // Bound cancels ctx if no valid event arrives before the prelude timeout.
 // A keepalive extends that deadline; the timer follows the new deadline
-// instead of the original one-shot wait.
+// instead of the original one-shot wait. The returned stop waits for the
+// timer to exit, so it cannot fail the attempt that follows.
 func (g *Guard) Bound(parent context.Context) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(parent)
+	g.mu.Lock()
+	unbounded := g.unbounded
+	g.mu.Unlock()
+	if unbounded {
+		return ctx, cancel
+	}
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	var once sync.Once
 	go func() {
+		defer close(done)
 		defer func() {
 			if !g.Committed() {
 				cancel()
@@ -114,7 +134,7 @@ func (g *Guard) Bound(parent context.Context) (context.Context, context.CancelFu
 				g.mu.Lock()
 				committed = g.committed
 				remain := time.Until(g.deadline)
-				if !committed && remain <= 0 && g.failed == nil {
+				if !committed && !g.unbounded && remain <= 0 && g.failed == nil {
 					g.failed = ErrTimeout
 				}
 				g.mu.Unlock()
@@ -127,6 +147,7 @@ func (g *Guard) Bound(parent context.Context) (context.Context, context.CancelFu
 	return ctx, func() {
 		once.Do(func() { close(stop) })
 		cancel()
+		<-done
 	}
 }
 
@@ -191,7 +212,9 @@ func (g *Guard) scanLocked() (keepalive bool, err error) {
 		switch classifyLine(line) {
 		case lineKeepalive:
 			keepalive = true
-			g.deadline = time.Now().Add(g.timeout)
+			if !g.unbounded {
+				g.deadline = time.Now().Add(g.timeout)
+			}
 			i = end
 		case lineError:
 			return keepalive, ErrPrelude

@@ -111,7 +111,7 @@ Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider er
 requestEngine:
   maxAttempts: 3
   deadline: 2m
-  preludeTimeout: 5s
+  preludeTimeout: 30s
   promptCache: preserve # preserve | optimize | off
   cacheResponses: false
   cacheEmbeddings: false
@@ -119,6 +119,8 @@ requestEngine:
 automaticRoutes:
   enabled: false
 ```
+
+`preludeTimeout` is how long a stream may wait for its first event before it moves to the next matching account. A slow first event does not cool the account down. The last account a request can reach is never cut off by it; only `deadline` bounds that attempt.
 
 `promptCache: optimize` adds one Anthropic `cache_control` breakpoint only for a known profile and only when the caller is under that profile's limit. `off` does not strip caller breakpoints. Response caching is exact, in-memory, and skips tools, images, and continuation ids. `pea/auto`, `pea/economy`, `pea/local`, and `pea/free` are rejected as `routes` names. They select a live model only when `automaticRoutes.enabled` is true. Unknown prices are not free and do not win economy. An exact local model does not fail over to a cloud account that happens to advertise the same id.
 
