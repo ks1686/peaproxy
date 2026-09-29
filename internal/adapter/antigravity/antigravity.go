@@ -695,9 +695,9 @@ func upstreamModelID(model string) string {
 
 func chatHTTPError(resp *http.Response, body []byte) error {
 	e := adapter.NewHTTPError(resp, truncate(body))
-	// Cloud Code does not send X-Ratelimit-Scope. A 429, or a 503 "No capacity
-	// available for model X", is this model, not the whole Google account, so
-	// the next model can still be tried.
+	// Cloud Code sends no X-Ratelimit-Scope. Its 429s and 503s report per-model
+	// quota or capacity, so every one is scoped to this model, not the whole
+	// Google account, and the next model can still be tried.
 	if (e.Status == http.StatusTooManyRequests || e.Status == http.StatusServiceUnavailable) && e.Scope == adapter.ScopeAccount {
 		e.Scope = adapter.ScopeModel
 	}
@@ -906,7 +906,11 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 			}
 			for i, call := range m.ToolCalls {
 				args := bytes.TrimSpace([]byte(call.Function.Arguments))
-				if len(args) == 0 || args[0] != '{' || !json.Valid(args) || call.Function.Name == "" {
+				if len(args) == 0 {
+					// Some OpenAI clients send "" for a call to a zero-argument tool.
+					args = []byte("{}")
+				}
+				if args[0] != '{' || !json.Valid(args) || call.Function.Name == "" {
 					return nil, fmt.Errorf("antigravity: invalid function call %q", call.ID)
 				}
 				calls[call.ID] = toolCall{name: call.Function.Name, order: i}
@@ -1412,7 +1416,13 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		if payload == "" {
 			continue
 		}
-		delta, finish, err := geminiChatMessage([]byte(payload))
+		event := []byte(payload)
+		// A failed event ends the stream without a finish chunk, so a partial
+		// answer is never reported as complete.
+		if err := streamEventError(event); err != nil {
+			return err
+		}
+		delta, finish, err := geminiChatMessage(event)
 		if err != nil {
 			continue
 		}
@@ -1451,6 +1461,37 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		return err
 	}
 	return translate.WriteOpenAIChatSSEFinish(w, "peaproxy-antigravity", model, geminiFinishReason(calls, upstreamFinish))
+}
+
+// streamEventError returns the failure a Cloud Code SSE event sends in place
+// of candidates: a status object under "error", top level or inside
+// "response". Its code is classified as the HTTP status it stands for, so
+// failover, cooldown scope and reset hint match a failed response.
+func streamEventError(event []byte) error {
+	var parsed struct {
+		Error    json.RawMessage `json:"error"`
+		Response struct {
+			Error json.RawMessage `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(event, &parsed) != nil {
+		return nil
+	}
+	status := parsed.Error
+	if !bytes.HasPrefix(status, []byte("{")) {
+		status = parsed.Response.Error
+	}
+	if !bytes.HasPrefix(status, []byte("{")) {
+		return nil
+	}
+	body := []byte(`{"error":` + string(status) + `}`)
+	var fields struct {
+		Code int `json:"code"`
+	}
+	if json.Unmarshal(status, &fields) == nil && fields.Code > 0 {
+		return chatHTTPError(&http.Response{StatusCode: fields.Code}, body)
+	}
+	return fmt.Errorf("antigravity: stream error: %s", truncate(body))
 }
 
 func (a *Adapter) headers(req *http.Request) {

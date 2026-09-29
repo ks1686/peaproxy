@@ -220,6 +220,55 @@ func TestGeminiEmptyStreamStillCloses(t *testing.T) {
 	}
 }
 
+func TestGeminiStreamErrorPayloadFailsTheStream(t *testing.T) {
+	text := "data: " + `{"response":{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}}` + "\n\n"
+	quota := `{"error":{"code":429,"message":"Resource has been exhausted","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"30s"}]}}`
+	for _, tc := range []struct{ name, event string }{
+		{"top-level error", quota},
+		{"error under response", `{"response":` + quota + `}`},
+	} {
+		t.Run(tc.name+" after text", func(t *testing.T) {
+			// Given a stream that fails after part of the answer.
+			var out bytes.Buffer
+			// When translating it.
+			err := geminiSSEToOpenAI(strings.NewReader(text+"data: "+tc.event+"\n\n"), &out, "gemini-3-flash")
+			// Then it fails instead of closing the partial answer as complete.
+			if err == nil {
+				t.Fatalf("error event swallowed: %s", out.String())
+			}
+			if !strings.Contains(out.String(), `"content":"partial"`) || strings.Contains(out.String(), `"finish_reason":"`) || strings.Contains(out.String(), "[DONE]") {
+				t.Fatalf("partial answer closed as complete: %s", out.String())
+			}
+		})
+		t.Run(tc.name+" as first event", func(t *testing.T) {
+			// Given a stream whose first event is a quota error.
+			var out bytes.Buffer
+			// When translating it.
+			err := geminiSSEToOpenAI(strings.NewReader("data: "+tc.event+"\n\n"), &out, "gemini-3-flash")
+			// Then it fails as a model-scoped 429 with the reset hint and writes
+			// nothing, so the gateway can cool the model and fail over.
+			var he adapter.HTTPError
+			if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests || he.Scope != adapter.ScopeModel || he.RetryAfter != 30*time.Second {
+				t.Fatalf("err = %#v, want a model-scoped 429 retrying in 30s", err)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("wrote %q before failing", out.String())
+			}
+		})
+	}
+	t.Run("status without a code", func(t *testing.T) {
+		// Given a first event whose error carries no status code.
+		var out bytes.Buffer
+		// When translating the stream.
+		err := geminiSSEToOpenAI(strings.NewReader("data: "+`{"error":{"message":"Internal error encountered.","status":"INTERNAL"}}`+"\n\n"), &out, "gemini-3-flash")
+		// Then it fails as a plain error, having no status to classify, and writes nothing.
+		var he adapter.HTTPError
+		if err == nil || errors.As(err, &he) || out.Len() != 0 {
+			t.Fatalf("err = %#v, output %q; want a plain error and no output", err, out.String())
+		}
+	})
+}
+
 func TestGeminiStreamMaxTokensDuringToolCall(t *testing.T) {
 	call := `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":{"path":"a"}}}]}`
 	for _, tc := range []struct{ name, in string }{
@@ -405,6 +454,37 @@ func TestGeminiToolOnlyAssistant(t *testing.T) {
 		if len(env.Request.Contents[0].Parts) != 1 || env.Request.Contents[0].Parts[0].FunctionCall == nil || !bytes.Contains(body, []byte(`"content":[{"type":"text","text":"result"}]`)) {
 			t.Fatalf("history: %s", body)
 		}
+	}
+}
+
+func TestGeminiEmptyToolCallArgumentsBecomeEmptyObject(t *testing.T) {
+	for _, tc := range []struct{ name, arguments string }{
+		{"empty", `""`},
+		{"whitespace", `" \n\t"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a call to a zero-argument tool whose arguments are blank.
+			a := &Adapter{}
+			raw := []byte(`{"messages":[{"role":"assistant","tool_calls":[{"id":"a","type":"function","function":{"name":"now","arguments":` + tc.arguments + `}}]},{"role":"tool","tool_call_id":"a","content":"noon"}]}`)
+			// When building Cloud Code history.
+			body, err := a.geminiBody(adapter.ChatRequest{Model: "gemini-3-flash", Raw: raw}, false)
+			if err != nil {
+				t.Fatalf("blank arguments rejected: %v", err)
+			}
+			// Then the call sends empty-object args and keeps its result paired.
+			var env geminiEnvelope
+			if err := json.Unmarshal(body, &env); err != nil {
+				t.Fatal(err)
+			}
+			c := env.Request.Contents
+			if len(c) != 2 || len(c[0].Parts) != 1 || len(c[1].Parts) != 1 {
+				t.Fatalf("history: %s", body)
+			}
+			call, result := c[0].Parts[0].FunctionCall, c[1].Parts[0].FunctionResponse
+			if call == nil || string(call.Args) != "{}" || result == nil || result.Name != "now" {
+				t.Fatalf("history: %s", body)
+			}
+		})
 	}
 }
 
