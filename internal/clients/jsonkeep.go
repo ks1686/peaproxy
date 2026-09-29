@@ -18,12 +18,47 @@ func upsertJSONKey(body []byte, key string, value any) ([]byte, error) {
 	if end < 0 {
 		return nil, errorsNewJSON()
 	}
-	member := append([]byte(`"`+key+`":`), encoded...)
 	inner := bytes.TrimSpace(without[:end])
-	if len(inner) == 0 || inner[len(inner)-1] == '{' {
-		return append(append(without[:end], member...), without[end:]...), nil
+	out := make([]byte, 0, len(without)+len(key)+len(encoded)+4)
+	out = append(out, without[:end]...)
+	if len(inner) != 0 && inner[len(inner)-1] != '{' {
+		out = append(out, ',')
 	}
-	return append(append(without[:end], append([]byte{','}, member...)...), without[end:]...), nil
+	out = append(out, '"')
+	out = append(out, key...)
+	out = append(out, '"', ':')
+	out = append(out, encoded...)
+	return append(out, without[end:]...), nil
+}
+
+func getJSONKey(body []byte, key string) ([]byte, bool) {
+	if len(body) == 0 || body[0] != '{' {
+		return nil, false
+	}
+	i := 1
+	for {
+		i = skipWS(body, i)
+		if i >= len(body) || body[i] != '"' {
+			return nil, false
+		}
+		nameStart := i
+		i = scanString(body, i)
+		name := body[nameStart:i]
+		i = skipWS(body, i)
+		if i >= len(body) || body[i] != ':' {
+			return nil, false
+		}
+		i++
+		valueStart := skipWS(body, i)
+		i = scanValue(body, valueStart)
+		if string(name) == `"`+key+`"` {
+			return bytes.TrimSpace(body[valueStart:i]), true
+		}
+		i = skipWS(body, i)
+		if i < len(body) && body[i] == ',' {
+			i++
+		}
+	}
 }
 
 func deleteJSONKey(body []byte, key string) ([]byte, error) {
