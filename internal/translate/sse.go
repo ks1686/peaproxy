@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // OpenAISSEToClaude converts chat.completion.chunk SSE into Anthropic Messages SSE.
@@ -13,8 +14,10 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 	started := false
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var lastWrite time.Time
 	writeEvent := func(event, data string) error {
 		_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+		lastWrite = sseNow()
 		return err
 	}
 	var carried []opaqueEntry
@@ -111,6 +114,14 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 			}
 			call.arguments.WriteString(tc.Function.Arguments)
 		}
+		// Buffered calls reach the client only at turn end (message_start is
+		// already out), so a ping after claudePingInterval of silence keeps an
+		// idle-timeout consumer from dropping a long tool call.
+		if len(choice.Delta.ToolCalls) > 0 && sseNow().Sub(lastWrite) >= claudePingInterval {
+			if err := writeEvent("ping", claudePing); err != nil {
+				return err
+			}
+		}
 	}
 	if !started {
 		// Empty upstream (or HTTPError before any bytes) — do not invent a turn.
@@ -140,35 +151,6 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 		return err
 	}
 	return sc.Err()
-}
-
-type pendingToolUse struct {
-	id, name  string
-	arguments strings.Builder
-}
-
-func writeClaudeToolUseBlock(writeEvent func(event, data string) error, index int, call *pendingToolUse) error {
-	id := call.id
-	if id == "" {
-		id = fmt.Sprintf("toolu_peaproxy_%d", index)
-	}
-	raw, err := json.Marshal(map[string]any{
-		"type":          "content_block_start",
-		"index":         index,
-		"content_block": map[string]any{"type": "tool_use", "id": id, "name": call.name, "input": map[string]any{}},
-	})
-	if err != nil {
-		return err
-	}
-	if err := writeEvent("content_block_start", string(raw)); err != nil {
-		return err
-	}
-	if call.arguments.Len() > 0 {
-		if err := writeClaudeDelta(writeEvent, index, map[string]string{"type": "input_json_delta", "partial_json": call.arguments.String()}); err != nil {
-			return err
-		}
-	}
-	return writeEvent("content_block_stop", fmt.Sprintf(`{"type":"content_block_stop","index":%d}`, index))
 }
 
 func writeClaudeDelta(writeEvent func(event, data string) error, index int, delta any) error {

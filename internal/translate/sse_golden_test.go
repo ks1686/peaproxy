@@ -225,8 +225,8 @@ func TestOpenAISSEToClaudeFixtures(t *testing.T) {
 				``,
 			}, "\n"),
 			want: []string{
-				`"content_block":{"id":"call_1","input":{},"name":"lookup","type":"tool_use"},"index":1`,
-				`"delta":{"partial_json":"{\"q\":\"peas\"}","type":"input_json_delta"}`,
+				`"index":1,"content_block":{"type":"tool_use","id":"call_1","name":"lookup","input":{}}`,
+				`"delta":{"type":"input_json_delta","partial_json":"{\"q\":\"peas\"}"}`,
 				`"stop_reason":"tool_use"`,
 				"event: message_stop",
 			},
