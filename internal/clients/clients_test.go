@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -110,6 +111,27 @@ func TestOpenCodeAndClaudeCodeUseDifferentBaseURLs(t *testing.T) {
 	}
 	if !strings.Contains(oc.Snippet, "http://127.0.0.1:8317/v1") {
 		t.Fatalf("opencode must include /v1: %s", oc.Snippet)
+	}
+}
+
+// Custom OpenCode providers get no models.dev metadata: without a declared
+// limit compaction never fires, and only @ai-sdk/openai (Responses) carries
+// GPT reasoning variants.
+func TestOpencodeSnippetDeclaresModelMetadata(t *testing.T) {
+	oc, _ := Get("opencode")
+	for _, want := range []string{`"npm": "@ai-sdk/openai"`, `"npm": "@ai-sdk/anthropic"`, `"limit"`, `"variants"`, `"reasoningEffort"`} {
+		if !strings.Contains(oc.Snippet, want) {
+			t.Errorf("opencode snippet missing %s:\n%s", want, oc.Snippet)
+		}
+	}
+	for _, deny := range []string{`"anthropic": {`, `"openai": {`} {
+		if strings.Contains(oc.Snippet, deny) {
+			t.Errorf("opencode snippet must not reuse built-in provider id %s", deny)
+		}
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(oc.Snippet), &parsed); err != nil {
+		t.Fatalf("opencode snippet is not valid JSON: %v", err)
 	}
 }
 

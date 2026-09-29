@@ -50,16 +50,45 @@ export ANTHROPIC_API_KEY=peaproxy
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
 		Cloak:      "off",
-		Notes:      "OpenCode Anthropic provider wants baseURL INCLUDING /v1. Do not reuse the Claude Code env as-is. Cloak defaults off.",
+		Notes:      "baseURL INCLUDES /v1. Custom providers get no models.dev metadata: declare each model's limit, modalities and variants (copy them from `opencode models anthropic --verbose` / `openai`), or compaction never fires and effort variants are ignored. @ai-sdk/openai (Responses) is the only wire that carries GPT reasoning variants; @ai-sdk/openai-compatible suits other models. Keep the ids peaproxy-*: a provider named anthropic is also rewritten by opencode-claude-auth. Cloak defaults off.",
 		Snippet: `{
   "provider": {
-    "peaproxy-openai": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
-    },
     "peaproxy-anthropic": {
       "npm": "@ai-sdk/anthropic",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "claude-opus-5-5": {
+          "reasoning": true, "attachment": true, "tool_call": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 128000 },
+          "variants": {
+            "high": { "thinking": { "type": "adaptive" }, "effort": "high" },
+            "max": { "thinking": { "type": "adaptive" }, "effort": "max" }
+          }
+        }
+      }
+    },
+    "peaproxy-openai": {
+      "npm": "@ai-sdk/openai",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "gpt-5.6-sol": {
+          "reasoning": true, "attachment": true, "tool_call": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 400000, "input": 272000, "output": 128000 },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "high": { "reasoningEffort": "high" }
+          }
+        }
+      }
+    },
+    "peaproxy-compat": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "llama3.2": { "tool_call": true, "limit": { "context": 128000, "output": 8192 } }
+      }
     }
   }
 }
