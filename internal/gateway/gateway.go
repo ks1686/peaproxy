@@ -972,7 +972,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		inst.recordAttempt(&lastAccount)
 		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
 		stop()
-		_ = pw.Close()
+		// A failed call reaches the translator as a read error, not a clean EOF
+		// (nil closes normally), so it never completes the partial turn.
+		_ = pw.CloseWithError(err)
 		convErr := <-errCh
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
@@ -1182,7 +1184,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		inst.recordAttempt(&lastAccount)
 		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
 		stop()
-		_ = pw.Close()
+		// A failed call reaches the translator as a read error, not a clean EOF
+		// (nil closes normally), so it never completes the partial turn.
+		_ = pw.CloseWithError(err)
 		convErr := <-errCh
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
@@ -1362,8 +1366,12 @@ func (g *Gateway) route(ctx context.Context, raw []byte, model string) ([]instan
 	return cands, session, nil
 }
 
-// cooldownCause names each cooled account that serves model and why, so a
-// proxy-side cooldown is not mistaken for a provider usage limit.
+// cooldownCause names why each account that serves model is unavailable, so a
+// proxy-side cooldown is not mistaken for a provider usage limit. An active
+// cooldown covering model gives its reason and time left. An account with no
+// active cooldown entry is named as recovering, e.g. one just out of cooldown
+// while another request holds its half-open probe. A cooldown scoped to
+// another model is skipped.
 func (g *Gateway) cooldownCause(model string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()

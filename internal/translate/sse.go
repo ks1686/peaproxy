@@ -3,6 +3,7 @@ package translate
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -115,8 +116,11 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 			call.arguments.WriteString(tc.Function.Arguments)
 		}
 		// Buffered calls reach the client only at turn end (message_start is
-		// already out), so a ping after claudePingInterval of silence keeps an
-		// idle-timeout consumer from dropping a long tool call.
+		// already out). A tool-call delta that arrives at least
+		// claudePingInterval after the last event written sends a ping, so an
+		// idle-timeout consumer does not drop a tool call whose arguments are
+		// still streaming. There is no timer: an upstream that goes fully quiet
+		// gets no ping.
 		if len(choice.Delta.ToolCalls) > 0 && sseNow().Sub(lastWrite) >= claudePingInterval {
 			if err := writeEvent("ping", claudePing); err != nil {
 				return err
@@ -126,6 +130,15 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 	if !started {
 		// Empty upstream (or HTTPError before any bytes) — do not invent a turn.
 		return sc.Err()
+	}
+	if err := sc.Err(); err != nil {
+		// The upstream broke off mid-turn. Flushing the buffered tool calls and
+		// a stop_reason would hand the client truncated arguments to run, so
+		// the stream ends with Anthropic's error event instead.
+		if werr := writeEvent("error", `{"type":"error","error":{"type":"api_error","message":"upstream stream failed"}}`); werr != nil {
+			return errors.Join(err, werr)
+		}
+		return err
 	}
 	if err := writeEvent("content_block_stop", `{"type":"content_block_stop","index":0}`); err != nil {
 		return err
@@ -147,10 +160,7 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 	if err := writeEvent("message_delta", fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":%s,"stop_sequence":null},"usage":%s}`, jsonString(claudeStopReason(finish, len(calls) > 0)), deltaUsage)); err != nil {
 		return err
 	}
-	if err := writeEvent("message_stop", `{"type":"message_stop"}`); err != nil {
-		return err
-	}
-	return sc.Err()
+	return writeEvent("message_stop", `{"type":"message_stop"}`)
 }
 
 func writeClaudeDelta(writeEvent func(event, data string) error, index int, delta any) error {
@@ -651,6 +661,11 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	if !started {
 		return sc.Err()
 	}
+	if err := sc.Err(); err != nil {
+		// The upstream broke off mid-turn: response.completed would hand the
+		// client the truncated function_call arguments to run.
+		return err
+	}
 	output := make([]responsesOutMsg, 0, len(carried)+len(order)+1)
 	output = append(output, carried...)
 	for _, idx := range order {
@@ -690,10 +705,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeEvent("response.completed", string(raw)); err != nil {
-		return err
-	}
-	return sc.Err()
+	return writeEvent("response.completed", string(raw))
 }
 
 func jsonString(s string) string {

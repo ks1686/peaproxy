@@ -11,8 +11,9 @@ import (
 // tests replace it to simulate a slow upstream.
 var sseNow = time.Now
 
-// claudePingInterval is the client silence after which a ping is written, so
-// pings come at most once per interval.
+// claudePingInterval throttles keepalive pings. There is no timer: a ping is
+// written only when a tool-call delta arrives and at least this long has passed
+// since the last event written, so an upstream that goes fully quiet gets none.
 const claudePingInterval = time.Second
 
 // claudePing is the data of Anthropic's keepalive event, which consumers must
