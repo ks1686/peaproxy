@@ -2,7 +2,7 @@
 
 Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). Adapters: [PROVIDERS.md](PROVIDERS.md).
 
-`peaproxy clients show <name>` prints copy-ready snippets. `peaproxy clients detect`, `connect`, `disconnect`, and `status` edit only the PeaProxy block in OpenCode, Pi, Continue, Codex, and Claude Code configs. Pass `--root` with a temporary directory so those commands do not touch the real home directory. `verify` is a protocol probe against a running gateway, not proof that an installed harness launched.
+`peaproxy clients show <name>` prints copy-ready snippets. `peaproxy clients detect`, `connect`, `disconnect`, and `status` edit only the PeaProxy block in Pi, Continue, Codex, and Claude Code configs (Claude Code: the `ANTHROPIC_*` keys in `settings.json` `env`). `connect opencode` is guided and prints the preset below, since a working OpenCode provider needs per-model metadata. Pass `--root` with a temporary directory so those commands do not touch the real home directory. `verify` is a protocol probe against a running gateway, not proof that an installed harness launched.
 
 `peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp/Droid, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
 
