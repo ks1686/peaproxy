@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,28 @@ func (f fakeSecrets) Get(id string, kind secretstore.Kind) (string, error) {
 		return "", err
 	}
 	return "", secretstore.ErrNotFound
+}
+
+// fakeWriter is a secretWriter fake that fails Set for accounts named in
+// failSet and records every Set/Prune call so tests can assert who was
+// reached and who was skipped.
+type fakeWriter struct {
+	failSet     map[string]error
+	setCalls    []string
+	pruneCalled bool
+}
+
+func (f *fakeWriter) Set(id string, kind secretstore.Kind, _ string) error {
+	f.setCalls = append(f.setCalls, id+"/"+string(kind))
+	if err, ok := f.failSet[id]; ok {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeWriter) Prune(_ []string) error {
+	f.pruneCalled = true
+	return nil
 }
 
 func TestHydrateTreatsMissingChunkAsAbsentAndWarnsWithoutValue(t *testing.T) {
@@ -89,5 +112,33 @@ providers:
 	}
 	if cfg.Providers[1].OAuth == nil || cfg.Providers[1].OAuth.Email != "a@b.c" {
 		t.Fatalf("yaml metadata lost: %#v", cfg.Providers[1].OAuth)
+	}
+}
+
+// One account's Set failure (e.g. a locked keychain) must not stop every
+// later account's secret from being persisted, and a failed write must
+// never lead to Prune deleting anything.
+func TestPersistContinuesPastAFailingAccount(t *testing.T) {
+	boom := errors.New("keychain locked")
+	cfg := Config{Providers: []Provider{
+		{ID: "a", OAuth: &OAuthToken{AccessToken: "tok-a"}},
+		{ID: "b", OAuth: &OAuthToken{AccessToken: "tok-b"}},
+		{ID: "c", OAuth: &OAuthToken{AccessToken: "tok-c"}},
+	}}
+	fw := &fakeWriter{failSet: map[string]error{"a": boom}}
+	_, err := persistTo(fw, cfg)
+	if err == nil {
+		t.Fatal("expected an error when account \"a\"'s Set fails")
+	}
+	for _, want := range []string{"b/oauth", "c/oauth"} {
+		if !slices.Contains(fw.setCalls, want) {
+			t.Fatalf("Set was not attempted for %s despite account \"a\"'s failure: %v", want, fw.setCalls)
+		}
+	}
+	if !strings.Contains(err.Error(), `"a"`) {
+		t.Fatalf("error must name the failing account: %v", err)
+	}
+	if fw.pruneCalled {
+		t.Fatal("Prune must not run when a write failed")
 	}
 }

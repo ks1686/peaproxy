@@ -29,6 +29,11 @@ type secretReader interface {
 	Get(id string, kind secretstore.Kind) (string, error)
 }
 
+type secretWriter interface {
+	Set(id string, kind secretstore.Kind, value string) error
+	Prune(ids []string) error
+}
+
 func hydrateSecrets(path string, cfg *Config) error {
 	store, err := secretstore.Open(configDir(path))
 	if err != nil {
@@ -94,31 +99,46 @@ func persistSecrets(path string, cfg Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	return persistTo(store, cfg)
+}
+
+// persistTo writes every provider's secrets before giving up, so one
+// account's write failure (e.g. a locked keychain) does not stop every
+// later account's secret from being saved. It always builds the stripped
+// disk config across all providers, but only prunes the store — a
+// destructive step — when every write succeeded; a failed write must never
+// lead to deleting anything. On any write failure it returns the joined
+// errors, which makes config.Save abort before the YAML (still holding an
+// unpersisted secret) is ever written.
+func persistTo(store secretWriter, cfg Config) (Config, error) {
 	disk := cfg
 	disk.Providers = make([]Provider, len(cfg.Providers))
 	copy(disk.Providers, cfg.Providers)
 	ids := make([]string, 0, len(disk.Providers))
+	var errs []error
 	for i := range disk.Providers {
 		p := &disk.Providers[i]
 		ids = append(ids, p.ID)
 		if p.APIKey != "" {
 			if err := store.Set(p.ID, secretstore.KindAPIKey, p.APIKey); err != nil {
-				return Config{}, err
+				errs = append(errs, fmt.Errorf("account %q: %w", p.ID, err))
 			}
 			p.APIKey = ""
 		}
 		if p.OAuth != nil {
 			raw, err := json.Marshal(p.OAuth)
 			if err != nil {
-				return Config{}, err
-			}
-			if oauthHasSecret(p.OAuth) {
+				errs = append(errs, fmt.Errorf("account %q: %w", p.ID, err))
+			} else if oauthHasSecret(p.OAuth) {
 				if err := store.Set(p.ID, secretstore.KindOAuth, string(raw)); err != nil {
-					return Config{}, err
+					errs = append(errs, fmt.Errorf("account %q: %w", p.ID, err))
 				}
 			}
 			p.OAuth = publicOAuth(p.OAuth)
 		}
+	}
+	if len(errs) > 0 {
+		return Config{}, errors.Join(errs...)
 	}
 	if err := store.Prune(ids); err != nil {
 		return Config{}, err
