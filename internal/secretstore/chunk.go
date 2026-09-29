@@ -3,6 +3,7 @@ package secretstore
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -15,12 +16,14 @@ import (
 // over 4096 bytes. The value is base64-encoded on that line, so the raw limit
 // is roughly 3000 bytes, and OAuth token bundles (Codex, Antigravity) exceed
 // it. Values above chunkSize are split across "<key>#<gen>.<i>" items; the
-// base item, written last, holds "peaproxy-chunks:<gen>:<n>". Readers follow
-// only the header, so a new generation becomes visible atomically and a
+// base item, written last, holds {"peaproxyChunks":"<gen>:<n>"}. Older releases
+// decode this as an empty OAuthToken rather than failing to load all accounts.
+// Readers follow only the header, so a new generation becomes visible atomically and a
 // failed or interleaved write never splices two values.
 const (
-	chunkSize   = 2000
-	chunkHeader = "peaproxy-chunks:"
+	chunkSize       = 2000
+	chunkHeader     = "peaproxy-chunks:"
+	chunkJSONHeader = `{"peaproxyChunks":`
 )
 
 // chunkRef names one generation of chunks. gen "" is the pre-generation
@@ -31,7 +34,7 @@ type chunkRef struct {
 }
 
 func (r chunkRef) header() string {
-	return chunkHeader + r.gen + ":" + strconv.Itoa(r.n)
+	return chunkJSONHeader + strconv.Quote(r.gen+":"+strconv.Itoa(r.n)) + "}"
 }
 
 func (r chunkRef) key(key string, i int) string {
@@ -44,7 +47,15 @@ func (r chunkRef) key(key string, i int) string {
 // parseHeader reports whether v is a chunk header and, if so, which chunks it names.
 func parseHeader(key, v string) (chunkRef, bool, error) {
 	rest, ok := strings.CutPrefix(v, chunkHeader)
-	if !ok {
+	if strings.HasPrefix(v, chunkJSONHeader) {
+		var header struct {
+			Chunks string `json:"peaproxyChunks"`
+		}
+		if err := json.Unmarshal([]byte(v), &header); err != nil {
+			return chunkRef{}, true, fmt.Errorf("%w: bad chunk header for %s", ErrUnreadable, key)
+		}
+		rest = header.Chunks
+	} else if !ok {
 		return chunkRef{}, false, nil
 	}
 	gen, count, hasGen := strings.Cut(rest, ":")
@@ -59,7 +70,7 @@ func parseHeader(key, v string) (chunkRef, bool, error) {
 }
 
 func needsChunks(value string) bool {
-	return len(value) > chunkSize || strings.HasPrefix(value, chunkHeader)
+	return len(value) > chunkSize || strings.HasPrefix(value, chunkHeader) || strings.HasPrefix(value, chunkJSONHeader)
 }
 
 // splitChunks cuts on rune starts so each item stays valid UTF-8 (Secret
