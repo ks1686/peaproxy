@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -54,6 +55,8 @@ type Gateway struct {
 	flight        *responsecache.Flight
 	health        []AdapterHealth
 	quota         *quota.Store
+	refreshSeq    uint64
+	refreshCommit uint64
 }
 
 // Cooldown is a temporary skip of an account after a retryable failure.
@@ -89,6 +92,10 @@ type instance struct {
 	Adapter  adapter.Adapter
 	// upstreamModel is the concrete catalog id for an automatic-route candidate.
 	upstreamModel string
+}
+
+func (inst instance) recordAttempt(lastAccount *string) {
+	*lastAccount = inst.Provider.ID
 }
 
 // New builds adapters from cfg. Call Refresh after.
@@ -150,6 +157,8 @@ func (g *Gateway) rebuild() error {
 		inst = append(inst, instance{Provider: p, Adapter: adp})
 	}
 	g.inst = inst
+	g.refreshSeq++
+	g.refreshCommit = g.refreshSeq
 	if len(inst) == 0 && first != nil {
 		return first
 	}
@@ -198,6 +207,8 @@ func (g *Gateway) queryLocked() catalog.Query {
 // Refresh pulls live ListModels from every adapter.
 func (g *Gateway) Refresh(ctx context.Context) {
 	g.mu.Lock()
+	g.refreshSeq++
+	seq := g.refreshSeq
 	inst := append([]instance(nil), g.inst...)
 	g.mu.Unlock()
 	var all []catalog.Model
@@ -255,6 +266,11 @@ func (g *Gateway) Refresh(ctx context.Context) {
 		seen[m.AccountID][m.ID] = struct{}{}
 	}
 	g.mu.Lock()
+	if seq < g.refreshCommit {
+		g.mu.Unlock()
+		return
+	}
+	g.refreshCommit = seq
 	if g.responses != nil {
 		for _, old := range g.models {
 			if !okAccounts[old.AccountID] {
@@ -379,9 +395,9 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
-		lastAccount = inst.Provider.ID
 		var resp adapter.ChatResponse
 		var callErr error
+		var attempted atomic.Bool
 		callUpstream := func(runCtx context.Context) (adapter.ChatResponse, error) {
 			var once adapter.ChatResponse
 			var onceErr error
@@ -393,6 +409,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 				if aerr != nil {
 					return adapter.ChatResponse{}, aerr
 				}
+				attempted.Store(true)
 				once, onceErr = inst.Adapter.Chat(runCtx, chatReq(inst, model, g.promptBody(raw, inst.Provider.Adapter), false, budget))
 				release()
 				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
@@ -415,6 +432,9 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			}
 		} else {
 			resp, callErr = callUpstream(ctx)
+		}
+		if attempted.Load() || (coalesce && !errors.Is(callErr, errAttemptBudgetExhausted)) {
+			inst.recordAttempt(&lastAccount)
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
@@ -476,7 +496,6 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		dest := newRouteRewriter(guard, model, client)
-		lastAccount = inst.Provider.ID
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
 			if err := budgetAttempts.take(); err != nil {
@@ -488,6 +507,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			}
 			before := cw.n
 			attemptCtx, stop := guard.Bound(ctx)
+			inst.recordAttempt(&lastAccount)
 			callErr = noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, model, raw, true, budget), dest))
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
@@ -554,13 +574,13 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 		if !strings.Contains(strings.ToLower(contentType), "multipart/") {
 			model, body = inst.applyModel(model, body)
 		}
-		lastAccount = inst.Provider.ID
 		ed, ok := inst.Adapter.(adapter.ImageEditor)
 		if !ok || !inst.Adapter.Capabilities().ImageOut {
 			last = adapter.ErrImageOutUnsupported
 			continue
 		}
 		tried = true
+		inst.recordAttempt(&lastAccount)
 		resp, callErr := ed.EditImage(ctx, adapter.ImageRequest{Model: model, Raw: body, ContentType: contentType})
 		if stop := ambiguousDelivery(callErr); stop != nil {
 			return adapter.ImageResponse{}, lastAccount, stop
@@ -627,13 +647,13 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	tried := false
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
-		lastAccount = inst.Provider.ID
 		gen, ok := inst.Adapter.(adapter.ImageGenerator)
 		if !ok || !inst.Adapter.Capabilities().ImageOut {
 			last = adapter.ErrImageOutUnsupported
 			continue
 		}
 		tried = true
+		inst.recordAttempt(&lastAccount)
 		resp, callErr := gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
 		if stop := ambiguousDelivery(callErr); stop != nil {
 			return adapter.ImageResponse{}, lastAccount, stop
@@ -701,13 +721,13 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	tried := false
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
-		lastAccount = inst.Provider.ID
 		emb, ok := inst.Adapter.(adapter.Embedder)
 		if !ok || !inst.Adapter.Capabilities().Embeddings {
 			last = adapter.ErrEmbeddingsUnsupported
 			continue
 		}
 		tried = true
+		inst.recordAttempt(&lastAccount)
 		var resp adapter.EmbeddingResponse
 		var callErr error
 		callUpstream := func(runCtx context.Context) (adapter.EmbeddingResponse, error) {
@@ -798,11 +818,11 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 		if len(oaReq.Raw) > 0 {
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
 		}
-		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			if err := budgetAttempts.take(); err != nil {
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
+			inst.recordAttempt(&lastAccount)
 			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
@@ -827,6 +847,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 			if err := budgetAttempts.take(); err != nil {
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
+			inst.recordAttempt(&lastAccount)
 			resp, callErr = inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
 				break
@@ -897,7 +918,6 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
 		}
 		dest := newRouteRewriter(guard, model, client)
-		lastAccount = inst.Provider.ID
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
 			if err := budgetAttempts.take(); err != nil {
 				return lastAccount, errAttemptBudgetExhausted
@@ -907,6 +927,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 				guard.Unbounded()
 			}
 			attemptCtx, stop := guard.Bound(ctx)
+			inst.recordAttempt(&lastAccount)
 			err := noteStream(guard, nr.ResponsesStream(attemptCtx, jsonx.SetStream(raw, true), dest))
 			stop()
 			if err == nil {
@@ -948,6 +969,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			errCh <- translate.OpenAISSEToResponses(pr, guard, model)
 			_ = pr.Close()
 		}()
+		inst.recordAttempt(&lastAccount)
 		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
 		stop()
 		_ = pw.Close()
@@ -1008,11 +1030,11 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		if len(oaReq.Raw) > 0 {
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
 		}
-		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			if err := budgetAttempts.take(); err != nil {
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
+			inst.recordAttempt(&lastAccount)
 			out, err := nm.Messages(ctx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), false))
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
@@ -1033,6 +1055,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 		if err := budgetAttempts.take(); err != nil {
 			return nil, lastAccount, errAttemptBudgetExhausted
 		}
+		inst.recordAttempt(&lastAccount)
 		resp, err := inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 		if err != nil {
 			last = err
@@ -1105,7 +1128,6 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
 		}
 		dest := newRouteRewriter(guard, model, client)
-		lastAccount = inst.Provider.ID
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
 			if err := budgetAttempts.take(); err != nil {
 				return lastAccount, errAttemptBudgetExhausted
@@ -1115,6 +1137,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 				guard.Unbounded()
 			}
 			attemptCtx, stop := guard.Bound(ctx)
+			inst.recordAttempt(&lastAccount)
 			err := noteStream(guard, nm.MessagesStream(attemptCtx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest))
 			stop()
 			if err == nil {
@@ -1156,6 +1179,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			errCh <- translate.OpenAISSEToClaude(pr, guard, model)
 			_ = pr.Close()
 		}()
+		inst.recordAttempt(&lastAccount)
 		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
 		stop()
 		_ = pw.Close()
@@ -1334,7 +1358,11 @@ func (g *Gateway) cooldownCause(model string) error {
 	var parts []string
 	for _, id := range catalog.AccountsForModel(g.models, g.queryLocked(), model) {
 		c, ok := g.cool[id]
-		if !ok || !now.Before(c.Until) || (c.Model != "" && c.Model != model) {
+		if !ok || !now.Before(c.Until) {
+			parts = append(parts, fmt.Sprintf("%s recovering from cooldown, retry shortly", id))
+			continue
+		}
+		if c.Model != "" && c.Model != model {
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s after %s, %ds left", id, c.Reason, int(time.Until(c.Until).Round(time.Second).Seconds())))
