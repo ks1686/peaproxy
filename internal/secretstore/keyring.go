@@ -1,10 +1,8 @@
 package secretstore
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/zalando/go-keyring"
@@ -78,53 +76,60 @@ func (s *Store) dropChunks(key string, ref chunkRef) error {
 	return nil
 }
 
-// writeChunks stores value as a fresh generation. On failure it removes the
-// chunks it already wrote (best effort) so nothing unindexed is left behind.
-func (s *Store) writeChunks(key, oldGen, value string) (chunkRef, error) {
-	gen, err := newGen(oldGen)
-	if err != nil {
-		return chunkRef{}, err
-	}
-	parts := splitChunks(value)
+func (s *Store) writeChunks(key string, ref chunkRef, parts []string) error {
 	for i, part := range parts {
-		if err := s.kr.Set(Service, chunkRef{gen: gen}.key(key, i), part); err != nil {
-			_ = s.dropChunks(key, chunkRef{gen: gen, n: i + 1})
-			return chunkRef{}, err
+		if err := s.kr.Set(Service, ref.key(key, i), part); err != nil {
+			return err
 		}
 	}
-	return chunkRef{gen: gen, n: len(parts)}, nil
+	return nil
 }
 
+// keyringSet records both generations as pending (and the key as indexed)
+// before touching the keyring, so a crash at any later point leaves an entry
+// a future sweep can use. On a handled failure the new generation is dropped
+// and the old one stays live; on success the old one is dropped.
 func (s *Store) keyringSet(key, value string) error {
 	if s.kr == nil {
 		return errors.New("secretstore: keyring not configured")
 	}
 	defer lockDir(s.dir)()
+	idx, err := s.loadIndex()
+	if err != nil {
+		return err
+	}
+	s.sweep(idx)
 	old, err := s.replaceableChunks(key)
 	if err != nil {
 		return err
 	}
-	stored := value
 	var fresh chunkRef
+	var parts []string
 	if needsChunks(value) {
-		if fresh, err = s.writeChunks(key, old.gen, value); err != nil {
+		if fresh.gen, err = newGen(old.gen); err != nil {
+			return err
+		}
+		parts = splitChunks(value)
+		fresh.n = len(parts)
+	}
+	mine := s.intend(idx, key, old, fresh)
+	idx.keys[key] = struct{}{}
+	if err := s.saveIndex(idx); err != nil {
+		return err
+	}
+	stored := value
+	if fresh.n > 0 {
+		if err := s.writeChunks(key, fresh, parts); err != nil {
+			_ = s.settle(idx, mine, old)
 			return err
 		}
 		stored = fresh.header()
 	}
 	if err := s.kr.Set(Service, key, stored); err != nil {
-		_ = s.dropChunks(key, fresh)
+		_ = s.settle(idx, mine, old)
 		return err
 	}
-	idx, err := s.loadIndex()
-	if err != nil {
-		return err
-	}
-	idx[key] = struct{}{}
-	if err := s.saveIndex(idx); err != nil {
-		return err
-	}
-	return s.dropChunks(key, old)
+	return s.settle(idx, mine, fresh)
 }
 
 func (s *Store) keyringGet(key string) (string, error) {
@@ -196,14 +201,15 @@ func (s *Store) keyringDelete(key string) error {
 		return nil
 	}
 	defer lockDir(s.dir)()
+	idx, err := s.loadIndex()
+	if err != nil {
+		return err
+	}
+	s.sweep(idx)
 	if err := s.deleteEntry(key); err != nil {
 		return err
 	}
-	idx, ierr := s.loadIndex()
-	if ierr != nil {
-		return ierr
-	}
-	delete(idx, key)
+	delete(idx.keys, key)
 	return s.saveIndex(idx)
 }
 
@@ -213,47 +219,15 @@ func (s *Store) keyringPrune(keep map[string]struct{}) error {
 	if err != nil {
 		return err
 	}
-	for k := range idx {
+	s.sweep(idx)
+	for k := range idx.keys {
 		if _, ok := keep[accountOf(k)]; ok {
 			continue
 		}
 		if err := s.deleteEntry(k); err != nil {
 			return err
 		}
-		delete(idx, k)
+		delete(idx.keys, k)
 	}
 	return s.saveIndex(idx)
-}
-
-func (s *Store) loadIndex() (map[string]struct{}, error) {
-	out := map[string]struct{}{}
-	b, err := os.ReadFile(s.indexPath())
-	if err != nil {
-		if os.IsNotExist(err) {
-			return out, nil
-		}
-		return nil, err
-	}
-	var keys []string
-	if err := json.Unmarshal(b, &keys); err != nil {
-		return nil, err
-	}
-	for _, k := range keys {
-		if k != "" {
-			out[k] = struct{}{}
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) saveIndex(idx map[string]struct{}) error {
-	keys := make([]string, 0, len(idx))
-	for k := range idx {
-		keys = append(keys, k)
-	}
-	b, err := json.Marshal(keys)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.indexPath(), b, 0o600)
 }

@@ -14,12 +14,13 @@ import (
 // faultKeyring behaves like the live darwin keyring for NotFound (keyring.ErrNotFound)
 // and lets a test fail one user's Set/Get or run a hook before each Set.
 type faultKeyring struct {
-	m       map[string]string
-	failSet string
-	failGet string
-	getErr  error
-	onSet   func(user string) (consumed bool)
-	onGet   func(user string) (consumed bool)
+	m        map[string]string
+	failSet  string
+	failGet  string
+	getErr   error
+	onSet    func(user string) (consumed bool)
+	onGet    func(user string) (consumed bool)
+	onDelete func(user string) (consumed bool)
 }
 
 func newFault() *faultKeyring { return &faultKeyring{m: map[string]string{}} }
@@ -74,6 +75,13 @@ func (f *faultKeyring) Get(service, user string) (string, error) {
 }
 
 func (f *faultKeyring) Delete(service, user string) error {
+	if f.onDelete != nil {
+		hook := f.onDelete
+		f.onDelete = nil
+		if !hook(user) {
+			f.onDelete = hook
+		}
+	}
 	if _, ok := f.m[service+"\x00"+user]; !ok {
 		return keyring.ErrNotFound
 	}
@@ -377,5 +385,5 @@ func mustIndex(t *testing.T, s *Store) map[string]struct{} {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return idx
+	return idx.keys
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -53,6 +54,7 @@ type Store struct {
 	backend Backend
 	dir     string
 	kr      keyringAPI
+	now     func() time.Time // nil means time.Now; tests move it forward
 }
 
 type keyringAPI interface {
