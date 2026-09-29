@@ -3,6 +3,9 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -22,35 +25,68 @@ func OpenStore(configPath string) (*secretstore.Store, error) {
 	return secretstore.Open(configDir(configPath))
 }
 
+type secretReader interface {
+	Get(id string, kind secretstore.Kind) (string, error)
+}
+
 func hydrateSecrets(path string, cfg *Config) error {
 	store, err := secretstore.Open(configDir(path))
 	if err != nil {
 		return err
 	}
+	return hydrateFrom(store, cfg, os.Stderr)
+}
+
+// hydrateFrom treats one account's unreadable or corrupt secret as absent so
+// only that account needs a re-login; backend failures still abort the load.
+func hydrateFrom(store secretReader, cfg *Config, warn io.Writer) error {
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		if p.APIKey == "" {
-			v, gerr := store.Get(p.ID, secretstore.KindAPIKey)
-			if gerr == nil {
+			v, ok, err := readSecret(store, p.ID, secretstore.KindAPIKey, warn)
+			if err != nil {
+				return err
+			}
+			if ok {
 				p.APIKey = v
-			} else if !errors.Is(gerr, secretstore.ErrNotFound) {
-				return gerr
 			}
 		}
 		if p.OAuth == nil || p.OAuth.AccessToken == "" {
-			v, gerr := store.Get(p.ID, secretstore.KindOAuth)
-			if gerr == nil {
-				var tok OAuthToken
-				if jerr := json.Unmarshal([]byte(v), &tok); jerr != nil {
-					return jerr
-				}
-				p.OAuth = mergeOAuth(p.OAuth, &tok)
-			} else if !errors.Is(gerr, secretstore.ErrNotFound) {
-				return gerr
+			v, ok, err := readSecret(store, p.ID, secretstore.KindOAuth, warn)
+			if err != nil {
+				return err
 			}
+			if !ok {
+				continue
+			}
+			var tok OAuthToken
+			if jerr := json.Unmarshal([]byte(v), &tok); jerr != nil {
+				warnUnreadable(warn, p.ID, secretstore.KindOAuth)
+				continue
+			}
+			p.OAuth = mergeOAuth(p.OAuth, &tok)
 		}
 	}
 	return nil
+}
+
+func readSecret(store secretReader, id string, kind secretstore.Kind, warn io.Writer) (string, bool, error) {
+	v, err := store.Get(id, kind)
+	switch {
+	case err == nil:
+		return v, true, nil
+	case errors.Is(err, secretstore.ErrUnreadable):
+		warnUnreadable(warn, id, kind)
+		return "", false, nil
+	case errors.Is(err, secretstore.ErrNotFound):
+		return "", false, nil
+	default:
+		return "", false, err
+	}
+}
+
+func warnUnreadable(w io.Writer, id string, kind secretstore.Kind) {
+	_, _ = fmt.Fprintf(w, "peaproxy: stored %s secret for account %q is unreadable; treating it as absent (log in again)\n", kind, id)
 }
 
 func persistSecrets(path string, cfg Config) (Config, error) {

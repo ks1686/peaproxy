@@ -43,6 +43,10 @@ const (
 // ErrNotFound means that account/kind has no stored secret.
 var ErrNotFound = errors.New("secret not found")
 
+// ErrUnreadable means a stored secret exists but cannot be reassembled
+// (missing chunk, corrupt header). Callers may treat it as absent.
+var ErrUnreadable = errors.New("secret unreadable")
+
 // Store is a small secret map keyed by account id + kind.
 type Store struct {
 	mu      sync.Mutex

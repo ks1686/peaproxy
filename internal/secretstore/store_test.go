@@ -171,6 +171,45 @@ func TestKeyringBackendRoundTripAndPrune(t *testing.T) {
 	}
 }
 
+type cappedKeyring struct{ memKeyring }
+
+func (c *cappedKeyring) Set(service, user, password string) error {
+	if len(service)+len(user)+len(password) > 3000 {
+		return errors.New("data passed to Set was too big")
+	}
+	return c.memKeyring.Set(service, user, password)
+}
+
+func TestKeyringBackendChunksOversizedSecrets(t *testing.T) {
+	kr := &cappedKeyring{memKeyring{m: map[string]string{}}}
+	s := &Store{backend: BackendKeyring, dir: t.TempDir(), kr: kr}
+	big := strings.Repeat("codex-id-token.", 700)
+	if err := s.Set("openai-oauth", KindOAuth, big); err != nil {
+		t.Fatalf("oversized secret not stored: %v", err)
+	}
+	if got, err := s.Get("openai-oauth", KindOAuth); err != nil || got != big {
+		t.Fatalf("round trip len=%d err=%v", len(got), err)
+	}
+	if err := s.Set("openai-oauth", KindOAuth, "small"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Get("openai-oauth", KindOAuth); err != nil || got != "small" {
+		t.Fatalf("shrunk %q %v", got, err)
+	}
+	if len(kr.m) != 1 {
+		t.Fatalf("stale chunks left behind: %d items", len(kr.m))
+	}
+	if err := s.Set("openai-oauth", KindOAuth, big); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Prune(nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(kr.m) != 0 {
+		t.Fatalf("prune left %d items", len(kr.m))
+	}
+}
+
 func TestFileDecryptRejectsTamper(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenFile(dir)
