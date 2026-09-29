@@ -18,22 +18,19 @@ func TestAliasOAuthToolNames(t *testing.T) {
 	raw := []byte(`{"model":"claude-opus-5","tools":[{"name":"todowrite","description":"keep me","input_schema":{"type":"object","properties":{"items":{"type":"array"},"name":{"type":"string","enum":["todowrite"]}}}},{"name":"mcp_manage","description":"servers","input_schema":{"type":"object","properties":{"action":{"type":"string"}}}},{"name":"bash","description":"shell","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"todowrite"},"messages":[{"role":"user","content":"please todowrite"},{"role":"assistant","content":[{"type":"text","text":"ok"},{"type":"tool_use","id":"toolu_1","name":"todowrite","input":{"items":["a"],"name":"todowrite"}},{"type":"tool_use","id":"toolu_2","name":"mcp_manage","input":{"action":"list"}},{"type":"tool_use","id":"toolu_3","name":"bash","input":{}}]}]}`)
 
 	out, reverse := aliasOAuthToolNames(raw)
-	if reverse["TodoWrite"] != "todowrite" || reverse["use_mcp"] != "mcp_manage" {
+	if reverse["TodoWrite"] != "todowrite" || reverse["use_mcp"] != "mcp_manage" || reverse["Bash"] != "bash" {
 		t.Fatalf("reverse = %#v", reverse)
-	}
-	if _, ok := reverse["bash"]; ok {
-		t.Fatalf("bash must not be reversed: %#v", reverse)
 	}
 
 	names := toolNames(t, out)
-	if strings.Join(names, ",") != "TodoWrite,use_mcp,bash" {
+	if strings.Join(names, ",") != "TodoWrite,use_mcp,Bash" {
 		t.Fatalf("tool names = %v", names)
 	}
 	if got := toolChoiceName(t, out); got != "TodoWrite" {
 		t.Fatalf("tool_choice name = %q", got)
 	}
 	uses := toolUseNames(t, out)
-	if strings.Join(uses, ",") != "TodoWrite,use_mcp,bash" {
+	if strings.Join(uses, ",") != "TodoWrite,use_mcp,Bash" {
 		t.Fatalf("tool_use names = %v", uses)
 	}
 	text := string(out)
@@ -140,6 +137,48 @@ func TestRestoreOAuthToolNamesOnWire(t *testing.T) {
 	}
 	if !strings.Contains(streamed.String(), `"name":"todowrite"`) || strings.Contains(streamed.String(), "TodoWrite") {
 		t.Fatalf("stream = %s", streamed.String())
+	}
+}
+
+// A Team/Enterprise workspace bills a request as a third-party app when
+// OpenCode's lowercase core tools (bash, read, edit, ...) sit in a large tool
+// list; Claude Code's own names for them stay on the plan (live-verified).
+func TestAliasOAuthToolNamesUsesClaudeCodeCoreNames(t *testing.T) {
+	core := map[string]string{
+		"bash": "Bash", "read": "Read", "edit": "Edit", "write": "Write",
+		"glob": "Glob", "grep": "Grep", "task": "Task", "skill": "Skill",
+		"webfetch": "WebFetch", "websearch": "WebSearch", "todowrite": "TodoWrite",
+	}
+	var tools []string
+	for client := range core {
+		tools = append(tools, `{"name":"`+client+`","input_schema":{"type":"object"}}`)
+	}
+	tools = append(tools, `{"name":"guild-gateway_search","input_schema":{"type":"object"}}`)
+	raw := []byte(`{"tools":[` + strings.Join(tools, ",") + `],"messages":[{"role":"user","content":"hi"}]}`)
+
+	out, reverse := aliasOAuthToolNames(raw)
+
+	for client, upstream := range core {
+		if reverse[upstream] != client {
+			t.Errorf("reverse[%q] = %q, want %q", upstream, reverse[upstream], client)
+		}
+	}
+	got := map[string]bool{}
+	for _, name := range toolNames(t, out) {
+		got[name] = true
+	}
+	for client, upstream := range core {
+		if !got[upstream] || got[client] {
+			t.Errorf("tool %q not sent as %q: %v", client, upstream, toolNames(t, out))
+		}
+	}
+	if !got["guild-gateway_search"] {
+		t.Errorf("non-core tool renamed: %v", toolNames(t, out))
+	}
+
+	resp := []byte(`{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}},{"type":"tool_use","id":"t2","name":"Read","input":{}},{"type":"tool_use","id":"t3","name":"guild-gateway_search","input":{}}]}`)
+	if names := strings.Join(responseToolNames(t, restoreOAuthToolNames(resp, reverse)), ","); names != "bash,read,guild-gateway_search" {
+		t.Fatalf("restored response names = %s", names)
 	}
 }
 

@@ -8,12 +8,25 @@ import (
 
 // oauthToolAliases are client tool names Anthropic bills as extra usage on
 // subscription OAuth, and the upstream names that stay on the subscription lane.
+// OpenCode's lowercase core tools mixed into a large tool list make a
+// Team/Enterprise workspace reject the request as a third-party app, so they
+// are sent under Claude Code's names.
 var oauthToolAliases = []struct {
 	client   string
 	upstream string
 }{
 	{client: "todowrite", upstream: "TodoWrite"},
 	{client: "mcp_manage", upstream: "use_mcp"},
+	{client: "bash", upstream: "Bash"},
+	{client: "read", upstream: "Read"},
+	{client: "edit", upstream: "Edit"},
+	{client: "write", upstream: "Write"},
+	{client: "glob", upstream: "Glob"},
+	{client: "grep", upstream: "Grep"},
+	{client: "task", upstream: "Task"},
+	{client: "skill", upstream: "Skill"},
+	{client: "webfetch", upstream: "WebFetch"},
+	{client: "websearch", upstream: "WebSearch"},
 }
 
 // aliasOAuthToolNames renames subscription-sensitive tool definitions to the
