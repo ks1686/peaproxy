@@ -2,7 +2,7 @@
 
 Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). Adapters: [PROVIDERS.md](PROVIDERS.md).
 
-`peaproxy clients show <name>` prints copy-ready snippets. `peaproxy clients detect`, `connect`, `disconnect`, and `status` edit only the PeaProxy block in OpenCode, Continue, Codex, and Claude Code configs. Pass `--root` with a temporary directory so those commands do not touch the real home directory. `verify` is a protocol probe against a running gateway, not proof that an installed harness launched.
+`peaproxy clients show <name>` prints copy-ready snippets. `peaproxy clients detect`, `connect`, `disconnect`, and `status` edit only the PeaProxy block in OpenCode, Pi, Continue, Codex, and Claude Code configs. Pass `--root` with a temporary directory so those commands do not touch the real home directory. `verify` is a protocol probe against a running gateway, not proof that an installed harness launched.
 
 `peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp/Droid, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
 
@@ -21,7 +21,7 @@ Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log t
 | Cursor | OpenAI chat completions | `http://127.0.0.1:8317/v1` | off | Override OpenAI Base URL |
 | Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | opt-in (client-side only) | Preset does not inject thinking. `anthropic_oauth` upstream still applies system cloak |
 | OpenCode | Anthropic, OpenAI **Responses**, OpenAI-compat | all use `.../v1` | off | Custom providers need per-model `limit` / `variants`; GPT on `@ai-sdk/openai`; ids must not be `anthropic` / `openai` |
-| Pi | Anthropic **and** OpenAI (both documented) | Anthropic: no `/v1`; OpenAI: includes `/v1` | off | Do not apply Claude-Code cloak defaults to the Pi preset |
+| Pi | Anthropic Messages **and** OpenAI Responses / chat | `~/.pi/agent/models.json` only; `anthropic`: no `/v1`, `openai`: `/v1` | off | Env base URLs are not read. Override the built-in providers to keep pi's model metadata |
 | Codex | OpenAI **Responses** (`POST /v1/responses`) | `.../v1` | off | `wire_api = "responses"` only. Codex OAuth forces `store: false`; omits `stream_options` / `max_output_tokens` |
 | Continue | OpenAI-compat | `.../v1` | off | `apiBase` in `~/.continue/config.yaml` |
 | Cline | OpenAI Compatible provider | `.../v1` | off | Must include `/v1`; Cline sends `stream_options` (forwarded) |
@@ -98,17 +98,51 @@ Where your model name differs from the id PeaProxy serves, add `"id"` on the mod
 
 If you run oh-my-opencode, its image resizer only runs for the built-in `anthropic` provider, so a very large screenshot sent through `peaproxy-anthropic` reaches Anthropic at full size and can hit its image limit.
 
-## Pi (both wires)
+## Pi (models.json)
 
-```
-# Anthropic-messages (NO /v1; Pi appends /v1/messages)
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-export ANTHROPIC_API_KEY=peaproxy
+Pi (`pi-coding-agent`) takes provider endpoints from **`~/.pi/agent/models.json`** only (`PI_CODING_AGENT_DIR` moves the directory). It does **not** read `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` — in pi 0.87.1 the only base URLs read from the environment are Azure's and Cloudflare's — so exporting those configures nothing. The earlier env-export preset was wrong.
 
-# OpenAI chat-completions (includes /v1)
-export OPENAI_BASE_URL=http://127.0.0.1:8317/v1
-export OPENAI_API_KEY=peaproxy
+The shortest working setup **overrides the built-in providers**. Pi then keeps its bundled metadata for every Claude and GPT model (thinking-level maps, compat flags, prompt-cache lifetimes) and only the URL changes:
+
+```json
+{
+  "providers": {
+    "anthropic": { "baseUrl": "http://127.0.0.1:8317", "apiKey": "peaproxy" },
+    "openai":    { "baseUrl": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
+  }
+}
 ```
+
+`peaproxy clients connect pi` writes exactly those two overrides (merging into an existing `providers.anthropic` / `providers.openai` entry and leaving its other fields alone); `disconnect pi` removes `baseUrl` + `apiKey` only from entries whose `apiKey` is `peaproxy`. `--model` is ignored for pi because the whole catalog routes through. Then pick `anthropic/<id>` or `openai/<id>` in `/model` as usual.
+
+- **`anthropic` has no `/v1`** — pi's Anthropic SDK client appends `/v1/messages`. **`openai` includes `/v1`** — the built-in provider is `openai-responses` and appends `/responses`, which lands on PeaProxy's Codex-OAuth-native wire.
+- **`apiKey` is what makes a provider appear in `/model`.** PeaProxy ignores the value. If you also `/login`ed the same provider inside pi, that stored credential wins over `models.json` (pi's order: `--api-key`, `auth.json`, `models.json`, environment) but the request still goes to `baseUrl`, so PeaProxy gets it either way; `/logout anthropic` just stops pi sending its own token.
+- **A model PeaProxy serves but pi's catalog lacks** (Sonnet 5.5 in 0.87.1, for example) needs a `models` entry with its own metadata. A custom entry inherits only `api` and `baseUrl`; it defaults to `contextWindow` 128000, `maxTokens` 16384, `reasoning: false`, text-only.
+- **Everything else in the catalog** (Antigravity Gemini, Kimi, local models) goes under a custom provider on `openai-completions`. Same metadata rule.
+- `/model` reloads the file; no restart.
+
+`peaproxy clients show pi` prints the full form, with one example of each:
+
+```json
+{
+  "providers": {
+    "anthropic": { "baseUrl": "http://127.0.0.1:8317", "apiKey": "peaproxy",
+      "models": [
+        { "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "reasoning": true, "input": ["text", "image"],
+          "contextWindow": 1000000, "maxTokens": 128000,
+          "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" },
+          "compat": { "forceAdaptiveThinking": true, "supportsTemperature": false, "supportsStrictTools": true } }
+      ] },
+    "openai": { "baseUrl": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+    "peaproxy": { "baseUrl": "http://127.0.0.1:8317/v1", "api": "openai-completions", "apiKey": "peaproxy",
+      "models": [
+        { "id": "REPLACE_WITH_CATALOG_ID", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 }
+      ] }
+  }
+}
+```
+
+Live-verified 2026-09-29 with pi 0.87.1 against PeaProxy on an Enterprise Claude OAuth account and a Codex OAuth account: tool-call turns (`read`) on `anthropic/claude-opus-5-5`, the custom `anthropic/claude-sonnet-5-5` entry at `--thinking medium`, `openai/gpt-5.6-sol`, and `peaproxy/claude-haiku-4-5-20251001` over `openai-completions`. Pi's lowercase `read` / `bash` / `edit` / `write` tools are already aliased to Claude Code's names on the `anthropic_oauth` lane ([OAUTH.md](OAUTH.md)), so a Team/Enterprise workspace does not reject them as a third-party app.
 
 Client-preset cloak defaults are **off** (CLIProxyAPI #6120). Do not inject Claude-Code thinking / `clear_thinking` for Pi. `anthropic_oauth` still applies a non-strict upstream system cloak (caller system kept). `peaproxy clients verify pi --chat` covers both wires.
 
