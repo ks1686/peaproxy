@@ -4,7 +4,7 @@ Live `ListModels` is the source of truth. This page is a **tier map**, not an al
 
 Plan phases and residuals: [PLAN.md](PLAN.md). 1.0 cut: [V1.md](V1.md). Subscription OAuth liability: [OAUTH.md](OAUTH.md). Issue themes vs shipped: [COMPETITOR-WINS.md](COMPETITOR-WINS.md).
 
-Adapters in this repo today (1.6.x):
+Adapters in this repo today (2.0.x):
 
 | Adapter | Status | Typical auth | Default |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Adapters in this repo today (1.6.x):
 | `opencode_go` | Named OpenCode Go subscription client (distinct from Zen) | official API key from [opencode.ai/auth](https://opencode.ai/auth) | `https://opencode.ai/zen/go/v1` |
 | `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer) + Claude Code fingerprint / **system cloak**. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
 | `openai_oauth` | ChatGPT/Codex subscription OAuth + native Responses tools pass-through (`store: false`; omit `max_output_tokens`). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
-| `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
+| `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent, tool calling both directions. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
 | `xai_oauth` | xAI Grok subscription device OAuth + CLI chat proxy. **ToS/ban risk.** | OAuth (`--provider xai`) | `https://cli-chat-proxy.grok.com/v1` |
 | `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |
 | `meta_oauth` | Meta Muse device OAuth + minted key. **ToS/ban risk.** | OAuth (`--provider meta`) | `https://api.meta.ai/v1` |
@@ -50,6 +50,15 @@ Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default b
 PeaProxy **key** adapters do **not** call `generateContent`. Set `GEMINI_API_KEY` and adapter `google` or alias `gemini`.
 
 **Gemini consumer / Antigravity subscription OAuth** is a separate adapter (`antigravity`, CLI `--provider gemini`). It uses Google OAuth for the public Antigravity IDE client and Cloud Code `generateContent`. **ToS/ban risk** — [OAUTH.md](OAUTH.md). Prefer the AI Studio key.
+
+Antigravity details:
+
+- Tool calling works both directions: OpenAI `tools` become `functionDeclarations`, and Gemini `functionCall` parts come back as `tool_calls` (stream and non-stream).
+- Tool schemas are reduced to the Gemini Schema proto. Unsupported JSON Schema keywords are dropped, a type list becomes `anyOf` branches, a `null` branch folds into `nullable`, tuple `items` become one schema or an `anyOf` of the distinct elements, and non-string `enum`s are dropped.
+- Gemini safety stops (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`) finish as `content_filter`; `MAX_TOKENS` finishes as `length`.
+- `gemini-3.1-pro-high` and `gemini-3-pro-high` are listed by `fetchAvailableModels` but rejected by `v1internal`; both are sent upstream as `gemini-pro-agent`.
+- A 429, or a 503 "No capacity available", cools only that model on the account. Other Gemini models stay eligible.
+- The reset hint in the error body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "Resets in X") sets the cooldown length, clamped to 1s–1h.
 
 ## Paid / subscription
 
@@ -96,7 +105,7 @@ Several **free** Zen models may use prompts for training (NVIDIA Nemotron free, 
 
 ## Failover
 
-Multiple accounts that list the same model id follow `failover.policy` (`round-robin` default, `fill-first`, or `sticky`). HTTP **429**, **401**, **503**, **529**, and provider bodies that look like rate-limit / quota, overloaded, or auth-expired cool that account down for 30s and try the next one. Health UI and `peaproxy health` show adapter health (last ListModels/Validate), **quota remaining when the provider reports it**, and remaining cooldown time. See [CONFIG.md](CONFIG.md#failover).
+Multiple accounts that list the same model id follow `failover.policy` (`round-robin` default, `fill-first`, or `sticky`). HTTP **429**, **401**, **503**, **529**, and provider bodies that look like rate-limit / quota, overloaded, or auth-expired cool that account down (30s, or the upstream's reset hint) and try the next one. Health UI and `peaproxy health` show adapter health (last ListModels/Validate), **quota remaining when the provider reports it**, and remaining cooldown time. See [CONFIG.md](CONFIG.md#failover).
 
 ## Quota remaining
 

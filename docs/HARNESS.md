@@ -14,6 +14,8 @@ Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log t
 
 **OpenCode and Claude Code do not share the same Anthropic base URL.** Claude Code typically wants `ANTHROPIC_BASE_URL` *without* `/v1` (it appends `/v1/messages`). OpenCode's Anthropic provider often wants `baseURL` *including* `/v1` ([anomalyco/opencode#35005](https://github.com/anomalyco/opencode/issues/35005)).
 
+**Non-Claude models on `/v1/messages`** stream tool calls as `tool_use` content blocks and carry usage in `message_delta`. Each call's arguments arrive as one complete `input_json_delta` after the text block closes; while they buffer, a `ping` event is sent after each second of silence so idle timeouts do not fire. Truncation is reported as `stop_reason: max_tokens`. Antigravity Gemini works with OpenCode tools on either wire.
+
 | Client | Wire | Base URL | Cloak | Gotchas |
 |---|---|---|---|---|
 | Cursor | OpenAI chat completions | `http://127.0.0.1:8317/v1` | off | Override OpenAI Base URL |

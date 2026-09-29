@@ -79,7 +79,7 @@ The UI Catalog page, `POST /admin/catalog/overlay`, and `peaproxy catalog pin|re
 
 ## Failover
 
-When several accounts list the same model id, PeaProxy tries them in policy order. Cooled accounts (30s skip after a retryable failure) are omitted from that order.
+When several accounts list the same model id, PeaProxy tries them in policy order. Cooled accounts are omitted from that order.
 
 ```yaml
 failover:
@@ -101,6 +101,8 @@ Session affinity is separate from `sticky`. It keeps one conversation on the acc
 
 Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider error bodies that look like rate-limit / quota, overloaded, or auth-expired. Cooldown reasons are those classes (`rate-limit`, `overloaded`, `auth-expired`) — not raw bodies (no secrets). Plain `400 invalid_request_error` does not fail over.
 
+A cooldown lasts 30s, or as long as the upstream's reset hint when it sends one: a `Retry-After` header, or for Antigravity / Cloud Code the error body (`quotaResetDelay`, `RetryInfo.retryDelay`, or "Resets in X"). Hints are clamped to 1s–1h. When every matching account is cooling, the 503 body reads `all matching accounts in cooldown: <account> after HTTP 429 (rate-limit), Ns left`. The `Retry-After` returned to clients is capped at 60s, because some clients (OpenCode) wait it out uncapped; the internal cooldown still keeps the full hint.
+
 `peaproxy config validate` prints the effective `failover.policy`. Health UI and `peaproxy health` still list active cooldowns with remaining time, plus quota remaining when a provider reports it.
 
 ## Request engine
@@ -120,7 +122,7 @@ automaticRoutes:
   enabled: false
 ```
 
-`preludeTimeout` is how long a stream may wait for its first event before it moves to the next matching account. A slow first event does not cool the account down. The last account a request can reach is never cut off by it; only `deadline` bounds that attempt.
+`preludeTimeout` (default 30s; 5s before v2.0.7) is how long a stream may wait for its first event. When it expires, the request moves to the next matching account only when another one can take the request. It never retries the same account and never starts a cooldown. The last account a request can reach is never cut off by it; only `deadline` bounds that attempt.
 
 `promptCache: optimize` adds one Anthropic `cache_control` breakpoint only for a known profile and only when the caller is under that profile's limit. `off` does not strip caller breakpoints. Response caching is exact, in-memory, and skips tools, images, and continuation ids. `pea/auto`, `pea/economy`, `pea/local`, and `pea/free` are rejected as `routes` names. They select a live model only when `automaticRoutes.enabled` is true. Unknown prices are not free and do not win economy. An exact local model does not fail over to a cloud account that happens to advertise the same id.
 

@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **1.6.x**: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, and GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **2.0.x**: Claude Pro/Max, ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, and GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
 
 ## Liability (read this)
 
@@ -68,7 +68,7 @@ curl -s http://127.0.0.1:8317/v1/models
 # then a tiny chat against a listed id (Showcase also works)
 ```
 
-Accounts UI: add a subscription OAuth preset (warning is shown), then **OAuth login** (opens the provider URL and polls) or **Copy CLI**.
+Accounts UI: add a subscription OAuth preset (warning is shown), then **OAuth login** (opens the provider URL and polls) or **Copy CLI**. When a UI login finishes, the catalog is refreshed, so the new account's models list without a restart.
 
 Callback ports (must match the public CLI OAuth clients):
 
@@ -85,7 +85,7 @@ Accounts stay in YAML (`providers[]` with adapter, email, expiry, non-secret `ex
 1. **OS keychain** (default when it works): macOS Keychain, Windows Credential Manager, or Linux Secret Service via [zalando/go-keyring](https://github.com/zalando/go-keyring). Service name `peaproxy`.
 2. **Encrypted file fallback:** AES-256-GCM blob `secrets.enc` next to the config, keyed by `secret.key` (32 random bytes, mode 0600). Used when no keychain is available (typical Linux CI / headless), during `go test`, or when `PEAPROXY_SECRET_BACKEND=file`.
 
-Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it cannot probe). Windows Credential Manager has a per-item size limit; if a token write fails, set `PEAPROXY_SECRET_BACKEND=file`. Existing YAML that still has `accessToken` / `apiKey` is loaded, then migrated into the secret store on the next `Save` (auth login, token refresh, or any config write). The UI and `peaproxy accounts list` redact tokens. Request logs redact `bearer`, `sk-`, `x-api-key`, `access_token`, `refresh_token`, and `id_token`. Never log tokens.
+Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it cannot probe). macOS keychain items are limited to roughly 3000 bytes and Windows Credential Manager items to 2560, so larger OAuth tokens (Codex, Antigravity) are split into 2000-byte chunk items under the same `peaproxy` service; the header item is written last, so a reader never sees a half-written token. Chunks left behind by an interrupted save are recorded in `secrets.index` and swept by a later write once they are 30 minutes old. A stored secret that cannot be read (missing chunk, corrupt JSON) is treated as absent: startup prints a stderr warning naming the account, that account needs to log in again, and other accounts are unaffected. If one account's secret cannot be written, the others are still saved and the config write reports the failure. Existing YAML that still has `accessToken` / `apiKey` is loaded, then migrated into the secret store on the next `Save` (auth login, token refresh, or any config write). The UI and `peaproxy accounts list` redact tokens. Request logs redact `bearer`, `sk-`, `x-api-key`, `access_token`, `refresh_token`, and `id_token`. Never log tokens.
 
 ## Architecture notes
 

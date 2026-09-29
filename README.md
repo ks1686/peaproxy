@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **v2.0.4** on main. Schema stays 1. Request-engine behavior is in [docs/V2.md](docs/V2.md).
+Status: **v2.0.7** on main. Schema stays 1. Request-engine behavior is in [docs/V2.md](docs/V2.md).
 
 **Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
@@ -38,7 +38,7 @@ Alternatively, follow `main` with Go `@latest`, or pin the tag:
 
 ```bash
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
-# or pin a tag, e.g. @v2.0.4
+# or pin a tag, e.g. @v2.0.7
 peaproxy --version
 peaproxy serve
 ```
@@ -77,13 +77,13 @@ First-run **Accounts** — local / API-key onboarding CTAs first. Subscription O
 
 Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/capture-readme-screenshots.mjs`). No API keys or OAuth tokens appear in the images.
 
-## Feature matrix (1.6.x)
+## Feature matrix (2.0.x)
 
 | Capability | Status |
 |---|---|
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped. `routes:` are stable local names that rewrite to a live id; pin/rename stay listing-only |
 | `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is `reasoning_opaque` on the assistant message (stripped before OpenAI-compat upstreams) |
-| `POST /v1/messages` true Anthropic SSE | Shipped |
+| `POST /v1/messages` true Anthropic SSE | Shipped. Translated streams (non-Claude models) carry usage, stream tool calls as `tool_use` blocks, and report `max_tokens` on truncation |
 | `POST /v1/responses` (Codex native or translated) | Shipped — Codex OAuth is a tools surface (pass-through); other adapters round-trip function tools via chat, without executing them |
 | Vision-in Showcase (URL / upload) | Shipped |
 | Image-out / `POST /v1/images/generations` and `/v1/images/edits` | **Shipped** for API-key OpenAI-compat when the catalog tags `image_out`. Showcase generates. OAuth adapters refuse clearly (no fake chat) |
@@ -91,14 +91,14 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Quota remaining | **Shipped** when the provider reports it (rate-limit headers; OpenRouter `GET /key`). Unknown remaining is omitted, never invented as 0 or unlimited |
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
-| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk** |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways |
 | Claude OAuth Messages cloak | **Shipped** — `anthropic_oauth` injects Claude Code billing header + CLI identity (caller system relocated, never deleted). Client-preset cloak defaults stay **off** |
 | Codex OAuth `store` / token limits | **Shipped** — `openai_oauth` forces `store: false` and omits `max_output_tokens` / `stream_options` |
 | Qwen consumer OAuth | **Not yet** — use an API key |
 | Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
 | OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
-| OS keychain / `secrets.enc` | Shipped |
-| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h) |
+| OS keychain / `secrets.enc` | Shipped. Large OAuth tokens are stored as chunked keychain items |
+| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; the 503 names the account and cause; a slow first token never starts a cooldown |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped |
 | CLI `catalog` / `health` / `requests` / `accounts add` | Shipped |
