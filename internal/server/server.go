@@ -584,13 +584,18 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	s.oauthMu.Unlock()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
 		err := auth.AuthComplete(ctx, sess, "")
+		cancel()
 		s.oauthMu.Lock()
-		defer s.oauthMu.Unlock()
 		job.Done = true
 		if err != nil {
 			job.Err = err.Error()
+		}
+		s.oauthMu.Unlock()
+		if err == nil {
+			// Unbounded like the startup refresh: Refresh lists accounts in
+			// series, so a shared deadline lets one hung upstream drop the rest.
+			s.gw.Refresh(context.Background())
 		}
 	}()
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -606,9 +611,13 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	s.oauthMu.Lock()
-	job := s.oauthJobs[id]
+	var job oauthJob
+	live := s.oauthJobs[id]
+	if live != nil {
+		job = *live
+	}
 	s.oauthMu.Unlock()
-	if job == nil {
+	if live == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "idle", "id": id})
 		return
 	}
