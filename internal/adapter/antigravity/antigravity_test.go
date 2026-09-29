@@ -287,6 +287,87 @@ func TestGeminiChatMaxTokensDuringToolCall(t *testing.T) {
 	}
 }
 
+func streamFinishReason(t *testing.T, in string) string {
+	t.Helper()
+	var out bytes.Buffer
+	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
+		t.Fatal(err)
+	}
+	finish := ""
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "data: {") {
+			continue
+		}
+		var chunk struct {
+			Choices []struct {
+				Finish string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &chunk); err != nil {
+			t.Fatal(err)
+		}
+		if len(chunk.Choices) > 0 && chunk.Choices[0].Finish != "" {
+			finish = chunk.Choices[0].Finish
+		}
+	}
+	return finish
+}
+
+func chatFinishReason(t *testing.T, body string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.WriteString(w, body); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour)}
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{Model: "gemini-3-flash", Messages: []adapter.Message{{Role: "user", Content: "read"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Choices []struct {
+			Finish string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(resp.Raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Choices) != 1 {
+		t.Fatalf("choices: %s", resp.Raw)
+	}
+	return parsed.Choices[0].Finish
+}
+
+func TestGeminiSafetyStopIsContentFilter(t *testing.T) {
+	partial := "data: " + `{"response":{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}}` + "\n\n"
+	for _, reason := range []string{"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"} {
+		blocked := `{"response":{"candidates":[{"finishReason":"` + reason + `"}]}}`
+		blockedCall := `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":{"path":"a"}}}]},"finishReason":"` + reason + `"}]}}`
+		for _, tc := range []struct {
+			name   string
+			finish func(*testing.T) string
+		}{
+			{"stream without a tool call", func(t *testing.T) string { return streamFinishReason(t, partial+"data: "+blocked+"\n\n") }},
+			{"stream with a tool call", func(t *testing.T) string { return streamFinishReason(t, "data: "+blockedCall+"\n\n") }},
+			{"chat without a tool call", func(t *testing.T) string { return chatFinishReason(t, blocked) }},
+			{"chat with a tool call", func(t *testing.T) string { return chatFinishReason(t, blockedCall) }},
+		} {
+			t.Run(reason+" "+tc.name, func(t *testing.T) {
+				// Given a response Gemini stops for a safety reason.
+				// When translating it to OpenAI.
+				got := tc.finish(t)
+				// Then it reports a content filter, ahead of any tool call.
+				if got != "content_filter" {
+					t.Fatalf("finish_reason = %q, want content_filter", got)
+				}
+			})
+		}
+	}
+}
+
 func TestGeminiOrphanToolResultBecomesUserText(t *testing.T) {
 	a := &Adapter{}
 	body, err := a.geminiBody(adapter.ChatRequest{Raw: []byte(`{"messages":[{"role":"tool","tool_call_id":"compacted","content":"result"}]}`)}, false)
@@ -722,5 +803,65 @@ func TestSanitizeGeminiSchemaDoesNotEmitNonStringProtoEnums(t *testing.T) {
 	want := `{"properties":{"flag":{"type":"boolean"},"level":{"type":"integer"},"mixed":{"type":"string"},"mode":{"enum":["a","b"],"type":"string"}},"type":"object"}`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestSanitizeGeminiSchemaTupleItems(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{
+			"elements equal after sanitizing become one schema",
+			`{"type":"array","items":[{"type":"string","$id":"a"},{"type":"string"}]}`,
+			`{"items":{"type":"string"},"type":"array"}`,
+		},
+		{
+			"distinct elements become anyOf in first-seen order",
+			`{"type":"array","items":[{"type":"string"},{"type":"integer","exclusiveMinimum":0},{"type":"string","$id":"again"}]}`,
+			`{"items":{"anyOf":[{"type":"string"},{"minimum":0,"type":"integer"}]},"type":"array"}`,
+		},
+		{
+			"a null element folds into nullable",
+			`{"type":"array","items":[{"type":"string"},{"type":"null"}]}`,
+			`{"items":{"nullable":true,"type":"string"},"type":"array"}`,
+		},
+		{
+			"an empty tuple drops items",
+			`{"type":"array","description":"d","items":[]}`,
+			`{"description":"d","type":"array"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a tuple-form items list, which the Gemini Schema proto lacks.
+			// When reducing it to the Gemini Schema proto.
+			got := sanitizedSchema(t, tc.in)
+			// Then every element survives in the one items schema.
+			if got != tc.want {
+				t.Fatalf("got  %s\nwant %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeGeminiSchemaArrayParentGetsBranchItems(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{
+			"array parent takes the branch items",
+			`{"type":"array","description":"p","anyOf":[{"type":"array","description":"b","items":{"type":"string"}},{"type":"null"}]}`,
+			`{"anyOf":[{"description":"b","items":{"type":"string"},"type":"array"}],"description":"p","items":{"type":"string"},"nullable":true,"type":"array"}`,
+		},
+		{
+			"untyped parent stays without items",
+			`{"description":"p","anyOf":[{"type":"array","description":"b","items":{"type":"string"}}]}`,
+			`{"anyOf":[{"description":"b","items":{"type":"string"},"type":"array"}],"description":"p"}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a lone anyOf branch with items that conflicts with its parent.
+			// When reducing it to the Gemini Schema proto.
+			got := sanitizedSchema(t, tc.in)
+			// Then only an array parent gains the items Cloud Code requires of it.
+			if got != tc.want {
+				t.Fatalf("got  %s\nwant %s", got, tc.want)
+			}
+		})
 	}
 }

@@ -1071,8 +1071,8 @@ func geminiSchema(v any) any {
 			}
 		case "items":
 			if tuple, ok := val.([]any); ok {
-				if len(tuple) > 0 {
-					out[k] = geminiSchema(tuple[0])
+				if items, kept := tupleItems(tuple); kept {
+					out[k] = items
 				}
 			} else {
 				out[k] = geminiSchema(val)
@@ -1131,6 +1131,27 @@ func geminiSchema(v any) any {
 	return collapseNullable(out, anyOf)
 }
 
+// tupleItems reduces tuple-form items, which the Schema proto lacks, to one
+// schema: the element schema when all agree, else an anyOf of the distinct
+// elements, folded like any other anyOf.
+func tupleItems(tuple []any) (any, bool) {
+	var distinct []any
+	for _, el := range tuple {
+		schema := geminiSchema(el)
+		if !slices.ContainsFunc(distinct, func(seen any) bool { return reflect.DeepEqual(seen, schema) }) {
+			distinct = append(distinct, schema)
+		}
+	}
+	switch len(distinct) {
+	case 0:
+		return nil, false
+	case 1:
+		return distinct[0], true
+	default:
+		return collapseNullable(map[string]any{}, distinct), true
+	}
+}
+
 // typeUnion turns a multi-type list into anyOf branches. The array branch takes
 // the items, because Cloud Code rejects an array schema without its own items.
 func typeUnion(out map[string]any, types []any) []any {
@@ -1150,7 +1171,9 @@ func typeUnion(out map[string]any, types []any) []any {
 // collapseNullable folds a {"type":"null"} branch into nullable. When one
 // branch is left and none of its keys conflict with the parent, it is merged
 // into the parent, because Gemini requires an array schema to carry its own
-// items (Optional[list] is anyOf[array, null]).
+// items (Optional[list] is anyOf[array, null]). A conflicting branch stays
+// whole but still lends its items to an items-less array parent, since every
+// value must match that branch too.
 func collapseNullable(out map[string]any, anyOf []any) map[string]any {
 	branches := anyOf[:0]
 	for _, b := range anyOf {
@@ -1161,11 +1184,18 @@ func collapseNullable(out map[string]any, anyOf []any) map[string]any {
 		branches = append(branches, b)
 	}
 	if len(branches) == 1 {
-		if only, ok := branches[0].(map[string]any); ok && mergesLosslessly(out, only) {
-			for k, v := range only {
-				out[k] = v
+		if only, ok := branches[0].(map[string]any); ok {
+			if mergesLosslessly(out, only) {
+				for k, v := range only {
+					out[k] = v
+				}
+				return out
 			}
-			return out
+			if items, has := only["items"]; has && out["type"] == "array" {
+				if _, set := out["items"]; !set {
+					out["items"] = items
+				}
+			}
 		}
 	}
 	if len(branches) > 0 {
@@ -1341,8 +1371,12 @@ func toOpenAIChatJSON(model string, message chatMessage, finish string) ([]byte,
 }
 
 func geminiFinishReason(calls int, upstream string) string {
-	if upstream == "MAX_TOKENS" {
+	switch upstream {
+	case "MAX_TOKENS":
 		return "length"
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
+		// Like MAX_TOKENS, a blocked turn must not read as a finished tool turn.
+		return "content_filter"
 	}
 	if calls > 0 {
 		return "tool_calls"
