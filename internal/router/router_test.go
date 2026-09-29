@@ -149,6 +149,20 @@ func TestUpstreamRetryAfterSurvivesWithoutCooldownWrap(t *testing.T) {
 	}
 }
 
+func TestTransientIncludesEdgeTransport503(t *testing.T) {
+	for _, body := range []string{
+		"upstream connect error or disconnect/reset before headers. reset reason: connection timeout",
+		"upstream connect error or disconnect/reset before headers. retried and the latest reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused",
+	} {
+		if !Transient(adapter.HTTPError{Status: 503, Body: body}) {
+			t.Fatalf("edge transport 503 not transient: %q", body)
+		}
+	}
+	if Transient(adapter.HTTPError{Status: 503, Body: `{"error":{"type":"overloaded_error","message":"Overloaded"}}`}) {
+		t.Fatal("a provider overload 503 must stay a normal cooldown, not a transient retry")
+	}
+}
+
 func TestClientRetryAfterIsCappedForLongQuotaResets(t *testing.T) {
 	long := CooldownError{RetryAfter: time.Hour, Err: errors.New("quota reached. Resets in 166h")}
 	if got := RetryAfterSeconds(long); got != 60 {

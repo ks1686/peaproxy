@@ -64,14 +64,30 @@ func Classify(err error) FailoverClass {
 	return FailoverNone
 }
 
-// Transient reports a 502 or 504. The gateway retries that account once
+// Transient reports a 502, a 504, or a 503 whose body is an edge proxy's
+// transport failure (connect error, reset before headers) rather than the
+// provider saying it is overloaded. The gateway retries that account once
 // before cooling it. 403 is not transient and does not fail over.
 func Transient(err error) bool {
 	var he adapter.HTTPError
 	if !errors.As(err, &he) {
 		return false
 	}
-	return he.Status == http.StatusBadGateway || he.Status == http.StatusGatewayTimeout
+	switch he.Status {
+	case http.StatusBadGateway, http.StatusGatewayTimeout:
+		return true
+	case http.StatusServiceUnavailable:
+		return containsAny(strings.ToLower(he.Body), edgeTransportPatterns)
+	default:
+		return false
+	}
+}
+
+var edgeTransportPatterns = []string{
+	"upstream connect error",
+	"reset before headers",
+	"connection refused",
+	"connection timeout",
 }
 
 func classifyStatus(status int) FailoverClass {

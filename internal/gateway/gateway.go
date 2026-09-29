@@ -1272,12 +1272,25 @@ func retryable(err error) bool {
 }
 
 func cooldownErr(last error) error {
-	wait := cooldownTTL
+	return router.CooldownError{RetryAfter: cooldownFor(last), Err: last}
+}
+
+// transientCooldownTTL bounds the skip after a transport failure (502, 504,
+// edge connect error). It says nothing about the account, so a full
+// cooldown would only lock out the next request, which usually succeeds.
+const transientCooldownTTL = 5 * time.Second
+
+// cooldownFor is how long an account is skipped after err: the upstream's
+// own reset hint when it sent one, else a short or normal window.
+func cooldownFor(err error) time.Duration {
 	var he adapter.HTTPError
-	if errors.As(last, &he) && he.RetryAfter > 0 {
-		wait = he.RetryAfter
+	if errors.As(err, &he) && he.RetryAfter > 0 {
+		return he.RetryAfter
 	}
-	return router.CooldownError{RetryAfter: wait, Err: last}
+	if router.Transient(err) {
+		return min(cooldownTTL, transientCooldownTTL)
+	}
+	return cooldownTTL
 }
 
 func (g *Gateway) rememberSuccess(session, model, account string) {
@@ -1383,14 +1396,11 @@ func (g *Gateway) markCooldown(id, model string, err error) {
 	if class == router.FailoverNone {
 		reason = "failover"
 	}
-	wait := cooldownTTL
+	wait := cooldownFor(err)
 	var scopedModel string
 	var he adapter.HTTPError
 	if errors.As(err, &he) {
 		reason = fmt.Sprintf("HTTP %d (%s)", he.Status, reason)
-		if he.RetryAfter > 0 {
-			wait = he.RetryAfter
-		}
 		if he.Scope == adapter.ScopeModel {
 			scopedModel = model
 		}

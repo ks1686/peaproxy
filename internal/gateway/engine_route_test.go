@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
@@ -431,6 +432,51 @@ func TestCooldownErrorNamesAccountAndCause(t *testing.T) {
 	for _, want := range []string{"all matching accounts in cooldown", "acct-a after HTTP 429 (rate-limit)", "acct-b after HTTP 429 (rate-limit)", "s left"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+}
+
+func TestEdgeTransport503IsRetriedAndCooledBriefly(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		mu.Lock()
+		hits++
+		first := hits == 1
+		mu.Unlock()
+		if first {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, "upstream connect error or disconnect/reset before headers. reset reason: connection timeout")
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"pea\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(srv.Close)
+	cfg := config.Config{SchemaVersion: 1, Providers: []config.Provider{
+		{ID: "only", Adapter: "openai_compat", Tier: "paid", BaseURL: srv.URL + "/v1"},
+	}}
+	gw, err := New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	var out strings.Builder
+	if _, err := gw.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), &out); err != nil {
+		t.Fatalf("one edge connection timeout failed the request: %v", err)
+	}
+	if !strings.Contains(out.String(), "pea") {
+		t.Fatalf("out=%q", out.String())
+	}
+
+	gw.markCooldown("only", "m", adapter.HTTPError{Status: http.StatusServiceUnavailable, Body: "upstream connect error or disconnect/reset before headers. reset reason: connection timeout"})
+	for _, c := range gw.Cooldowns() {
+		if c.RemainingMs > 5000 {
+			t.Fatalf("edge transport failure cooled the account for %dms, want at most 5s", c.RemainingMs)
 		}
 	}
 }
