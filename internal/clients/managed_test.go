@@ -11,13 +11,16 @@ import (
 
 func TestConnectPreservesJSONKeyOrder(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "opencode.json")
-	original := "{\"z\":1,\"theme\":\"dark\"}\n"
+	path := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "{\"z\":1,\"theme\":\"dark\",\"env\":{\"CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS\":\"1\"}}\n"
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	layout := Layout{Root: root}
-	if err := layout.Connect("opencode", "http://127.0.0.1:8317/v1", "model"); err != nil {
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1", "claude-opus-5-5"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)
@@ -28,18 +31,99 @@ func TestConnectPreservesJSONKeyOrder(t *testing.T) {
 	if strings.Index(text, `"z"`) < 0 || strings.Index(text, `"z"`) > strings.Index(text, `"theme"`) {
 		t.Fatalf("key order changed: %s", text)
 	}
-	if !strings.Contains(text, `"peaproxy"`) {
-		t.Fatalf("owned key missing: %s", text)
+	var parsed struct {
+		Env map[string]string `json:"env"`
 	}
-	if err := layout.Disconnect("opencode"); err != nil {
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("settings invalid: %v\n%s", err, got)
+	}
+	if parsed.Env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8317" || parsed.Env["ANTHROPIC_API_KEY"] != "peaproxy" || parsed.Env["ANTHROPIC_MODEL"] != "claude-opus-5-5" {
+		t.Fatalf("claude-code env must carry base url WITHOUT /v1, key and model: %s", text)
+	}
+	if parsed.Env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] != "1" {
+		t.Fatalf("user env lost: %s", text)
+	}
+	if strings.Contains(text, `"peaproxy":`) {
+		t.Fatalf("no inert top-level key: %s", text)
+	}
+	if err := layout.Disconnect("claude-code"); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(after), `"peaproxy"`) || strings.Index(string(after), `"z"`) > strings.Index(string(after), `"theme"`) {
+	if strings.Contains(string(after), "ANTHROPIC_") || !strings.Contains(string(after), "AGENT_TEAMS") || strings.Index(string(after), `"z"`) > strings.Index(string(after), `"theme"`) {
 		t.Fatalf("disconnect rewrote user keys: %s", after)
+	}
+}
+
+func TestClaudeCodeDisconnectRemovesEmptyEnvAndLegacyKey(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"peaproxy":{"baseURL":"http://127.0.0.1:8317/v1","model":"m"},"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8317","ANTHROPIC_API_KEY":"peaproxy"},"theme":"dark"}`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Layout{Root: root}).Disconnect("claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "{\"theme\":\"dark\"}\n"; string(after) != want {
+		t.Fatalf("got %s want %s", after, want)
+	}
+}
+
+func TestClaudeCodeDisconnectLeavesForeignKey(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example","ANTHROPIC_API_KEY":"sk-ant-real"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Layout{Root: root}).Disconnect("claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(after), "gateway.example") || !strings.Contains(string(after), "sk-ant-real") {
+		t.Fatalf("disconnect must only touch an env whose ANTHROPIC_API_KEY is peaproxy: %s", after)
+	}
+}
+
+func TestOpenCodeConnectIsGuided(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "opencode.json")
+	if err := os.WriteFile(path, []byte("{\"theme\":\"dark\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := Layout{Root: root}
+	if err := layout.Connect("opencode", "http://127.0.0.1:8317/v1", "m"); !errors.Is(err, ErrGuidedSetup) {
+		t.Fatalf("connect opencode = %v, want guided: a custom provider needs per-model metadata", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "{\"theme\":\"dark\"}\n" {
+		t.Fatalf("guided connect must not touch the file: %v %s", err, got)
+	}
+	if err := os.WriteFile(path, []byte(`{"peaproxy":{"baseURL":"x","model":"m"},"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.Disconnect("opencode"); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(path)
+	if strings.Contains(string(after), `"peaproxy"`) || !strings.Contains(string(after), "dark") {
+		t.Fatalf("disconnect must still drop the legacy inert key: %s", after)
 	}
 }
 
@@ -170,12 +254,15 @@ func TestPiDisconnectLeavesForeignBaseURL(t *testing.T) {
 
 func TestManagedConnectPreservesComments(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "opencode.json")
+	path := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte("// user note\n{\"theme\":\"dark\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	layout := Layout{Root: root}
-	if err := layout.Connect("opencode", "http://127.0.0.1:8317/v1", "model"); err != nil {
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1", "model"); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path)
@@ -219,7 +306,10 @@ func TestDisconnectPreservesUserEdits(t *testing.T) {
 
 func TestConnectDetectsConcurrentEdit(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "opencode.json")
+	path := filepath.Join(root, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +318,7 @@ func TestConnectDetectsConcurrentEdit(t *testing.T) {
 		return os.WriteFile(path, []byte("{\"other\":1}\n"), 0o600)
 	}
 	t.Cleanup(func() { beforeWrite = func(string) error { return nil } })
-	if err := layout.Connect("opencode", "http://127.0.0.1:8317/v1", "m"); !errors.Is(err, ErrConflict) {
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1", "m"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v", err)
 	}
 }
@@ -236,7 +326,7 @@ func TestConnectDetectsConcurrentEdit(t *testing.T) {
 func TestClientPathsPortable(t *testing.T) {
 	root := t.TempDir()
 	layout := Layout{Root: root}
-	for _, name := range []string{"opencode", "codex", "claude-code"} {
+	for _, name := range []string{"pi", "codex", "claude-code"} {
 		if err := layout.Connect(name, "http://127.0.0.1:8317/v1", "model"); err != nil {
 			t.Fatal(name, err)
 		}

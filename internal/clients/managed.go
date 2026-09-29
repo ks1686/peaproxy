@@ -127,8 +127,10 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 		return insertContinue(raw, baseURL, model), nil
 	case "pi":
 		return insertPi(raw, baseURL)
+	case "claude-code":
+		return insertClaudeCode(raw, baseURL, model)
 	default:
-		return insertJSON(raw, baseURL, model)
+		return nil, ErrGuidedSetup
 	}
 }
 
@@ -140,27 +142,18 @@ func removeOwned(name string, raw []byte) ([]byte, error) {
 		return []byte(removeContinue(string(raw))), nil
 	case "pi":
 		return removePi(raw)
+	case "claude-code":
+		return removeClaudeCode(raw)
 	default:
 		return removeJSON(raw)
 	}
 }
 
-func insertJSON(raw []byte, baseURL, model string) ([]byte, error) {
-	body := bytes.TrimSpace(stripJSONC(raw))
-	if len(body) == 0 {
-		body = []byte("{}")
-	}
-	if !json.Valid(body) {
-		return nil, errors.New("client config is not json")
-	}
-	next, err := upsertJSONKey(body, "peaproxy", map[string]any{"baseURL": baseURL, "model": model})
-	if err != nil {
-		return nil, err
-	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
-}
+const ownedAPIKey = "peaproxy"
 
-const piOwnedKey = "peaproxy"
+// legacyOwnedKey is the top-level key connect wrote before v2.0.10. Neither
+// OpenCode nor Claude Code ever read it; disconnect still removes it.
+const legacyOwnedKey = "peaproxy"
 
 var piOverrides = []struct {
 	provider string
@@ -168,6 +161,78 @@ var piOverrides = []struct {
 }{
 	{"anthropic", true},
 	{"openai", false},
+}
+
+var claudeCodeEnv = []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"}
+
+func insertClaudeCode(raw []byte, baseURL, model string) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	body, err := deleteJSONKey(body, legacyOwnedKey)
+	if err != nil {
+		return nil, err
+	}
+	env, ok := getJSONKey(body, "env")
+	if !ok || !bytes.HasPrefix(env, []byte("{")) {
+		env = []byte("{}")
+	}
+	values := map[string]string{
+		"ANTHROPIC_BASE_URL": strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1"),
+		"ANTHROPIC_API_KEY":  ownedAPIKey,
+		"ANTHROPIC_MODEL":    model,
+	}
+	for _, key := range claudeCodeEnv {
+		if values[key] == "" {
+			if env, err = deleteJSONKey(env, key); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if env, err = upsertJSONKey(env, key, values[key]); err != nil {
+			return nil, err
+		}
+	}
+	next, err := upsertJSONKey(body, "env", json.RawMessage(env))
+	if err != nil {
+		return nil, err
+	}
+	return append(commentPrefix(raw), append(next, '\n')...), nil
+}
+
+func removeClaudeCode(raw []byte) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		return raw, nil
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	body, err := deleteJSONKey(body, legacyOwnedKey)
+	if err != nil {
+		return nil, err
+	}
+	env, ok := getJSONKey(body, "env")
+	if key, _ := getJSONKey(env, "ANTHROPIC_API_KEY"); ok && string(key) == `"`+ownedAPIKey+`"` {
+		for _, k := range claudeCodeEnv {
+			if env, err = deleteJSONKey(env, k); err != nil {
+				return nil, err
+			}
+		}
+		if string(env) == "{}" {
+			body, err = deleteJSONKey(body, "env")
+		} else {
+			body, err = upsertJSONKey(body, "env", json.RawMessage(env))
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return append(commentPrefix(raw), append(body, '\n')...), nil
 }
 
 func insertPi(raw []byte, baseURL string) ([]byte, error) {
@@ -195,7 +260,7 @@ func insertPi(raw []byte, baseURL string) ([]byte, error) {
 		if entry, err = upsertJSONKey(entry, "baseUrl", url); err != nil {
 			return nil, err
 		}
-		if entry, err = upsertJSONKey(entry, "apiKey", piOwnedKey); err != nil {
+		if entry, err = upsertJSONKey(entry, "apiKey", ownedAPIKey); err != nil {
 			return nil, err
 		}
 		if providers, err = upsertJSONKey(providers, o.provider, json.RawMessage(entry)); err != nil {
@@ -227,7 +292,7 @@ func removePi(raw []byte) ([]byte, error) {
 			continue
 		}
 		key, _ := getJSONKey(entry, "apiKey")
-		if string(key) != `"`+piOwnedKey+`"` {
+		if string(key) != `"`+ownedAPIKey+`"` {
 			continue
 		}
 		var err error
@@ -274,7 +339,7 @@ func removeJSON(raw []byte) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("client config is not json")
 	}
-	next, err := deleteJSONKey(body, "peaproxy")
+	next, err := deleteJSONKey(body, legacyOwnedKey)
 	if err != nil {
 		return nil, err
 	}

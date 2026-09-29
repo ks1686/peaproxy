@@ -66,14 +66,29 @@ func TestClientConnectUsesIsolatedRoot(t *testing.T) {
 	s, _ := testServer(t)
 	root := t.TempDir()
 	s.clientRoot = root
-	req := httptest.NewRequest(http.MethodPost, "/admin/clients/opencode/connect", strings.NewReader(`{"model":"m"}`))
+	req := httptest.NewRequest(http.MethodPost, "/admin/clients/claude-code/connect", strings.NewReader(`{"model":"m"}`))
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
 	}
-	got, err := os.ReadFile(filepath.Join(root, "opencode.json"))
+	got, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
 	if err != nil || !strings.Contains(string(got), "peaproxy") {
 		t.Fatalf("file %s err %v", got, err)
+	}
+}
+
+func TestClientConnectOpenCodeIsGuided(t *testing.T) {
+	s, _ := testServer(t)
+	root := t.TempDir()
+	s.clientRoot = root
+	req := httptest.NewRequest(http.MethodPost, "/admin/clients/opencode/connect", strings.NewReader(`{"model":"m"}`))
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"status":"guided"`) || !strings.Contains(rr.Body.String(), "peaproxy-anthropic") {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "opencode.json")); !os.IsNotExist(err) {
+		t.Fatalf("guided connect wrote opencode.json: %v", err)
 	}
 }
