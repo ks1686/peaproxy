@@ -908,7 +908,7 @@ function healthPage(root) {
       <div id="quota">loading…</div>
     </section>
     <section class="card"><h2>Account cooldowns</h2>
-      <p class="muted">After a rate-limit, overload, or auth-expired failure the account is skipped for 30s. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Routing follows <code>failover.policy</code> (round-robin default, or fill-first / sticky).</p>
+      <p class="muted">After a rate-limit, overload, or auth-expired failure the account is skipped for 30s, or for the provider's reset hint when it sends one. Connection failures (502, 504, edge 503) skip it for 5s; a slow first token moves on without a cooldown. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Routing follows <code>failover.policy</code> (round-robin default, or fill-first / sticky).</p>
       <div id="cd">loading…</div>
     </section>
     <section class="card"><h2>Gateway</h2><pre id="h">loading…</pre></section>

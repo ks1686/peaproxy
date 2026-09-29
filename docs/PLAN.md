@@ -1,6 +1,6 @@
 # PeaProxy — approved plan (2026-09-26)
 
-Status: **2.0.x on main**. Latest GitHub Release is **v2.0.7** (request engine: [V2.md](V2.md)). Phases 0–4 are done. This is a shipped 1.x product, not a 0.2.8 scaffold. **v1.0.0** is an honesty/marketing declaration from current `main` after this docs cut ([V1.md](V1.md)) — not a new 1.6 patch, and not tagged from a feature branch.
+Status: **2.0.x on main**. Latest GitHub Release is **v2.0.7** (request engine: [V2.md](V2.md)). Phases 0–4 are done. This is a shipped 2.x product, not a 0.2.8 scaffold. **v1.0.0** is an honesty/marketing declaration from current `main` after this docs cut ([V1.md](V1.md)) — not a new 1.6 patch, and not tagged from a feature branch.
 
 Residuals (documented, not unmarked phase work):
 
