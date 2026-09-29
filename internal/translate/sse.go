@@ -310,6 +310,20 @@ func openAIChatFinishReason(hadToolCalls bool) string {
 	return "stop"
 }
 
+// openAIFinishFromClaude checks truncation and refusal before tool use: a turn
+// cut off or blocked inside a tool call must not be handed to the client to run.
+func openAIFinishFromClaude(stopReason string, hadToolCalls bool) string {
+	switch stopReason {
+	case "max_tokens":
+		return "length"
+	case "refusal":
+		return "content_filter"
+	}
+	return openAIChatFinishReason(hadToolCalls || stopReason == "tool_use")
+}
+
+const openAIStreamFailedChunk = `data: {"error":{"message":"upstream stream failed","type":"api_error"}}` + "\n\n"
+
 // ClaudeSSEToOpenAI converts Anthropic SSE into chat.completion.chunk SSE.
 func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	sc := bufio.NewScanner(r)
@@ -319,6 +333,7 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	wrote := false
 	wroteRole := false
 	hadToolCalls := false
+	stopReason := ""
 	type thinkAcc struct {
 		kind, thinking, signature, data string
 	}
@@ -363,11 +378,26 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				Thinking  string `json:"thinking"`
 				Signature string `json:"signature"`
 			} `json:"content_block"`
+			Error *struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
 		}
 		switch ev.Type {
+		case "error":
+			upstream := fmt.Errorf("anthropic stream error: %s", payload)
+			if ev.Error != nil {
+				upstream = fmt.Errorf("anthropic stream error: %s: %s", ev.Error.Type, ev.Error.Message)
+			}
+			if wroteRole {
+				if _, err := io.WriteString(w, openAIStreamFailedChunk); err != nil {
+					return errors.Join(upstream, err)
+				}
+			}
+			return upstream
 		case "message_start":
 			if ev.Message != nil {
 				if ev.Message.ID != "" {
@@ -443,6 +473,9 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 			}
 			wrote = true
 		case "message_delta":
+			if ev.Delta.StopReason != "" {
+				stopReason = ev.Delta.StopReason
+			}
 			if ev.Delta.StopReason == "tool_use" {
 				hadToolCalls = true
 				wrote = true
@@ -450,6 +483,16 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 		default:
 			// ignore ping, content_block_stop, message_stop
 		}
+	}
+	if err := sc.Err(); err != nil {
+		// The upstream broke off mid-turn: a finish chunk would hand the client
+		// truncated tool arguments to run.
+		if wroteRole {
+			if _, werr := io.WriteString(w, openAIStreamFailedChunk); werr != nil {
+				return errors.Join(err, werr)
+			}
+		}
+		return err
 	}
 	var entries []opaqueEntry
 	for _, idx := range accOrder {
@@ -479,11 +522,11 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				return err
 			}
 		}
-		if err := WriteOpenAIChatSSEFinish(w, id, model, openAIChatFinishReason(hadToolCalls)); err != nil {
+		if err := WriteOpenAIChatSSEFinish(w, id, model, openAIFinishFromClaude(stopReason, hadToolCalls)); err != nil {
 			return err
 		}
 	}
-	return sc.Err()
+	return nil
 }
 
 // OpenAISSEToResponses converts chat.completion.chunk SSE into Responses API SSE.
