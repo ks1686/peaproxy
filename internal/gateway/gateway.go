@@ -980,7 +980,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 				slowSkipped = true
 				continue
 			}
-			if retryable(err) {
+			if failoverOn(err) {
 				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
@@ -1017,6 +1017,18 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		// (nil closes normally), so it never completes the partial turn.
 		_ = pw.CloseWithError(err)
 		convErr := <-errCh
+		// An error chunk that arrived before anything reached the client is a
+		// failed attempt, not a turn to hand back (#50). The adapter closed
+		// cleanly, so without this the account is credited with a success and
+		// the error goes to a client that has seen nothing at all.
+		//
+		// It fails over without a cooldown: an error chunk carries no status to
+		// classify, and it is not evidence that this account is unhealthy --
+		// the next one answering the same model is.
+		if err == nil && convErr != nil && cw.n == 0 {
+			last = convErr
+			continue
+		}
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
 			g.rememberSuccess(session, client, lastAccount)
@@ -1033,7 +1045,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			slowSkipped = true
 			continue
 		}
-		if retryable(err) {
+		if failoverOn(err) {
 			g.markCooldown(inst.Provider.ID, model, err)
 			continue
 		}
@@ -1199,7 +1211,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 				slowSkipped = true
 				continue
 			}
-			if retryable(err) {
+			if failoverOn(err) {
 				g.markCooldown(inst.Provider.ID, model, err)
 				continue
 			}
@@ -1234,10 +1246,24 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		// (nil closes normally), so it never completes the partial turn.
 		_ = pw.CloseWithError(err)
 		convErr := <-errCh
+		// An error chunk that arrived before anything reached the client is a
+		// failed attempt, not a turn to hand back (#50). The adapter closed
+		// cleanly, so without this the account is credited with a success and
+		// the error goes to a client that has seen nothing at all.
+		//
+		// It fails over without a cooldown: an error chunk carries no status to
+		// classify, and it is not evidence that this account is unhealthy --
+		// the next one answering the same model is.
+		if err == nil && convErr != nil && cw.n == 0 {
+			last = convErr
+			continue
+		}
 		if err == nil {
-			g.rememberSuccess(session, model, lastAccount)
-			g.rememberSuccess(session, client, lastAccount)
-			return lastAccount, convErr
+			{
+				g.rememberSuccess(session, model, lastAccount)
+				g.rememberSuccess(session, client, lastAccount)
+				return lastAccount, convErr
+			}
 		}
 		last = err
 		if cw.n > 0 {
@@ -1247,7 +1273,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			slowSkipped = true
 			continue
 		}
-		if retryable(err) {
+		if failoverOn(err) {
 			g.markCooldown(inst.Provider.ID, model, err)
 			continue
 		}
@@ -1299,6 +1325,19 @@ func noteStream(guard *streamguard.Guard, callErr error) error {
 		return perr
 	}
 	return callErr
+}
+
+// failoverOn is the condition under which a failed attempt moves on to the next
+// account rather than going back to the client: a retryable error, a transient
+// 502/503/504, or a prelude the stream guard rejected. The Claude and Responses
+// paths used a narrower one of the first two alone, so a 502 was handed to the
+// client with another account still unused -- even though the guard had held the
+// bytes back precisely so failover was possible (#71).
+//
+// A slow prelude is deliberately not here: it is handled before this check, and
+// moves on without starting a cooldown.
+func failoverOn(err error) bool {
+	return retryable(err) || router.Transient(err) || preludeFailover(err)
 }
 
 func preludeFailover(err error) bool {
