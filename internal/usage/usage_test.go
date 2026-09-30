@@ -1,6 +1,8 @@
 package usage
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -161,5 +163,84 @@ func TestRequestLogRotatesWhenOverMaxBytes(t *testing.T) {
 		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
 			t.Fatalf("mode: %v %v", st, err)
 		}
+	}
+}
+
+// #51: rotation swaps the trimmed log in whole, and the result is still JSONL --
+// one event per line. A JSON array would be unreadable by readLog, and by every
+// tool that tails the log.
+func TestRotationLeavesAValidJSONLLog(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	s := Open("")
+	s.SetRequestLog(path)
+	s.SetMaxLogBytes(200)
+	for i := 0; i < 40; i++ {
+		s.Add(Event{AccountID: "acct", Model: "m", Status: 200, Preview: "abcdefghijklmnopqrstuvwxyz"})
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) == 0 {
+		t.Fatal("log is empty after rotation")
+	}
+	for i, line := range lines {
+		var e Event
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			t.Fatalf("line %d is not a standalone JSON event: %v\n%s", i, err, line)
+		}
+		if e.Model != "m" {
+			t.Fatalf("line %d is not an event: %+v", i, e)
+		}
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("[")) {
+		t.Fatalf("rotation wrote a JSON array, not JSONL: %.60s", raw)
+	}
+}
+
+// A failed or interrupted write leaves no scratch file next to the log.
+func TestRequestLogLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "requests.log")
+	s := Open("")
+	s.SetRequestLog(path)
+	s.SetMaxLogBytes(200)
+	for i := 0; i < 40; i++ {
+		s.Add(Event{AccountID: "acct", Model: "m", Status: 200, Preview: "abcdefghijklmnopqrstuvwxyz"})
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "requests.log" {
+			t.Fatalf("unexpected file left beside the log: %s", e.Name())
+		}
+	}
+}
+
+// usage.json is the history: replacing it atomically is what stops a crash
+// mid-write from reading back as an empty store.
+func TestUsageJSONIsReplacedAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage.json")
+	s := Open(path)
+	s.Add(Event{AccountID: "acct", Model: "m1", Status: 200})
+	s.Add(Event{AccountID: "acct", Model: "m2", Status: 200})
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "usage.json" {
+			t.Fatalf("scratch file left behind: %s", e.Name())
+		}
+	}
+	// And it still reads back.
+	reopened := Open(path)
+	if got := len(reopened.Recent()); got != 2 {
+		t.Fatalf("usage.json did not survive the atomic write: %d events", got)
 	}
 }

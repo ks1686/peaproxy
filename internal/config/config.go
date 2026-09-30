@@ -464,29 +464,10 @@ func saveLocked(path string, cfg Config) error {
 // writeAtomic writes b to a temp file in path's directory (mode 0600) and
 // renames it over path, so readers see the old file or the new one, never a
 // torn write. The temp file is removed on any failure.
-func writeAtomic(path string, b []byte) (err error) {
-	f, err := os.CreateTemp(configDir(path), filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() {
-		if err != nil {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if _, err = f.Write(b); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return fslock.Rename(tmp, path)
+// writeAtomic writes the config file through the shared helper, so config and
+// usage and harness files all replace themselves the same way.
+func writeAtomic(path string, b []byte) error {
+	return fslock.WriteAtomic(path, b, 0o600)
 }
 
 // Validate enforces loopback-by-default security.

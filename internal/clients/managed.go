@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 // ErrConflict means the file changed after it was read.
@@ -579,13 +581,10 @@ func quote(s string) string {
 	return strings.TrimSuffix(buf.String(), "\n")
 }
 
+// writeAtomic replaces a harness config file. No lock: the file is the
+// harness's, and the server holds its own lock around every change it makes to
+// one; all that is left is two peaproxy processes racing, which a unique temp
+// name per write settles.
 func writeAtomic(path string, raw []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fslock.WriteAtomic(path, raw, 0o600)
 }

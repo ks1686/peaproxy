@@ -3,6 +3,7 @@ package usage
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 const (
@@ -176,7 +179,10 @@ func (s *Store) flushLocked() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(s.path, b, 0o600)
+	// Atomic so a crash mid-write cannot leave a truncated usage.json, which
+	// would read back as an empty history. The store's own mutex is what
+	// serialises writers; there is no lock file.
+	_ = fslock.WriteAtomic(s.path, b, 0o600)
 }
 
 func (s *Store) appendLogLocked(e Event) {
@@ -228,24 +234,20 @@ func (s *Store) rotateLogLocked() {
 	if len(events) > keep {
 		events = events[len(events)-keep:]
 	}
-	tmp := s.requestLog + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return
-	}
-	enc := json.NewEncoder(f)
+	// Rotating through a fixed request-log.tmp means a reader that happens to
+	// open it sees half a log, and two rotations collide. Write the trimmed
+	// copy to scratch and swap it in whole. Encode line by line: the log is
+	// JSONL, one event per line, not an array.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	for _, e := range events {
 		if err := enc.Encode(e); err != nil {
-			_ = f.Close()
-			_ = os.Remove(tmp)
 			return
 		}
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
+	if fslock.WriteAtomic(s.requestLog, buf.Bytes(), 0o600) != nil {
 		return
 	}
-	_ = os.Rename(tmp, s.requestLog)
 	_ = os.Chmod(s.requestLog, 0o600)
 }
 
