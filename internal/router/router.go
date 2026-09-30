@@ -38,6 +38,20 @@ func (e CooldownError) Error() string {
 	return "all matching accounts in cooldown"
 }
 
+// Sanitized keeps the useful "every account is cooling" half and drops the
+// upstream body from the inner error, so a client can be told why without
+// being shown whatever the provider echoed back.
+func (e CooldownError) Sanitized() string {
+	if e.Err == nil {
+		return "all matching accounts in cooldown"
+	}
+	var s interface{ Sanitized() string }
+	if errors.As(e.Err, &s) {
+		return fmt.Sprintf("all matching accounts in cooldown: %s", s.Sanitized())
+	}
+	return fmt.Sprintf("all matching accounts in cooldown: %v", e.Err)
+}
+
 func (e CooldownError) Unwrap() error {
 	if e.Err != nil {
 		return e.Err

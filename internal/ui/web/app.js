@@ -38,6 +38,15 @@ function toast(message, kind) {
   setTimeout(() => el.remove(), 5000);
 }
 
+// Wire routes return a shaped error object (OpenAI or Anthropic); /admin/*
+// and the pre-routing middleware return a plain string. Accept both.
+function errText(data, fallback) {
+  const e = data && data.error;
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && typeof e.message === "string") return e.message;
+  return fallback;
+}
+
 async function getJSON(url) {
   const res = await fetch(url, { headers: adminHeaders() });
   const text = await res.text();
@@ -48,7 +57,7 @@ async function getJSON(url) {
     throw new Error(text || res.statusText);
   }
   if (!res.ok) {
-    throw new Error(data.error || res.statusText || "request failed");
+    throw new Error(errText(data, res.statusText || "request failed"));
   }
   return data;
 }
@@ -60,7 +69,7 @@ async function sendJSON(url, method, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) throw new Error(errText(data, res.statusText));
   return data;
 }
 
