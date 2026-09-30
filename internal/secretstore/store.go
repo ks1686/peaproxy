@@ -77,12 +77,17 @@ func itemKey(id string, kind Kind) string {
 	return id + "/" + string(kind)
 }
 
+// parseItemKey splits an item key back into its id and kind. The id may itself
+// contain slashes -- "work/openai" is a perfectly good account id -- and a kind
+// never does, so the split is on the LAST slash. Cutting at the first one, as
+// this used to, reduced "work/openai" to the account "work", and Prune then
+// deleted the secret it had just written (#77).
 func parseItemKey(k string) (id string, kind Kind, ok bool) {
-	id, rest, found := strings.Cut(k, "/")
-	if !found || id == "" || rest == "" {
+	cut := strings.LastIndex(k, "/")
+	if cut <= 0 || cut == len(k)-1 {
 		return "", "", false
 	}
-	return id, Kind(rest), true
+	return k[:cut], Kind(k[cut+1:]), true
 }
 
 func accountOf(k string) string {

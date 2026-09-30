@@ -142,6 +142,11 @@ func (s *Store) saveBlob(blob fileBlob) error {
 // process has just created to receive its 32 bytes.
 const keyReadAttempts = 50
 
+// keySettleTime is how long a wrong-sized key file is treated as "another
+// process is still writing it". Past it, the file is simply broken, and waiting
+// longer only holds config.lock and secrets.lock for nothing (#59).
+const keySettleTime = time.Second
+
 // loadOrCreateKey creates secret.key with O_EXCL, so processes racing on a
 // first run agree on one key: the loser re-reads the winner's file.
 func (s *Store) loadOrCreateKey() ([]byte, error) {
@@ -150,11 +155,11 @@ func (s *Store) loadOrCreateKey() ([]byte, error) {
 		switch {
 		case err == nil && len(b) == 32:
 			return b, nil
-		case err == nil && attempt < keyReadAttempts:
+		case err == nil && attempt < keyReadAttempts && !settled(s.keyPath()):
 			time.Sleep(10 * time.Millisecond)
 			continue
 		case err == nil:
-			return nil, fmt.Errorf("secretstore: %s must be 32 bytes", KeyFileName)
+			return nil, fmt.Errorf("secretstore: %s is %d bytes, not 32; it is the key every stored secret is encrypted with, so delete it only if you are willing to re-enter them -- PeaProxy generates a new one on the next run", s.keyPath(), len(b))
 		case !os.IsNotExist(err):
 			return nil, err
 		}
@@ -163,6 +168,18 @@ func (s *Store) loadOrCreateKey() ([]byte, error) {
 			return key, err
 		}
 	}
+}
+
+// settled reports whether a wrong-sized key file has been sitting there long
+// enough that it is not about to become correct. An mtime we cannot read is
+// treated as settled: the fallback is an error with a clear message, which beats
+// holding two locks for half a second to repeat it.
+func settled(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	return time.Since(info.ModTime()) > keySettleTime
 }
 
 func (s *Store) createKey() ([]byte, error) {
