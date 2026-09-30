@@ -154,13 +154,21 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
-			next.ServeHTTP(w, r)
-			return
-		}
+		// The loopback Host check is the DNS-rebinding defence, and it applies to
+		// every method. A page whose DNS points at 127.0.0.1 reaches this server
+		// over the loopback interface, so the peer looks local, and it sends its
+		// own Host; checking only mutations left every admin read -- usage,
+		// requests, accounts, settings -- readable by that page (#75).
 		peerLoopback := remoteLoopback(r.RemoteAddr)
 		if peerLoopback && !config.IsLoopback(hostOnly(r.Host)) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "loopback host required"})
+			return
+		}
+		// Origin and content-type are about a page *acting* on this server, so
+		// they stay on mutations. A cross-origin GET response is already
+		// unreadable without a CORS header the server never sends.
+		if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			next.ServeHTTP(w, r)
 			return
 		}
 		if !originAllowed(r, peerLoopback) {
