@@ -31,6 +31,20 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# ── Retry policy ──────────────────────────────────────────────────────────────
+# aur.archlinux.org regularly drops SSH connections, and a failed AUR push is
+# otherwise only retried on the next tag. Five attempts with backoff covers the
+# transient cases without holding up the release: the worst case adds about
+# four minutes to a 60m-timeout job.
+#
+# Blast radius is small: it is read by the git client (clone and push, retried
+# on network errors only) and by the GitHub API client (retried only on
+# retriable answers such as a rate limit). Nothing retries a real failure.
+retry:
+  attempts: 5
+  delay: 15s
+  max_delay: 2m
+
 # ── macOS Developer ID signing + notarization (anchore/quill) ─────────────────
 # Signs and notarizes Darwin binaries on any OS (including ubuntu-latest CI).
 # Identity: Developer ID Application: KARIM SMIRES (7R2VPW8GH4)
@@ -76,6 +90,64 @@ homebrew_casks:
     skip_upload: '{{ if isEnvSet "HOMEBREW_TAP_GITHUB_TOKEN" }}{{ if .Env.HOMEBREW_TAP_GITHUB_TOKEN }}auto{{ else }}true{{ end }}{{ else }}true{{ end }}'
     binaries:
       - peaproxy
+
+# ── Scoop bucket ──────────────────────────────────────────────────────────────
+# Publishes a manifest to ks1686/scoop-bucket on every non-prerelease tag.
+# Empty or unset SCOOP_BUCKET_GITHUB_TOKEN → skip upload so GitHub Releases and
+# the Homebrew cask still publish. With the secret set, skip_upload is auto
+# (stable tags upload; prereleases do not).
+#
+# Manifests stay at the bucket root (no directory) so `scoop install
+# peaproxy` finds them. Both windows zips are published under `architecture`
+# (64bit + arm64) with their own hashes, so an arm64 Windows machine installs
+# natively instead of falling back to x64 emulation.
+#
+# winget and Chocolatey publishers are GoReleaser Pro-only; do not declare them
+# here or OSS `goreleaser check` / CI fails to parse the config.
+#
+# Install after setup:
+#   scoop bucket add ks1686 https://github.com/ks1686/scoop-bucket
+#   scoop install peaproxy
+scoops:
+  - name: peaproxy
+    repository:
+      owner: ks1686
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    homepage: "https://github.com/ks1686/peaproxy"
+    description: "Localhost multi-provider AI gateway with API keys, local runtimes, and optional subscription OAuth."
+    license: MIT
+    skip_upload: '{{ if isEnvSet "SCOOP_BUCKET_GITHUB_TOKEN" }}{{ if .Env.SCOOP_BUCKET_GITHUB_TOKEN }}auto{{ else }}true{{ end }}{{ else }}true{{ end }}'
+
+# ── AUR (peaproxy-bin) ────────────────────────────────────────────────────────
+# Generates PKGBUILD + .SRCINFO from the linux amd64/arm64 archives (sha256
+# read from the artifacts, not re-downloaded) and pushes them to
+# aur.archlinux.org over SSH. The binary is installed to /usr/bin/peaproxy, so
+# config and state stay in the same ~/.config/peaproxy a Homebrew or go install
+# build uses.
+#
+# The package is named peaproxy-bin (pre-compiled binary) and provides /
+# conflicts peaproxy, so it can never sit next to a source build.
+#
+# Requires secret: AUR_KEY (passphrase-free ed25519 private key whose public
+# half is on the AUR account). Unset or empty → skip upload so the rest of the
+# release still publishes.
+#
+# -4 / AddressFamily=inet: AUR's ssh endpoint answers on IPv4 only from some
+# CI networks and the IPv6 attempt stalls until it returns the "down due to
+# maintenance" banner.
+#
+# Install after setup:
+#   paru -Sy peaproxy-bin
+aurs:
+  - name: peaproxy-bin
+    git_url: "ssh://aur@aur.archlinux.org/peaproxy-bin.git"
+    private_key: "{{ .Env.AUR_KEY }}"
+    git_ssh_command: 'ssh -4 -i "{{ .KeyPath }}" -o AddressFamily=inet -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -F /dev/null'
+    homepage: "https://github.com/ks1686/peaproxy"
+    description: "Localhost multi-provider AI gateway with API keys, local runtimes, and optional subscription OAuth"
+    license: MIT
+    skip_upload: '{{ if isEnvSet "AUR_KEY" }}{{ if .Env.AUR_KEY }}auto{{ else }}true{{ end }}{{ else }}true{{ end }}'
 
 changelog:
   sort: asc
