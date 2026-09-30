@@ -496,6 +496,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	if resp.StatusCode >= 300 {
+		noteAliasedToolNames(a.id, resp.StatusCode, restore)
 		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
 	return restoreOAuthToolNames(body, restore), nil
@@ -521,6 +522,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		noteAliasedToolNames(a.id, resp.StatusCode, restore)
 		return adapter.NewHTTPError(resp, truncate(body))
 	}
 	filter := &oAuthToolSSEFilter{dst: w, reverse: restore}

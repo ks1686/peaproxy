@@ -25,6 +25,7 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 | `PEAPROXY_ADMIN_TOKEN` | Admin token for `/admin` when bound off loopback |
 | `PEAPROXY_ALLOW_LAN` | `1` / `true` / `yes` / `on` sets `allowNonLoopback` |
 | `PEAPROXY_REQUEST_LOG` | same truthy values enable redacted `requests.log` |
+| `PEAPROXY_DEBUG` | same truthy values log the Claude OAuth tool alias mapping (`client -> upstream`) on a 4xx, so a `400 tool name ...` can be traced to the name the client actually used. Account id, status and pairs only — no headers, body or tokens. |
 | `PEAPROXY_FAILOVER_POLICY` | `round-robin` (default), `fill-first`, or `sticky` |
 | `PEAPROXY_SECRET_BACKEND` | `file` forces the AES-GCM file next to the config; `keyring` requires the OS store (macOS Keychain / Windows Credential Manager / Linux Secret Service). Unset: try keyring, then file. `go test` always uses `file`. |
 | `PEAPROXY_CLIENT_ROOT` | Directory for managed harness connect/disconnect. Unset uses the home directory. Smoke tests set a temporary directory. |
