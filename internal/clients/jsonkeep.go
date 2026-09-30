@@ -5,30 +5,14 @@ import (
 	"encoding/json"
 )
 
+// upsertJSONKey sets key to value, keeping an existing key at its position and
+// appending a new one at the end.
 func upsertJSONKey(body []byte, key string, value any) ([]byte, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	without, err := deleteJSONKey(body, key)
-	if err != nil {
-		return nil, err
-	}
-	end := bytes.LastIndexByte(without, '}')
-	if end < 0 {
-		return nil, errorsNewJSON()
-	}
-	inner := bytes.TrimSpace(without[:end])
-	out := make([]byte, 0, len(without)+len(key)+len(encoded)+4)
-	out = append(out, without[:end]...)
-	if len(inner) != 0 && inner[len(inner)-1] != '{' {
-		out = append(out, ',')
-	}
-	out = append(out, '"')
-	out = append(out, key...)
-	out = append(out, '"', ':')
-	out = append(out, encoded...)
-	return append(out, without[end:]...), nil
+	return rewriteJSONKey(body, key, encoded)
 }
 
 func getJSONKey(body []byte, key string) ([]byte, bool) {
@@ -62,6 +46,13 @@ func getJSONKey(body []byte, key string) ([]byte, bool) {
 }
 
 func deleteJSONKey(body []byte, key string) ([]byte, error) {
+	return rewriteJSONKey(body, key, nil)
+}
+
+// rewriteJSONKey compacts body and replaces the first occurrence of key with
+// replacement (dropping any duplicates), appending it when key is absent. A
+// nil replacement deletes key.
+func rewriteJSONKey(body []byte, key string, replacement []byte) ([]byte, error) {
 	if len(body) == 0 || body[0] != '{' {
 		return nil, errorsNewJSON()
 	}
@@ -69,12 +60,25 @@ func deleteJSONKey(body []byte, key string) ([]byte, error) {
 	out = append(out, '{')
 	i := 1
 	first := true
+	found := false
+	emit := func(name, value []byte) {
+		if !first {
+			out = append(out, ',')
+		}
+		first = false
+		out = append(out, name...)
+		out = append(out, ':')
+		out = append(out, value...)
+	}
 	for {
 		i = skipWS(body, i)
 		if i >= len(body) {
 			return nil, errorsNewJSON()
 		}
 		if body[i] == '}' {
+			if !found && replacement != nil {
+				emit([]byte(`"`+key+`"`), replacement)
+			}
 			out = append(out, '}')
 			return out, nil
 		}
@@ -97,15 +101,13 @@ func deleteJSONKey(body []byte, key string) ([]byte, error) {
 			i++
 		}
 		if string(name) == `"`+key+`"` {
+			if !found && replacement != nil {
+				emit(name, replacement)
+			}
+			found = true
 			continue
 		}
-		if !first {
-			out = append(out, ',')
-		}
-		first = false
-		out = append(out, name...)
-		out = append(out, ':')
-		out = append(out, bytes.TrimSpace(value)...)
+		emit(name, bytes.TrimSpace(value))
 	}
 }
 

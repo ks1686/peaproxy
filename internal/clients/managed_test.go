@@ -654,3 +654,55 @@ func TestPiConnectRejectsNonObjectProviders(t *testing.T) {
 		assertFile(t, path, original)
 	}
 }
+
+func TestClaudeCodeRoundTripKeepsMiddleEnvInPlace(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	original := "{\n  \"theme\": \"dark\",\n  \"env\": {\n    \"FOO\": \"bar\"\n  },\n  \"x\": 1\n}\n"
+	writeFixture(t, path, original)
+	layout := Layout{Root: root}
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1", "m"); err != nil {
+		t.Fatal(err)
+	}
+	connected, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(connected)
+	if !(strings.Index(text, `"theme"`) < strings.Index(text, `"env"`) && strings.Index(text, `"env"`) < strings.Index(text, `"x"`)) {
+		t.Fatalf("connect moved env: %s", text)
+	}
+	if err := layout.Disconnect("claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, path, original)
+}
+
+func TestPiRoundTripKeepsProviderOrder(t *testing.T) {
+	root := t.TempDir()
+	path := Layout{Root: root}.path("pi")
+	original := "{\n  \"providers\": {\n    \"openai\": {\n      \"baseUrl\": \"https://example.com\",\n      \"apiKey\": \"sk\",\n      \"models\": []\n    },\n    \"mine\": {}\n  },\n  \"x\": 1\n}\n"
+	writeFixture(t, path, original)
+	layout := Layout{Root: root}
+	if err := layout.Connect("pi", "http://127.0.0.1:8317/v1", ""); err != nil {
+		t.Fatal(err)
+	}
+	connected, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(connected)
+	if strings.Index(text, `"providers"`) > strings.Index(text, `"x"`) {
+		t.Fatalf("connect moved providers: %s", text)
+	}
+	if err := layout.Disconnect("pi"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Index(string(after), `"openai"`) > strings.Index(string(after), `"mine"`) {
+		t.Fatalf("disconnect moved a user provider: %s", after)
+	}
+}

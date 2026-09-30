@@ -38,3 +38,21 @@ func TestDetectIndent(t *testing.T) {
 		}
 	}
 }
+
+func TestUpsertJSONKeyReplacesExistingKeyInPlace(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"a":1,"env":{"x":1},"z":2}`, `{"a":1,"env":{"y":2},"z":2}`},
+		{`{"env":{"x":1},"z":2}`, `{"env":{"y":2},"z":2}`},
+		{`{"a":1,"env":{"x":1}}`, `{"a":1,"env":{"y":2}}`},
+		{`{"a":1}`, `{"a":1,"env":{"y":2}}`},
+		{`{}`, `{"env":{"y":2}}`},
+	} {
+		got, err := upsertJSONKey([]byte(tc.body), "env", json.RawMessage(`{"y":2}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("upsert env into %s = %s; want %s", tc.body, got, tc.want)
+		}
+	}
+}
