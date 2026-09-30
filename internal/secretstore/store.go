@@ -183,8 +183,9 @@ func (s *Store) Set(id string, kind Kind, value string) error {
 	return s.fileSet(itemKey(id, kind), value)
 }
 
-// Get reads a secret. When secrets.lock cannot be created because the config
-// dir is read-only, it reads without the lock: nothing can write there either.
+// Get reads a secret. When secrets.lock cannot be opened for writing (a
+// permission error or a read-only filesystem), it falls back to the unlocked
+// read of releases before v2.0.10. Writers still require the lock.
 func (s *Store) Get(id string, kind Kind) (string, error) {
 	if s == nil {
 		return "", ErrNotFound
