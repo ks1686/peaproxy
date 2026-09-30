@@ -261,14 +261,14 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		account, err := s.gw.ChatStream(requestCtx(r, raw), raw, sw)
 		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
-			writeErr(w, err)
+			writeErr(w, wireOpenAI, err)
 		}
 		return
 	}
 	resp, account, err := s.gw.Chat(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireOpenAI, err)
 		return
 	}
 	s.recordCall(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit)
@@ -294,14 +294,14 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		account, err := s.gw.ResponsesStream(requestCtx(r, raw), raw, sw)
 		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
-			writeErr(w, err)
+			writeErr(w, wireOpenAI, err)
 		}
 		return
 	}
 	out, account, err := s.gw.Responses(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireOpenAI, err)
 		return
 	}
 	s.record(account, peek.Model, "responses", "/v1/responses", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out)
@@ -321,7 +321,7 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	resp, account, err := s.gw.GenerateImage(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireOpenAI, err)
 		return
 	}
 	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
@@ -355,7 +355,7 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	resp, account, err := s.gw.EditImage(requestCtx(r, raw), raw, ct)
 	if err != nil {
 		s.record(account, model, "images", "/v1/images/edits", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireOpenAI, err)
 		return
 	}
 	s.record(account, model, "images", "/v1/images/edits", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
@@ -382,7 +382,7 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	resp, account, err := s.gw.CreateEmbeddings(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireOpenAI, err)
 		return
 	}
 	s.recordCall(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit)
@@ -412,14 +412,14 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		account, err := s.gw.ClaudeChatStream(requestCtx(r, raw), raw, sw)
 		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
 		if err != nil && !sw.started {
-			writeErr(w, err)
+			writeErr(w, wireAnthropic, err)
 		}
 		return
 	}
 	out, account, err := s.gw.ClaudeChat(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireAnthropic, err)
 		return
 	}
 	s.record(account, peek.Model, "claude", "/v1/messages", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out)
@@ -733,7 +733,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		resp, account, err := s.gw.GenerateImage(requestCtx(r, raw), raw)
 		if err != nil {
 			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-			writeErr(w, err)
+			writeErr(w, wireAdmin, err)
 			return
 		}
 		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
@@ -763,7 +763,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		resp, account, err := s.gw.CreateEmbeddings(requestCtx(r, raw), raw)
 		if err != nil {
 			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-			writeErr(w, err)
+			writeErr(w, wireAdmin, err)
 			return
 		}
 		s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit)
@@ -789,7 +789,7 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	resp, account, err := s.gw.Chat(requestCtx(r, raw), raw)
 	if err != nil {
 		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
-		writeErr(w, err)
+		writeErr(w, wireAdmin, err)
 		return
 	}
 	s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit)
@@ -1099,15 +1099,99 @@ func statusOf(err error) int {
 	return http.StatusBadGateway
 }
 
-func writeErr(w http.ResponseWriter, err error) {
+// errWire selects the error envelope a client is expecting. An OpenAI SDK reads
+// error.type and error.message; an Anthropic SDK reads a top-level
+// "type":"error" plus error.type. Neither reads a bare string, so on those two
+// wires a plain string shows up as a generic message and misclassifies a rate
+// limit as something the caller cannot retry.
+type errWire int
+
+const (
+	// wireAdmin keeps the plain {"error":"..."} form. /admin/* is a local
+	// operator surface, and the pre-routing middleware errors are ours, not a
+	// provider's, so they keep the string form too.
+	wireAdmin errWire = iota
+	wireOpenAI
+	wireAnthropic
+)
+
+// clientMessage is what the client is told. An upstream body can echo request
+// fragments or credentials straight back at us, so any error that knows how to
+// redact itself does. The full text stays in the local request log.
+func clientMessage(err error) string {
+	var s interface{ Sanitized() string }
+	if errors.As(err, &s) {
+		return s.Sanitized()
+	}
+	return err.Error()
+}
+
+// errorTypeFor derives the wire's error type from the status, which is what the
+// SDKs branch on to decide whether a call is retryable.
+func errorTypeFor(wr errWire, status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusRequestEntityTooLarge:
+		if wr == wireAnthropic {
+			return "request_too_large"
+		}
+		return "invalid_request_error"
+	case http.StatusServiceUnavailable:
+		if wr == wireAnthropic {
+			return "overloaded_error"
+		}
+		return "server_error"
+	}
+	if status >= 500 {
+		if wr == wireAnthropic {
+			return "api_error"
+		}
+		return "server_error"
+	}
+	return "invalid_request_error"
+}
+
+func wireError(wr errWire, status int, err error) any {
+	msg := clientMessage(err)
+	switch wr {
+	case wireOpenAI:
+		// param and code are part of the shape even when null; SDKs read both.
+		return map[string]any{"error": map[string]any{
+			"message": msg,
+			"type":    errorTypeFor(wr, status),
+			"param":   nil,
+			"code":    nil,
+		}}
+	case wireAnthropic:
+		return map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    errorTypeFor(wr, status),
+				"message": msg,
+			},
+		}
+	default:
+		return map[string]string{"error": msg}
+	}
+}
+
+func writeErr(w http.ResponseWriter, wr errWire, err error) {
+	status := statusOf(err)
 	if sec := router.RetryAfterSeconds(err); sec > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(sec))
 	}
-	writeJSON(w, statusOf(err), errJSON(err))
+	writeJSON(w, status, wireError(wr, status, err))
 }
 
 func errJSON(err error) map[string]string {
-	return map[string]string{"error": err.Error()}
+	return map[string]string{"error": clientMessage(err)}
 }
 
 func completionJSON(model, content string) map[string]any {
