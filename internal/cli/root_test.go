@@ -47,6 +47,7 @@ func TestAuthLoginWithoutProviderErrors(t *testing.T) {
 }
 
 func TestStatusUsesDefaultBind(t *testing.T) {
+	isolateUserConfig(t)
 	out := &bytes.Buffer{}
 	if err := ExecuteWithArgs([]string{"status"}, out); err != nil {
 		t.Fatal(err)
@@ -57,6 +58,7 @@ func TestStatusUsesDefaultBind(t *testing.T) {
 }
 
 func TestConfigValidateOK(t *testing.T) {
+	isolateUserConfig(t)
 	out := &bytes.Buffer{}
 	if err := ExecuteWithArgs([]string{"config", "validate"}, out); err != nil {
 		t.Fatal(err)

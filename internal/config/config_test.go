@@ -152,7 +152,15 @@ func TestOAuthTokenRoundTrip(t *testing.T) {
 }
 
 func TestExampleYAMLLoads(t *testing.T) {
-	cfg, err := config.Load(filepath.Join("..", "..", "configs", "peaproxy.example.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "configs", "peaproxy.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "peaproxy.example.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
