@@ -100,7 +100,7 @@ If you run oh-my-opencode, its image resizer only runs for the built-in `anthrop
 
 ## Pi (models.json)
 
-Pi (`pi-coding-agent`) takes provider endpoints from **`~/.pi/agent/models.json`** only (`PI_CODING_AGENT_DIR` moves the directory). It does **not** read `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` — in pi 0.87.1 the only base URLs read from the environment are Azure's and Cloudflare's — so exporting those configures nothing. The earlier env-export preset was wrong.
+Pi (`pi-coding-agent`) takes provider endpoints from **`~/.pi/agent/models.json`** only. Pi honours `PI_CODING_AGENT_DIR`; `connect pi` does not read it, so pass `--root` with the parent of that directory when it is set. It does **not** read `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` — in pi 0.87.1 the only base URLs read from the environment are Azure's and Cloudflare's — so exporting those configures nothing. The earlier env-export preset was wrong.
 
 The shortest working setup **overrides the built-in providers**. Pi then keeps its bundled metadata for every Claude and GPT model (thinking-level maps, compat flags, prompt-cache lifetimes) and only the URL changes:
 

@@ -1735,9 +1735,9 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 // of cfg taken under mu. Providers, Hide, Expose, Catalog and Routes are
 // adopted from the merge into cfg; the other fields are overlaid by flags and
 // env, so saved keeps the running values and those overlays never win a later
-// merge against disk. rebuilt reports that adopted providers changed the
-// adapter set; the caller refreshes after releasing saveMu. persist never
-// calls Refresh itself.
+// merge against disk. When adopted providers differ, persist calls rebuild()
+// to reinitialise adapters and returns rebuilt=true so the caller can run
+// Refresh() after releasing saveMu; persist never calls Refresh itself.
 func (g *Gateway) persist(mine config.Config) (rebuilt bool, err error) {
 	g.mu.RLock()
 	path, base := g.path, g.saved
