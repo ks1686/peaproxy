@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 func TestFileBackendRoundTrip(t *testing.T) {
@@ -207,6 +210,39 @@ func TestKeyringBackendChunksOversizedSecrets(t *testing.T) {
 	}
 	if len(kr.m) != 0 {
 		t.Fatalf("prune left %d items", len(kr.m))
+	}
+}
+
+func TestHeldLockReportsBusy(t *testing.T) {
+	old := lockTimeout
+	lockTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { lockTimeout = old })
+
+	dir := t.TempDir()
+	unlock, err := fslock.Lock(filepath.Join(dir, LockFileName), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	for name, s := range map[string]*Store{
+		"file":    {backend: BackendFile, dir: dir},
+		"keyring": {backend: BackendKeyring, dir: dir, kr: &memKeyring{m: map[string]string{}}},
+	} {
+		err := s.Set("acct", KindAPIKey, "sk")
+		if !errors.Is(err, fslock.ErrBusy) || !strings.Contains(err.Error(), "busy (another peaproxy process is saving)") {
+			t.Errorf("%s: Set under a held lock = %v, want busy", name, err)
+		}
+	}
+}
+
+func TestLockCreatesMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	s := &Store{backend: BackendFile, dir: dir}
+	if err := s.Set("acct", KindAPIKey, "sk"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, LockFileName)); err != nil {
+		t.Fatalf("secrets.lock not created: %v", err)
 	}
 }
 

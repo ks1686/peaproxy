@@ -93,7 +93,6 @@ func (s *Store) keyringSet(key, value string) error {
 	if s.kr == nil {
 		return errors.New("secretstore: keyring not configured")
 	}
-	defer lockDir(s.dir)()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err
@@ -136,9 +135,9 @@ func (s *Store) keyringGet(key string) (string, error) {
 	if s.kr == nil {
 		return "", ErrNotFound
 	}
-	defer lockDir(s.dir)()
-	// Another process can publish a new generation and delete the one this
-	// read is following; a vanished chunk under a changed header is retried.
+	// A pre-v2.0.10 binary does not take secrets.lock, so it can publish a
+	// new generation and delete the one this read is following; a vanished
+	// chunk under a changed header is retried.
 	var last string
 	for attempt := 0; attempt < 3; attempt++ {
 		v, err := s.kr.Get(Service, key)
@@ -200,7 +199,6 @@ func (s *Store) keyringDelete(key string) error {
 	if s.kr == nil {
 		return nil
 	}
-	defer lockDir(s.dir)()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err
@@ -214,7 +212,6 @@ func (s *Store) keyringDelete(key string) error {
 }
 
 func (s *Store) keyringPrune(keep map[string]struct{}) error {
-	defer lockDir(s.dir)()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err

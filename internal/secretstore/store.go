@@ -9,12 +9,15 @@ package secretstore
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 const (
@@ -22,8 +25,13 @@ const (
 	EncryptedFileName = "secrets.enc"
 	KeyFileName       = "secret.key"
 	IndexFileName     = "secrets.index"
+	LockFileName      = "secrets.lock"
 	Magic             = "PPSECv1\n"
 )
+
+// lockTimeout bounds the wait for another process's store operation (which
+// may be blocked on a keychain prompt).
+var lockTimeout = 15 * time.Second
 
 // Kind is the secret type stored per account id.
 type Kind string
@@ -162,6 +170,11 @@ func (s *Store) Set(id string, kind Kind, value string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if s.backend == BackendKeyring {
 		return s.keyringSet(itemKey(id, kind), value)
 	}
@@ -175,6 +188,11 @@ func (s *Store) Get(id string, kind Kind) (string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	if s.backend == BackendKeyring {
 		return s.keyringGet(itemKey(id, kind))
 	}
@@ -188,6 +206,11 @@ func (s *Store) Delete(id string, kind Kind) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if s.backend == BackendKeyring {
 		return s.keyringDelete(itemKey(id, kind))
 	}
@@ -207,10 +230,30 @@ func (s *Store) Prune(keepIDs []string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if s.backend == BackendKeyring {
 		return s.keyringPrune(keep)
 	}
 	return s.filePrune(keep)
+}
+
+// lock takes secrets.lock for one whole operation, so no two PeaProxy
+// processes interleave a read-modify-write of the index, the blob or a
+// chunked keychain item. Lock order: s.mu, then secrets.lock; config.lock,
+// when held, is always taken before either.
+func (s *Store) lock() (unlock func(), err error) {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return nil, err
+	}
+	unlock, err = fslock.Lock(filepath.Join(s.dir, LockFileName), lockTimeout)
+	if errors.Is(err, fslock.ErrBusy) {
+		return nil, fmt.Errorf("secretstore: %s busy (another peaproxy process is saving): %w", s.dir, err)
+	}
+	return unlock, err
 }
 
 func (s *Store) keyPath() string {

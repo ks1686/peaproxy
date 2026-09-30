@@ -5,10 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"unicode/utf8"
 )
 
@@ -101,18 +99,4 @@ func newGen(avoid string) (string, error) {
 			return g, nil
 		}
 	}
-}
-
-// dirLocks serializes keyring writers across Store instances that share a
-// config dir (config.Save opens a fresh Store each call). Not cross-process.
-var dirLocks sync.Map
-
-func lockDir(dir string) (unlock func()) {
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	v, _ := dirLocks.LoadOrStore(dir, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
 }

@@ -18,8 +18,8 @@ import (
 // index files written before this change load unchanged.
 const pendingPrefix = "pending:"
 
-// pendingGrace keeps a sweep from deleting a generation that another process
-// (which the in-process dir lock cannot see) may still be writing.
+// pendingGrace keeps a sweep from deleting a generation that a pre-v2.0.10
+// binary, which does not take secrets.lock, may still be writing.
 const pendingGrace = 30 * time.Minute
 
 type pending struct {
