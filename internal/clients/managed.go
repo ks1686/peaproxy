@@ -28,6 +28,9 @@ var ErrGuidedSetup = errors.New("guided setup")
 // ErrInvalidInput means the base URL or model cannot be recorded safely.
 var ErrInvalidInput = errors.New("invalid connect input")
 
+// ErrUnexpectedShape means a key PeaProxy merges into holds a non-object value.
+var ErrUnexpectedShape = errors.New("client config has unexpected shape")
+
 // Layout resolves config paths under root instead of the real home directory.
 type Layout struct {
 	Root string
@@ -208,9 +211,9 @@ func insertClaudeCode(raw []byte, baseURL, model string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	env, ok := getJSONKey(body, "env")
-	if !ok || !bytes.HasPrefix(env, []byte("{")) {
-		env = []byte("{}")
+	env, err := objectOrEmpty(body, "env", "claude-code settings: env")
+	if err != nil {
+		return nil, err
 	}
 	values := map[string]string{
 		"ANTHROPIC_BASE_URL": strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1"),
@@ -280,20 +283,19 @@ func insertPi(raw []byte, baseURL string) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("client config is not json")
 	}
-	providers, ok := getJSONKey(body, "providers")
-	if !ok {
-		providers = []byte("{}")
+	providers, err := objectOrEmpty(body, "providers", "pi models: providers")
+	if err != nil {
+		return nil, err
 	}
 	for _, o := range piOverrides {
-		entry, ok := getJSONKey(providers, o.provider)
-		if !ok {
-			entry = []byte("{}")
+		entry, err := objectOrEmpty(providers, o.provider, "pi models: providers."+o.provider)
+		if err != nil {
+			return nil, err
 		}
 		url := baseURL
 		if o.trimV1 {
 			url = strings.TrimSuffix(strings.TrimRight(url, "/"), "/v1")
 		}
-		var err error
 		if entry, err = upsertJSONKey(entry, "baseUrl", url); err != nil {
 			return nil, err
 		}
@@ -358,6 +360,20 @@ func removePi(raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	return formatJSON(raw, next), nil
+}
+
+// objectOrEmpty returns body[key] when it is an object, {} when it is missing
+// or null, and ErrUnexpectedShape otherwise so user data is never replaced.
+func objectOrEmpty(body []byte, key, what string) ([]byte, error) {
+	value, ok := getJSONKey(body, key)
+	switch {
+	case !ok || string(value) == "null":
+		return []byte("{}"), nil
+	case bytes.HasPrefix(value, []byte("{")):
+		return value, nil
+	default:
+		return nil, fmt.Errorf("%s is not an object: %w", what, ErrUnexpectedShape)
+	}
 }
 
 // formatJSON re-indents next like the original file when that file was

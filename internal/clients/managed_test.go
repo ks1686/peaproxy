@@ -572,3 +572,50 @@ func TestMidFileCommentIsHoistedNotLost(t *testing.T) {
 		t.Fatalf("comment not hoisted above the object: %s", got)
 	}
 }
+
+func TestClaudeCodeConnectRejectsNonObjectEnv(t *testing.T) {
+	for _, env := range []string{`[1]`, `"x"`, `true`, `1`} {
+		root := t.TempDir()
+		path := filepath.Join(root, ".claude", "settings.json")
+		original := `{"theme":"dark","env":` + env + "}\n"
+		writeFixture(t, path, original)
+		if err := (Layout{Root: root}).Connect("claude-code", "http://127.0.0.1:8317/v1", "m"); !errors.Is(err, ErrUnexpectedShape) {
+			t.Fatalf("env %s: connect = %v, want ErrUnexpectedShape", env, err)
+		}
+		assertFile(t, path, original)
+	}
+}
+
+func TestClaudeCodeConnectTreatsNullEnvAsEmpty(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	writeFixture(t, path, `{"env":null}`)
+	if err := (Layout{Root: root}).Connect("claude-code", "http://127.0.0.1:8317/v1", "m"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("settings invalid: %v\n%s", err, raw)
+	}
+	if parsed.Env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8317" || parsed.Env["ANTHROPIC_API_KEY"] != "peaproxy" || parsed.Env["ANTHROPIC_MODEL"] != "m" {
+		t.Fatalf("null env not replaced: %s", raw)
+	}
+}
+
+func TestPiConnectRejectsNonObjectProviders(t *testing.T) {
+	for _, original := range []string{`{"providers":[]}`, `{"providers":{"anthropic":1}}`, `{"providers":{"openai":"x"}}`} {
+		root := t.TempDir()
+		path := filepath.Join(root, ".pi", "agent", "models.json")
+		writeFixture(t, path, original)
+		if err := (Layout{Root: root}).Connect("pi", "http://127.0.0.1:8317/v1", ""); !errors.Is(err, ErrUnexpectedShape) {
+			t.Fatalf("%s: connect = %v, want ErrUnexpectedShape", original, err)
+		}
+		assertFile(t, path, original)
+	}
+}
