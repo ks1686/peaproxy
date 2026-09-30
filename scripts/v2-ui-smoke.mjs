@@ -143,6 +143,9 @@ try {
   if (written.env?.ANTHROPIC_API_KEY !== "peaproxy") {
     throw new Error("connect did not write the claude-code env");
   }
+  if (written.env?.ANTHROPIC_BASE_URL !== `http://127.0.0.1:${proxyPort}`) {
+    throw new Error("connect wrote the wrong base URL: " + written.env?.ANTHROPIC_BASE_URL);
+  }
 
   await page.route("**/admin/clients/claude-code/verify", (route) => route.abort());
   await page.locator("[data-probe='claude-code']").click();

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,9 @@ var ErrUnknownClient = errors.New("unknown managed client")
 
 // ErrGuidedSetup means the harness has no writable config. Callers show the preset snippet.
 var ErrGuidedSetup = errors.New("guided setup")
+
+// ErrInvalidInput means the base URL or model cannot be recorded safely.
+var ErrInvalidInput = errors.New("invalid connect input")
 
 // Layout resolves config paths under root instead of the real home directory.
 type Layout struct {
@@ -72,6 +77,9 @@ func (l Layout) Connect(name, baseURL, model string) error {
 	if path == "" {
 		return ErrUnknownClient
 	}
+	if err := validateConnect(baseURL, model); err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -112,6 +120,26 @@ func (l Layout) Disconnect(name string) error {
 		return err
 	}
 	return writeAtomic(path, updated)
+}
+
+func validateConnect(baseURL, model string) error {
+	u, err := url.Parse(baseURL)
+	if unsafeText(baseURL) || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%w: base URL must be an http(s) URL without quotes, backslashes or control characters", ErrInvalidInput)
+	}
+	if len(model) > 256 || unsafeText(model) {
+		return fmt.Errorf("%w: model must be at most 256 bytes without quotes, backslashes or control characters", ErrInvalidInput)
+	}
+	return nil
+}
+
+func unsafeText(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == '"' || c == '\\' {
+			return true
+		}
+	}
+	return false
 }
 
 func hash(raw []byte) string {

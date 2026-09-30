@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -43,6 +44,7 @@ type Server struct {
 	oauthMu    sync.Mutex
 	oauthJobs  map[string]*oauthJob
 	clientRoot string
+	listenAddr atomic.Value
 }
 
 type oauthJob struct {
@@ -128,9 +130,12 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
+	s.setListenAddr(ln.Addr().String())
 	log.Printf("peaproxy listening on http://%s", ln.Addr())
 	return s.http.Serve(ln)
 }
+
+func (s *Server) setListenAddr(addr string) { s.listenAddr.Store(addr) }
 
 // Shutdown stops the HTTP server.
 func (s *Server) Shutdown(ctx context.Context) error {

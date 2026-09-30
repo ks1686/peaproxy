@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,7 +31,7 @@ func (s *Server) handleClientConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.BaseURL == "" {
-		body.BaseURL = "http://127.0.0.1:8317/v1"
+		body.BaseURL = s.clientBaseURL()
 	}
 	if err := s.clientLayout().Connect(name, body.BaseURL, body.Model); err != nil {
 		if errors.Is(err, clients.ErrGuidedSetup) {
@@ -93,6 +94,24 @@ func (s *Server) handleEngine(w http.ResponseWriter, r *http.Request) {
 		"automaticRoutes": cfg.AutomaticRoutes.Enabled,
 		"maxInFlight":     cfg.RequestEngine.MaxInFlight,
 	})
+}
+
+// clientBaseURL is the address clients should use to reach this server. It
+// follows the bound listener rather than the saved settings, which can change
+// while the listener stays put; unspecified binds are reached over loopback.
+func (s *Server) clientBaseURL() string {
+	addr, _ := s.listenAddr.Load().(string)
+	if addr == "" {
+		addr = s.http.Addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://127.0.0.1:8317/v1"
+	}
+	if host == "" || net.ParseIP(host).IsUnspecified() {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/v1"
 }
 
 func (s *Server) clientLayout() clients.Layout {
