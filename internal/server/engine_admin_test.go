@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ks1686/peaproxy/internal/clients"
 	"github.com/ks1686/peaproxy/internal/config"
 )
 
@@ -174,5 +175,86 @@ func TestClientConnectRejectsBadBaseURL(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, ".claude", "settings.json")); !os.IsNotExist(err) {
 			t.Fatalf("%s: rejected connect wrote settings.json: %v", body, err)
 		}
+	}
+}
+
+type adminClient struct {
+	Name    string `json:"name"`
+	BaseURL string `json:"baseURL"`
+	Cloak   string `json:"cloak"`
+	Notes   string `json:"notes"`
+	Snippet string `json:"snippet"`
+	Verify  string `json:"verify"`
+}
+
+func getAdminClients(t *testing.T, s *Server) (string, []adminClient) {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/admin/clients", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	var parsed struct {
+		Clients []adminClient `json:"clients"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	return rr.Body.String(), parsed.Clients
+}
+
+func postVerify(t *testing.T, s *Server, name string) string {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/admin/clients/"+name+"/verify", strings.NewReader(`{}`)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	var parsed struct {
+		Verify string `json:"verify"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Verify
+}
+
+func TestAdminClientsUseListenPort(t *testing.T) {
+	s, _ := listenServer(t, "0.0.0.0", 9126)
+	_, got := getAdminClients(t, s)
+	if len(got) == 0 {
+		t.Fatal("no presets")
+	}
+	for _, c := range got {
+		if strings.Contains(c.BaseURL, "8317") || strings.Contains(c.Snippet, "8317") {
+			t.Fatalf("%s still points at 8317: %+v", c.Name, c)
+		}
+		if !strings.Contains(c.BaseURL, "http://127.0.0.1:9126") {
+			t.Fatalf("%s baseURL = %q", c.Name, c.BaseURL)
+		}
+		if !strings.HasSuffix(c.Verify, " --origin http://127.0.0.1:9126") {
+			t.Fatalf("%s preset verify = %q", c.Name, c.Verify)
+		}
+		if want := "peaproxy clients verify " + c.Name + " --origin http://127.0.0.1:9126"; postVerify(t, s, c.Name) != want {
+			t.Fatalf("%s verify = %q, want %q", c.Name, postVerify(t, s, c.Name), want)
+		}
+	}
+
+	s, _ = listenServer(t, "127.0.0.1", 8317)
+	body, _ := getAdminClients(t, s)
+	var want []adminClient
+	for _, n := range clients.List() {
+		p, _ := clients.Get(n)
+		want = append(want, adminClient{Name: p.Name, BaseURL: p.BaseURL, Cloak: p.Cloak, Notes: p.Notes, Snippet: p.Snippet, Verify: p.Verify})
+	}
+	var buf strings.Builder
+	if err := json.NewEncoder(&buf).Encode(map[string]any{"clients": want}); err != nil {
+		t.Fatal(err)
+	}
+	if body != buf.String() {
+		t.Fatalf("default-port payload changed:\n%s\nwant:\n%s", body, buf.String())
+	}
+	if got := postVerify(t, s, "claude-code"); got != "peaproxy clients verify claude-code" {
+		t.Fatalf("default-port verify = %q", got)
 	}
 }

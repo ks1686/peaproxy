@@ -71,7 +71,28 @@ func (s *Server) handleClientVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown client"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"name": name, "verify": "peaproxy clients verify " + name})
+	writeJSON(w, http.StatusOK, map[string]string{"name": name, "verify": verifyHint("peaproxy clients verify "+name, s.clientOrigin())})
+}
+
+// defaultOrigin is the gateway address baked into the client presets.
+const defaultOrigin = "http://127.0.0.1:8317"
+
+func (s *Server) clientOrigin() string {
+	return strings.TrimSuffix(s.clientBaseURL(), "/v1")
+}
+
+func withOrigin(text, origin string) string {
+	if origin == defaultOrigin {
+		return text
+	}
+	return strings.ReplaceAll(text, defaultOrigin, origin)
+}
+
+func verifyHint(hint, origin string) string {
+	if hint == "" || origin == defaultOrigin {
+		return hint
+	}
+	return hint + " --origin " + origin
 }
 
 func (s *Server) handleEngine(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +127,7 @@ func (s *Server) clientBaseURL() string {
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "http://127.0.0.1:8317/v1"
+		return defaultOrigin + "/v1"
 	}
 	if host == "" || net.ParseIP(host).IsUnspecified() {
 		host = "127.0.0.1"
