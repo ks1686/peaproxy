@@ -34,6 +34,25 @@ peaproxy --version
 peaproxy serve
 ```
 
+Arch — AUR, pre-compiled binary, x86_64 + aarch64:
+
+```bash
+paru -Sy peaproxy-bin
+peaproxy --version
+peaproxy serve
+```
+
+Windows — Scoop, x64 + arm64:
+
+```powershell
+scoop bucket add ks1686 https://github.com/ks1686/scoop-bucket
+scoop install peaproxy
+peaproxy --version
+peaproxy serve
+```
+
+Every package installs the same `peaproxy` binary and reads the same config (`~/.config/peaproxy`, `%AppData%\peaproxy` on Windows), so moving between package managers does not relocate anyone's accounts or secrets.
+
 Alternatively, follow `main` with Go `@latest`, or pin the tag:
 
 ```bash
@@ -43,7 +62,7 @@ peaproxy --version
 peaproxy serve
 ```
 
-Requires Go 1.22+ for `go install`. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)). macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
+Requires Go 1.22+ for `go install`. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)), and the Homebrew cask, Scoop manifest, and AUR `peaproxy-bin` package are generated from the same tag. macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
 
 ```bash
 go run ./cmd/peaproxy serve   # from a clone
