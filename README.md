@@ -242,6 +242,7 @@ What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/C
 ## Security
 
 - Default bind is **loopback**. Binding `0.0.0.0` requires `--allow-lan` **and** a non-empty admin token (`docs/CONFIG.md`).
+- A request from a loopback peer must carry a loopback `Host`, for **every** method. That is the DNS-rebinding defence: a page whose DNS points at 127.0.0.1 arrives over the loopback interface with the attacker's `Host`, and without the check the admin reads (`/admin/usage`, `/admin/requests`, `/admin/accounts`, `/admin/settings`) would be readable by it.
 - Never log secrets. Opt-in request log is redacted. OAuth tokens and inline API keys are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) or an AES-GCM file next to the config when no keychain is available. YAML lists accounts without printing those secrets.
 - **ToS:** **Subscription OAuth** (Claude Pro/Max/Team/Enterprise, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) may violate a provider’s terms and can result in account bans. PeaProxy authors are **not liable**. Prefer official API keys. OpenCode Zen **free** models may train on prompts — see catalog privacy notes and [OpenCode Zen docs](https://opencode.ai/docs/zen/). Details: [docs/OAUTH.md](docs/OAUTH.md).
 - **GitHub Models is retired** (2026-07-30) and is not a provider.
