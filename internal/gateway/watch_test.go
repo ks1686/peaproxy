@@ -34,9 +34,7 @@ func watchTestGateway(t *testing.T) (*Gateway, string) {
 
 func TestConfigWatcherAdoptsAnAccountAddedElsewhere(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	writeConfig(t, path, func(c *config.Config) {
 		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-b"})
@@ -55,9 +53,7 @@ func TestConfigWatcherAdoptsAnAccountAddedElsewhere(t *testing.T) {
 
 func TestConfigWatcherAdoptsARemovedAccount(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	writeConfig(t, path, func(c *config.Config) { c.Providers = nil })
 	waitFor(t, 3*time.Second, func() bool { return len(g.Config().Providers) == 0 }, "the removed account was never dropped")
@@ -65,9 +61,7 @@ func TestConfigWatcherAdoptsARemovedAccount(t *testing.T) {
 
 func TestConfigWatcherAdoptsPerRequestSettings(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	// These are read per request but were merged into the file without ever
 	// reaching the running server (#52).
@@ -86,9 +80,7 @@ func TestConfigWatcherAdoptsPerRequestSettings(t *testing.T) {
 // what the server already has.
 func TestConfigWatcherIgnoresTheServersOwnWrite(t *testing.T) {
 	g, _ := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	before := g.Config()
 	if err := g.SetRequestLog(true); err != nil {
@@ -110,9 +102,7 @@ func TestConfigWatcherIgnoresTheServersOwnWrite(t *testing.T) {
 // replacing and then write its own idea of it straight back.
 func TestConfigWatcherSkipsWhileASaveIsInProgress(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	g.saveMu.Lock()
 	writeConfig(t, path, func(c *config.Config) {
@@ -131,9 +121,7 @@ func TestConfigWatcherSkipsWhileASaveIsInProgress(t *testing.T) {
 // serving, and not a reason to log on every tick.
 func TestConfigWatcherSurvivesABrokenConfig(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	if err := os.WriteFile(path, []byte("this: [is: not: yaml"), 0o600); err != nil {
 		t.Fatal(err)
@@ -158,9 +146,7 @@ func TestConfigWatcherSurvivesABrokenConfig(t *testing.T) {
 // The file going away is not a reason to panic or to stop.
 func TestConfigWatcherSurvivesTheFileVanishing(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -192,9 +178,7 @@ func TestConfigWatcherIsInertWithoutAPath(t *testing.T) {
 // merge compares against has moved too.
 func TestAdoptedChangeSurvivesTheNextServerSave(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	writeConfig(t, path, func(c *config.Config) {
 		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-b"})
@@ -227,9 +211,7 @@ func TestAdoptedChangeSurvivesTheNextServerSave(t *testing.T) {
 // start, which is the documented rule.
 func TestSecurityAndListenerSettingsNeedARestart(t *testing.T) {
 	g, path := watchTestGateway(t)
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	startWatch(t, g, ctx, testWatchInterval)
+	startWatch(t, g, testWatchInterval)
 
 	writeConfig(t, path, func(c *config.Config) {
 		// A non-loopback bind needs allowNonLoopback and an admin token to be
@@ -259,9 +241,26 @@ func TestSecurityAndListenerSettingsNeedARestart(t *testing.T) {
 // separately and is a documented part of the contract.
 const testWatchInterval = 5 * time.Millisecond
 
-func startWatch(t *testing.T, g *Gateway, ctx context.Context, interval time.Duration) {
+// startWatch runs the watcher for the life of the test and does not return
+// until it has stopped.
+//
+// Cancelling is not enough: a tick already past its select is inside a
+// config.Load or a SaveMerged, and the secret store writes into the config
+// directory. Without waiting, t.TempDir cleanup races those writes and fails
+// with "directory not empty" -- which is what happened on the -race job in CI,
+// where the wider timing window makes it reliable.
+func startWatch(t *testing.T, g *Gateway, interval time.Duration) {
 	t.Helper()
-	go g.watchConfig(ctx, interval)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.watchConfig(ctx, interval)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 }
 
 func writeConfig(t *testing.T, path string, edit func(*config.Config)) {
