@@ -446,17 +446,21 @@ func restoreSSELine(line []byte, reverse map[string]string) []byte {
 	if idx < 0 {
 		return line
 	}
-	payload := bytes.TrimSpace(line[idx+len("data:"):])
+	head := line[:idx+len("data:")]
+	rest := line[len(head):]
+	body := bytes.TrimLeft(rest, " \t")
+	lead := rest[:len(rest)-len(body)]
+	payload := bytes.TrimRight(body, " \t\r")
+	trail := body[len(payload):]
 	restored := restoreOAuthToolNames(payload, reverse)
 	if bytes.Equal(restored, payload) {
 		return line
 	}
-	out := make([]byte, 0, idx+len("data:")+1+len(restored))
-	out = append(out, line[:idx+len("data:")]...)
-	if idx+len("data:") < len(line) && line[idx+len("data:")] == ' ' {
-		out = append(out, ' ')
-	}
-	return append(out, restored...)
+	out := make([]byte, 0, len(head)+len(lead)+len(restored)+len(trail))
+	out = append(out, head...)
+	out = append(out, lead...)
+	out = append(out, restored...)
+	return append(out, trail...)
 }
 
 func (p *aliasParser) consume(char byte) bool {
