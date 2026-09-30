@@ -54,6 +54,21 @@ func TestClientsShowOrigin(t *testing.T) {
 	}
 }
 
+func TestClientsConnectGuidedFollowsOrigin(t *testing.T) {
+	// Given a gateway listening off the default address.
+	out := &bytes.Buffer{}
+	root := t.TempDir()
+	// When guided-connecting OpenCode with that --origin base URL.
+	if err := ExecuteWithArgs([]string{"clients", "connect", "opencode", "--root", root, "--origin", "http://127.0.0.1:9000/v1"}, out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	// Then the printed snippet points at that origin, not the default.
+	if strings.Contains(s, ":8317") || !strings.Contains(s, "http://127.0.0.1:9000") {
+		t.Fatalf("guided snippet does not follow --origin:\n%s", s)
+	}
+}
+
 func TestAuthLoginWithoutProviderErrors(t *testing.T) {
 	out := &bytes.Buffer{}
 	err := ExecuteWithArgs([]string{"auth", "login"}, out)

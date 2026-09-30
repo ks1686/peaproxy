@@ -97,6 +97,32 @@ func TestClientConnectOpenCodeIsGuided(t *testing.T) {
 	}
 }
 
+func TestClientConnectGuidedSnippetFollowsOrigin(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"listen port", `{"model":"m"}`, "http://127.0.0.1:9128"},
+		{"requested baseURL", `{"baseURL":"http://127.0.0.1:9129/v1","model":"m"}`, "http://127.0.0.1:9129"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a server listening off the default port.
+			s, _ := listenServer(t, "127.0.0.1", 9128)
+			// When OpenCode is guided-connected.
+			rr := httptest.NewRecorder()
+			s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/admin/clients/opencode/connect", strings.NewReader(tc.body)))
+			var parsed struct {
+				Status  string `json:"status"`
+				Snippet string `json:"snippet"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &parsed); err != nil || parsed.Status != "guided" {
+				t.Fatalf("status %d body %s err %v", rr.Code, rr.Body.String(), err)
+			}
+			// Then the snippet points at that address, not :8317.
+			if strings.Contains(parsed.Snippet, ":8317") || !strings.Contains(parsed.Snippet, tc.want) {
+				t.Fatalf("guided snippet does not follow %s:\n%s", tc.want, parsed.Snippet)
+			}
+		})
+	}
+}
+
 func listenServer(t *testing.T, bind string, port int) (*Server, string) {
 	t.Helper()
 	root := t.TempDir()

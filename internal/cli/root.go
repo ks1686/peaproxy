@@ -480,7 +480,7 @@ func clientsCmd() *cobra.Command {
 			err := layout().Connect(args[0], baseURL, model)
 			if errors.Is(err, clients.ErrGuidedSetup) {
 				if preset, ok := clients.Get(args[0]); ok {
-					_, _ = fmt.Fprint(cmd.OutOrStdout(), preset.Snippet)
+					_, _ = fmt.Fprint(cmd.OutOrStdout(), clients.WithOrigin(preset, baseURL).Snippet)
 				}
 				return nil
 			}

@@ -37,7 +37,7 @@ func (s *Server) handleClientConnect(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, clients.ErrGuidedSetup) {
 			snippet := ""
 			if preset, ok := clients.Get(name); ok {
-				snippet = preset.Snippet
+				snippet = clients.WithOrigin(preset, body.BaseURL).Snippet
 			}
 			writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "guided", "snippet": snippet})
 			return
