@@ -3,6 +3,7 @@ package fslock
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -133,7 +134,16 @@ func TestWriteAtomicCreatesTheDirectory(t *testing.T) {
 
 // Permissions are applied to the temp file before it is visible, so the target
 // never exists with the wrong mode, not even briefly.
+//
+// Windows has no POSIX permission bits: Go synthesises a mode from the
+// read-only attribute, so a 0600 file reports as 0666 there. The chmod before
+// the rename is still what happens, and is what matters on the platforms that
+// have modes; asserting 0600 on NTFS would be asserting something Windows does
+// not store.
 func TestWriteAtomicUsesTheGivenMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows reports synthesised modes, not the POSIX bits asked for")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.json")
 	if err := WriteAtomic(path, []byte("x"), 0o600); err != nil {
