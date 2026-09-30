@@ -154,6 +154,7 @@ func hash(raw []byte) string {
 }
 
 func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error) {
+	baseURL = gatewayURL(name, baseURL)
 	switch name {
 	case "codex":
 		return insertCodex(raw, baseURL, model), nil
@@ -166,6 +167,24 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 	default:
 		return nil, ErrGuidedSetup
 	}
+}
+
+// openAIWire are the clients that append their own path to the base URL, so
+// theirs needs the /v1 and Claude Code's must not have it. --origin accepts
+// either form and this decides which one each client gets.
+var openAIWire = map[string]bool{"codex": true, "continue": true, "pi": true}
+
+// gatewayURL is the address to write into a client config: the bare origin plus
+// the suffix that client's wire needs.
+func gatewayURL(name, origin string) string {
+	base := NormalizeOrigin(origin)
+	if base == "" {
+		return ""
+	}
+	if openAIWire[name] {
+		return base + "/v1"
+	}
+	return base
 }
 
 func removeOwned(name string, raw []byte) ([]byte, error) {
@@ -216,7 +235,7 @@ func insertClaudeCode(raw []byte, baseURL, model string) ([]byte, error) {
 		return nil, err
 	}
 	values := map[string]string{
-		"ANTHROPIC_BASE_URL": strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1"),
+		"ANTHROPIC_BASE_URL": baseURL,
 		"ANTHROPIC_API_KEY":  ownedAPIKey,
 		"ANTHROPIC_MODEL":    model,
 	}
@@ -376,21 +395,22 @@ func objectOrEmpty(body []byte, key, what string) ([]byte, error) {
 	}
 }
 
-// formatJSON re-indents next like the original file when that file was
-// multi-line, keeping its trailing-newline choice and CRLF line endings, and
-// hoists its comments.
+// formatJSON finishes a JSON client config: the writers that produced next
+// already kept the file's own layout, so all that is left is its
+// trailing-newline choice and CRLF line endings, plus hoisting its comments.
+//
+// It deliberately does not re-indent. Re-indenting the whole document is what
+// used to reflow the parts of a file PeaProxy has no business reformatting, a
+// compact array included, and none of it came back the way it went in.
 func formatJSON(raw, next []byte) []byte {
 	out := next
-	indent, multiline := detectIndent(stripJSONC(raw))
-	if multiline {
-		var buf bytes.Buffer
-		if err := json.Indent(&buf, next, "", indent); err == nil {
-			out = buf.Bytes()
-		}
-	}
-	if !multiline || bytes.HasSuffix(raw, []byte("\n")) {
+	if _, multiline := detectIndent(stripJSONC(raw)); !multiline || bytes.HasSuffix(raw, []byte("\n")) {
 		out = append(out, '\n')
 	}
+	// Untouched values keep the file's own line endings, so fold whatever
+	// endings are in out down to \n first and then put the file's back, rather
+	// than doubling the \r on a line that already had one.
+	out = bytes.ReplaceAll(out, []byte("\r\n"), []byte("\n"))
 	if bytes.Contains(raw, []byte("\r\n")) {
 		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
 	}
@@ -443,11 +463,34 @@ func stripJSONC(raw []byte) []byte {
 
 func insertCodex(raw []byte, baseURL, model string) []byte {
 	text := removeCodex(string(raw))
-	block := "\n[model_providers.peaproxy]\nname = \"PeaProxy\"\nbase_url = " + quote(baseURL) + "\nmodel = " + quote(model) + "\n"
-	return []byte(strings.TrimRight(text, "\n") + block)
+	eol := "\n"
+	if strings.Contains(text, "\r\n") {
+		eol = "\r\n"
+	}
+	trailing := strings.HasSuffix(text, eol) || strings.HasSuffix(text, "\n")
+	body := strings.TrimRight(text, "\r\n")
+	block := "[model_providers.peaproxy]" + eol +
+		"name = \"PeaProxy\"" + eol +
+		"base_url = " + quote(baseURL) + eol +
+		"model = " + quote(model) + eol
+	if body == "" {
+		return []byte(block)
+	}
+	// A blank line before the block, so it reads as its own table, and no
+	// trailing newline added to a file that had none.
+	out := body + eol + eol + block
+	if !trailing {
+		out = strings.TrimSuffix(out, eol)
+	}
+	return []byte(out)
 }
 
 func removeCodex(text string) string {
+	// The block may sit at the end of the file, where the split leaves an empty
+	// final element that gets skipped along with it. The file's own
+	// trailing-newline choice is restored afterwards so a round trip gives back
+	// what it started with.
+	trailing := strings.HasSuffix(text, "\n")
 	lines := strings.Split(text, "\n")
 	var out []string
 	skip := false
@@ -455,13 +498,24 @@ func removeCodex(text string) string {
 		trim := strings.TrimSpace(line)
 		if strings.HasPrefix(trim, "[") {
 			skip = trim == "[model_providers.peaproxy]"
+			if skip {
+				// Take the blank line the insertion added with it, so a
+				// connect/disconnect round trip is byte for byte.
+				if n := len(out); n > 0 && strings.TrimSpace(out[n-1]) == "" {
+					out = out[:n-1]
+				}
+			}
 		}
 		if skip {
 			continue
 		}
 		out = append(out, line)
 	}
-	return strings.Join(out, "\n")
+	joined := strings.Join(out, "\n")
+	if trailing && !strings.HasSuffix(joined, "\n") {
+		joined += "\n"
+	}
+	return joined
 }
 
 func insertContinue(raw []byte, baseURL, model string) []byte {

@@ -856,13 +856,14 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	var out []item
 	for _, n := range clients.List() {
 		p, _ := clients.Get(n)
+		p = clients.WithOrigin(p, origin)
 		out = append(out, item{
 			Name:    p.Name,
-			BaseURL: withOrigin(p.BaseURL, origin),
+			BaseURL: p.BaseURL,
 			Cloak:   p.Cloak,
 			Notes:   p.Notes,
-			Snippet: withOrigin(p.Snippet, origin),
-			Verify:  verifyHint(p.Verify, origin),
+			Snippet: p.Snippet,
+			Verify:  p.Verify,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"clients": out})
