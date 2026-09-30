@@ -4,7 +4,8 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"os"
-	"path/filepath"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 // Store is the last-known-good profile document.
@@ -48,23 +49,15 @@ func (s *Store) Apply(pub ed25519.PublicKey, raw, sig []byte) error {
 		return err
 	}
 	if s.path != "" {
-		if err := writeAtomic(s.path, raw); err != nil {
+		// No lock: compat data is written only by the server, which already
+		// serialises it; the unique temp name per write is what keeps two
+		// writers from corrupting the file.
+		if err := fslock.WriteAtomic(s.path, raw, 0o600); err != nil {
 			return err
 		}
 	}
 	s.doc = doc
 	return nil
-}
-
-func writeAtomic(path string, raw []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }
 
 // MustJSON renders a document for tests.
