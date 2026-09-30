@@ -8,14 +8,16 @@ import (
 func TestSanitizeGeminiSchemaTypeListKeepsTypesForUntypedBranches(t *testing.T) {
 	for _, tc := range []struct{ name, in, want string }{
 		{
+			// Each copy keeps the keywords that fit its own type (#55): the
+			// number branch no longer carries minLength.
 			"a sole untyped branch keeps the type list",
 			`{"type":["string","number"],"KEYWORD":[{"minLength":1}]}`,
-			`{"anyOf":[{"minLength":1,"type":"string"},{"minLength":1,"type":"number"}]}`,
+			`{"anyOf":[{"minLength":1,"type":"string"},{"type":"number"}]}`,
 		},
 		{
 			"a sole untyped branch beside null keeps the type list",
 			`{"type":["string","integer","null"],"KEYWORD":[{"maxLength":4},{"type":"null"}]}`,
-			`{"anyOf":[{"maxLength":4,"type":"string"},{"maxLength":4,"type":"integer"}],"nullable":true}`,
+			`{"anyOf":[{"maxLength":4,"type":"string"},{"type":"integer"}],"nullable":true}`,
 		},
 		{
 			"a sole untyped branch lends the array type the parent items",
@@ -33,7 +35,8 @@ func TestSanitizeGeminiSchemaTypeListKeepsTypesForUntypedBranches(t *testing.T) 
 				// Given a type list whose only fitting branches carry no type.
 				// When reducing it to the Gemini Schema proto.
 				got := sanitizedSchema(t, strings.ReplaceAll(tc.in, "KEYWORD", keyword))
-				// Then every listed type survives, each with the branch's keywords.
+				// Then every listed type survives, each with the keywords that
+				// fit it.
 				if got != tc.want {
 					t.Fatalf("got  %s\nwant %s", got, tc.want)
 				}

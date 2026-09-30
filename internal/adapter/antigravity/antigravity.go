@@ -1241,6 +1241,60 @@ func listedBranches(out map[string]any, types, anyOf []any) []any {
 	return kept
 }
 
+// keywordsByType are the JSON Schema keywords that constrain one type and only
+// make sense on it. A shared branch carrying several of these -- as an
+// untyped anyOf of a string and a number will -- cannot be copied to every
+// per-type branch as it stands, or the number branch ends up with minLength and
+// the string branch with minimum (#55).
+//
+// Anything not listed here is shared: enum, const, description, nullable,
+// title, default, and any keyword we have not enumerated. Dropping a constraint
+// we did not think of would silently widen a schema, which is worse than
+// carrying a redundant one.
+var keywordsByType = map[string]map[string]bool{
+	"string":  keywordSet("minLength", "maxLength", "pattern", "format"),
+	"number":  keywordSet("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "format"),
+	"integer": keywordSet("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "format"),
+	"array":   keywordSet("items", "minItems", "maxItems", "uniqueItems"),
+	"object":  keywordSet("properties", "required", "additionalProperties", "minProperties", "maxProperties"),
+}
+
+// keywordFitsType reports whether key belongs on a branch of the given type.
+// Gemini accepts `format` on a number as well as a string -- int32, double --
+// which is why format is listed under both.
+func keywordFitsType(key, typ string) bool {
+	typed, ok := keywordsByType[typ]
+	if !ok {
+		return true
+	}
+	// A keyword another type owns is not this type's to carry, but it is also
+	// not this type's to delete if it is shared with something that applies:
+	// the caller copies into an independent branch, so keeping it here would
+	// be wrong, and dropping it here would lose it. It stays only if no other
+	// listed type claims it.
+	if typed[key] {
+		return true
+	}
+	for _, other := range schemaTypes {
+		if other != typ && keywordsByType[other][key] {
+			return false
+		}
+	}
+	return true
+}
+
+func keywordSet(keys ...string) map[string]bool {
+	m := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		m[k] = true
+	}
+	return m
+}
+
+// schemaTypes is the set of JSON Schema type names the filter knows about.
+// Not called "types": typedCopies has a parameter by that name.
+var schemaTypes = []string{"string", "number", "integer", "array", "object"}
+
 // typedCopies replaces each untyped branch with one copy per listed type,
 // the array copy taking the parent's items when it has none. Null branches
 // pass through.
@@ -1255,6 +1309,11 @@ func typedCopies(branches, types []any, items any, hasItems bool) []any {
 		for _, t := range types {
 			branch := map[string]any{}
 			for k, v := range m {
+				// The listed types come from the branch itself, so they are
+				// strings; anything else is carried as it was.
+				if name, ok := t.(string); ok && !keywordFitsType(k, name) {
+					continue
+				}
 				branch[k] = v
 			}
 			branch["type"] = t
