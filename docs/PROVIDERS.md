@@ -55,7 +55,8 @@ Antigravity details:
 
 - Tool calling works both directions: OpenAI `tools` become `functionDeclarations`, and Gemini `functionCall` parts come back as `tool_calls` (stream and non-stream).
 - Tool schemas are reduced to the Gemini Schema proto. Unsupported JSON Schema keywords are dropped, a type list becomes `anyOf` branches, a `null` branch folds into `nullable`, tuple `items` become one schema or an `anyOf` of the distinct elements, and non-string `enum`s are dropped.
-- Gemini safety stops (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`) finish as `content_filter`; `MAX_TOKENS` finishes as `length`.
+- A type list next to `anyOf`/`oneOf` is intersected with the branches: only untyped branches and branches whose type is listed are kept (an `integer` branch fits `number`), a `null` branch is kept only when `null` is listed, and the old union is used only when no non-null branch fits. An array schema without its own `items` takes the `items` of every `anyOf` branch that has them (one schema, or an `anyOf` of the distinct ones).
+- Gemini safety stops (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`) and a blocked prompt (`promptFeedback.blockReason` with no candidates) finish as `content_filter`; `MAX_TOKENS` finishes as `length`.
 - `gemini-3.1-pro-high` and `gemini-3-pro-high` are listed by `fetchAvailableModels` but rejected by `v1internal`; both are sent upstream as `gemini-pro-agent`. The `gemini-3.1-pro-high` mapping was not live-verified on the v2.0.7 binary.
 - A 429, or a 503 "No capacity available", cools only that model on the account. Other Gemini models stay eligible.
 - The reset hint in the error body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "Resets in X") sets the cooldown length, clamped to 1s–1h.

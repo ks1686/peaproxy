@@ -6,7 +6,7 @@ Copy-ready client configs. Product status: [PLAN.md](PLAN.md), [V1.md](V1.md). A
 
 `peaproxy clients verify <name>` GETs `http://127.0.0.1:8317/v1/models` (serve must be running). Add `--chat` to POST a tiny completion on the preset’s wire (`/v1/chat/completions` for Cursor/OpenCode/Continue/Cline/Amp/Droid, `/v1/messages` for `claude-code`, `/v1/responses` for `codex`). `pi --chat` hits **both** OpenAI chat and Anthropic messages. `--origin` overrides the gateway URL.
 
-Default gateway: `http://127.0.0.1:8317`. Catalog pin/rename/hide, request-log tail, and richer health also live on the CLI (`peaproxy catalog pin|rename|hide`, `peaproxy requests tail`, `peaproxy health` matching `GET /admin/health` including quota remaining; `peaproxy accounts add <preset>` for Jan/GPT4All/SambaNova/Workers AI).
+Default gateway: `http://127.0.0.1:8317`. Connect from the web UI or admin API writes the address the running server listens on, and `GET /admin/clients` snippets and verify hints use that port (the hint adds `--origin` off the default). The CLI's `clients show` always prints the default address; `clients connect` and `verify` default to it too, so pass `--origin` when the server runs elsewhere. Catalog pin/rename/hide, request-log tail, and richer health also live on the CLI (`peaproxy catalog pin|rename|hide`, `peaproxy requests tail`, `peaproxy health` matching `GET /admin/health` including quota remaining; `peaproxy accounts add <preset>` for Jan/GPT4All/SambaNova/Workers AI).
 
 **Harness cloak defaults stay off.** Unlike CLIProxyAPI (#6120), PeaProxy does **not** inject Claude-Code thinking / `clear_thinking` into client presets (Pi, Cursor, OpenCode, …). Claude Code may enable cloak itself (`cloak: opt-in` on that preset only).
 
