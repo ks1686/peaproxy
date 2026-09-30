@@ -307,12 +307,13 @@ func SaveMerged(path string, base, mine Config) (Config, error) {
 	}
 	defer unlock()
 	var disk Config
+	var unreadable unreadableSecrets
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		disk = base
-	} else if disk, err = loadLocked(path); err != nil {
+	} else if disk, unreadable, err = loadReportingLocked(path); err != nil {
 		return Config{}, err
 	}
-	merged := Merge(base, disk, mine)
+	merged := merge(base, disk, mine, unreadable)
 	if err := saveLocked(path, merged); err != nil {
 		return Config{}, err
 	}
@@ -404,15 +405,24 @@ func Load(path string) (Config, error) {
 	return loadLocked(path)
 }
 
+// loadLocked is load under config.lock, with the hydration report discarded.
 func loadLocked(path string) (Config, error) {
+	cfg, _, err := loadReportingLocked(path)
+	return cfg, err
+}
+
+// loadReportingLocked also returns which of the account secrets could not be
+// read back. SaveMerged needs that to tell a corrupt secret, which is worth
+// rescuing from memory, from one the user deleted, which is not (#54).
+func loadReportingLocked(path string) (Config, unreadableSecrets, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, err
+		return Config{}, nil, err
 	}
 	cfg := Default()
 	cfg.Providers = nil
 	if err := yaml.Unmarshal(b, &cfg); err != nil {
-		return Config{}, err
+		return Config{}, nil, err
 	}
 	if cfg.Bind == "" {
 		cfg.Bind = DefaultBind
@@ -423,16 +433,24 @@ func loadLocked(path string) (Config, error) {
 	if cfg.SchemaVersion == 0 {
 		cfg.SchemaVersion = SchemaVersion
 	}
-	if err := hydrateSecrets(path, &cfg); err != nil {
-		return Config{}, err
+	unreadable, err := hydrateSecretsReporting(path, &cfg)
+	if err != nil {
+		return Config{}, nil, err
 	}
-	return cfg, cfg.Validate()
+	if err := cfg.Validate(); err != nil {
+		return Config{}, nil, err
+	}
+	return cfg, unreadable, nil
 }
 
 // Save writes YAML with mode 0600. OAuth tokens and inline API keys go to the
 // secret store (OS keychain or encrypted file); YAML keeps account metadata.
-// It overwrites the whole file; writers that may race another process use
-// Update or SaveMerged instead.
+//
+// Save is for tests and for writing a config that is known to be the whole
+// truth. It overwrites the file, so a process holding a config it loaded
+// earlier can silently drop another process's accounts, secrets or catalog
+// edits. Production writers use Update (auth login) or SaveMerged (the server),
+// which reconcile against what is on disk under config.lock (#59).
 func Save(path string, cfg Config) error {
 	unlock, err := lockConfig(path)
 	if err != nil {

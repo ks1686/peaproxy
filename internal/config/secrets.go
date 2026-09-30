@@ -35,31 +35,76 @@ type secretWriter interface {
 }
 
 func hydrateSecrets(path string, cfg *Config) error {
+	_, err := hydrateSecretsReporting(path, cfg)
+	return err
+}
+
+// hydrateSecretsReporting is hydrateSecrets plus the set of secrets it could not
+// read back. SaveMerged needs that set to tell a corrupt secret apart from one
+// the user deliberately deleted (#54).
+func hydrateSecretsReporting(path string, cfg *Config) (unreadableSecrets, error) {
 	store, err := secretstore.Open(configDir(path))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return hydrateFrom(store, cfg, os.Stderr)
+	return hydrateFromReporting(store, cfg, os.Stderr)
+}
+
+// secretKind is the secretstore.Kind this package stores under, named locally so
+// a secretRef reads without an import in signatures.
+type secretKind = secretstore.Kind
+
+const (
+	secretAPIKey secretKind = secretstore.KindAPIKey
+	secretOAuth  secretKind = secretstore.KindOAuth
+)
+
+// secretRef is one account's one stored secret.
+type secretRef struct {
+	id   string
+	kind secretKind
+}
+
+// unreadableSecrets is the set of secrets a load could not decrypt. It is
+// deliberately not "the secrets that were absent": a secret the user deleted is
+// absent too, and must not be treated as something to rescue from memory.
+type unreadableSecrets []secretRef
+
+func (u unreadableSecrets) has(ref secretRef) bool {
+	for _, r := range u {
+		if r == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // hydrateFrom treats one account's unreadable or corrupt secret as absent so
 // only that account needs a re-login; backend failures still abort the load.
 func hydrateFrom(store secretReader, cfg *Config, warn io.Writer) error {
+	_, err := hydrateFromReporting(store, cfg, warn)
+	return err
+}
+
+// hydrateFromReporting is hydrateFrom plus a record of which secrets were
+// unreadable rather than simply absent.
+func hydrateFromReporting(store secretReader, cfg *Config, warn io.Writer) (unreadableSecrets, error) {
+	var unreadable unreadableSecrets
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		if p.APIKey == "" {
-			v, ok, err := readSecret(store, p.ID, secretstore.KindAPIKey, warn)
+			v, ok, err := readSecret(store, p.ID, secretstore.KindAPIKey, warn, &unreadable)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if ok {
 				p.APIKey = v
 			}
 		}
 		if p.OAuth == nil || p.OAuth.AccessToken == "" {
-			v, ok, err := readSecret(store, p.ID, secretstore.KindOAuth, warn)
+			v, ok, err := readSecret(store, p.ID, secretstore.KindOAuth, warn, &unreadable)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if !ok {
 				continue
@@ -67,21 +112,23 @@ func hydrateFrom(store secretReader, cfg *Config, warn io.Writer) error {
 			var tok OAuthToken
 			if jerr := json.Unmarshal([]byte(v), &tok); jerr != nil {
 				warnUnreadable(warn, p.ID, secretstore.KindOAuth)
+				unreadable = append(unreadable, secretRef{p.ID, secretOAuth})
 				continue
 			}
 			p.OAuth = mergeOAuth(p.OAuth, &tok)
 		}
 	}
-	return nil
+	return unreadable, nil
 }
 
-func readSecret(store secretReader, id string, kind secretstore.Kind, warn io.Writer) (string, bool, error) {
+func readSecret(store secretReader, id string, kind secretstore.Kind, warn io.Writer, unreadable *unreadableSecrets) (string, bool, error) {
 	v, err := store.Get(id, kind)
 	switch {
 	case err == nil:
 		return v, true, nil
 	case errors.Is(err, secretstore.ErrUnreadable):
 		warnUnreadable(warn, id, kind)
+		*unreadable = append(*unreadable, secretRef{id, kind})
 		return "", false, nil
 	case errors.Is(err, secretstore.ErrNotFound):
 		return "", false, nil

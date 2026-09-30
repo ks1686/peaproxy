@@ -252,7 +252,9 @@ func TestPublicEntryPointsLockOnce(t *testing.T) {
 }
 
 // An account's secret that could not be read back from disk during a merged
-// save must not replace the live secret of an account this writer left alone.
+// save must not replace the live secret of an account this writer left alone --
+// but only when it really was unreadable (#54). A secret that is merely absent
+// from disk was removed on purpose, and stays removed.
 func TestMergeKeepsSecretDiskCopyLacks(t *testing.T) {
 	withKey := Provider{ID: "k", Adapter: "native", Tier: "paid", APIKey: "sk-k"}
 	withTok := prov("o", "tok-o")
@@ -266,13 +268,38 @@ func TestMergeKeepsSecretDiskCopyLacks(t *testing.T) {
 	disk.Providers[0].APIKey = ""
 	disk.Providers[1].OAuth = &OAuthToken{Email: "o@x", ExpiresAt: "2026-09-29T11:00:00Z", Extra: map[string]string{"project": "p2"}}
 
-	got := Merge(base, disk, mine).Providers
+	unreadable := unreadableSecrets{{"k", secretAPIKey}, {"o", secretOAuth}}
+	got := merge(base, disk, mine, unreadable).Providers
 	if got[0].APIKey != "sk-k" {
 		t.Fatalf("api key dropped: %#v", got[0])
 	}
 	want := &OAuthToken{AccessToken: "tok-o", RefreshToken: "ref-o", ExpiresAt: "2026-09-29T10:00:00Z", Email: "o@x", Extra: map[string]string{"dca_token": "dca", "project": "p2"}}
 	if !reflect.DeepEqual(got[1].OAuth, want) {
 		t.Fatalf("oauth %#v, want %#v", got[1].OAuth, want)
+	}
+}
+
+// The same merge with nothing reported unreadable: disk's token-less copy wins,
+// and the server's token is not written back.
+func TestMergeDoesNotResurrectADeletedSecret(t *testing.T) {
+	withKey := Provider{ID: "k", Adapter: "native", APIKey: "sk-k"}
+	withTok := prov("o", "tok-o")
+	base := Default()
+	base.Providers = []Provider{withKey, withTok}
+	mine := Clone(base)
+	disk := Clone(base)
+	disk.Providers[0].APIKey = ""
+	disk.Providers[1].OAuth = &OAuthToken{Email: "o@x"}
+
+	got := Merge(base, disk, mine).Providers
+	if got[0].APIKey != "" {
+		t.Errorf("an api key the user deleted came back: %q", got[0].APIKey)
+	}
+	if oauthHasSecret(got[1].OAuth) {
+		t.Errorf("a deleted oauth token came back: %#v", got[1].OAuth)
+	}
+	if got[1].OAuth == nil || got[1].OAuth.Email != "o@x" {
+		t.Errorf("the public fields should still come from disk: %#v", got[1].OAuth)
 	}
 }
 
