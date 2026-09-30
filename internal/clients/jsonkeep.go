@@ -51,7 +51,7 @@ func deleteJSONKey(body []byte, key string) ([]byte, error) {
 
 // rewriteJSONKey compacts body and replaces the first occurrence of key with
 // replacement (dropping any duplicates), appending it when key is absent. A
-// nil replacement deletes key.
+// nil replacement deletes key. key must be a plain ASCII JSON name; it is not escaped.
 func rewriteJSONKey(body []byte, key string, replacement []byte) ([]byte, error) {
 	if len(body) == 0 || body[0] != '{' {
 		return nil, errorsNewJSON()

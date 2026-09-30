@@ -257,19 +257,20 @@ func TestMergeKeepsSecretDiskCopyLacks(t *testing.T) {
 	withKey := Provider{ID: "k", Adapter: "native", Tier: "paid", APIKey: "sk-k"}
 	withTok := prov("o", "tok-o")
 	withTok.OAuth.RefreshToken = "ref-o"
+	withTok.OAuth.ExpiresAt = "2026-09-29T10:00:00Z"
 	withTok.OAuth.Extra = map[string]string{"dca_token": "dca", "project": "p1"}
 	base := Default()
 	base.Providers = []Provider{withKey, withTok}
 	mine := Clone(base)
 	disk := Clone(base)
 	disk.Providers[0].APIKey = ""
-	disk.Providers[1].OAuth = &OAuthToken{Email: "o@x", Extra: map[string]string{"project": "p2"}}
+	disk.Providers[1].OAuth = &OAuthToken{Email: "o@x", ExpiresAt: "2026-09-29T11:00:00Z", Extra: map[string]string{"project": "p2"}}
 
 	got := Merge(base, disk, mine).Providers
 	if got[0].APIKey != "sk-k" {
 		t.Fatalf("api key dropped: %#v", got[0])
 	}
-	want := &OAuthToken{AccessToken: "tok-o", RefreshToken: "ref-o", Email: "o@x", Extra: map[string]string{"dca_token": "dca", "project": "p2"}}
+	want := &OAuthToken{AccessToken: "tok-o", RefreshToken: "ref-o", ExpiresAt: "2026-09-29T10:00:00Z", Email: "o@x", Extra: map[string]string{"dca_token": "dca", "project": "p2"}}
 	if !reflect.DeepEqual(got[1].OAuth, want) {
 		t.Fatalf("oauth %#v, want %#v", got[1].OAuth, want)
 	}

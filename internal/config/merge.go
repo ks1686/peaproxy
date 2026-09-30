@@ -77,8 +77,9 @@ func mergeProviders(base, disk, mine []Provider) []Provider {
 // keepSecrets fills disk's missing secrets from mine. Loading disk treats an
 // unreadable stored secret as absent, and adopting that copy would drop a
 // live token until the next load. The secrets are APIKey and, as a set, the
-// OAuth AccessToken, RefreshToken, IDToken and secret Extra keys; disk's
-// public OAuth metadata is kept.
+// OAuth AccessToken, RefreshToken, IDToken and secret Extra keys, taken with
+// the ExpiresAt that belongs to them; disk's identity fields (Email,
+// AccountID, PlanType, public Extra) are kept.
 func keepSecrets(disk, mine Provider) Provider {
 	if disk.APIKey == "" {
 		disk.APIKey = mine.APIKey
@@ -91,6 +92,7 @@ func keepSecrets(disk, mine Provider) Provider {
 		tok = *disk.OAuth
 	}
 	tok.AccessToken, tok.RefreshToken, tok.IDToken = mine.OAuth.AccessToken, mine.OAuth.RefreshToken, mine.OAuth.IDToken
+	tok.ExpiresAt = mine.OAuth.ExpiresAt
 	extra := make(map[string]string, len(tok.Extra)+len(mine.OAuth.Extra))
 	for k, v := range tok.Extra {
 		extra[k] = v
