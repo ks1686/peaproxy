@@ -57,8 +57,10 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	models := catalog.AllAnnotated(append([]catalog.Model(nil), g.models...), g.queryLocked())
 	pinned, _ := g.liveAffinityLocked(session, routeName, now)
 	cool := make(map[string]Cooldown, len(g.cool))
-	for id, c := range g.cool {
-		if now.Before(c.Until) {
+	for id, slots := range g.cool {
+		// Any active slot means the account is out; a route that needs a model
+		// this account happens to be cooling is still handled further down.
+		if c, ok := slots.anyActive(now); ok {
 			cool[id] = c
 		}
 	}

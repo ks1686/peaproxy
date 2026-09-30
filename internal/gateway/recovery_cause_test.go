@@ -15,7 +15,7 @@ func TestCooldownErrorNamesRecoveringAccounts(t *testing.T) {
 	a, b := 0, 0
 	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
 	for _, id := range []string{"acct-a", "acct-b"} {
-		gw.cool[id] = Cooldown{AccountID: id, Until: time.Now().Add(-time.Millisecond)}
+		gw.cool[id] = cooldownSlots{wide: Cooldown{AccountID: id, Until: time.Now().Add(-time.Millisecond)}}
 		if !gw.admission.TryHalfOpen(id) {
 			t.Fatalf("could not reserve probe for %s", id)
 		}
