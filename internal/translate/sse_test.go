@@ -2,6 +2,7 @@ package translate
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -106,6 +107,80 @@ func TestClaudeSSEToOpenAIToolUseEmitsFinishReasonToolCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertChatSSEFinish(t, out.String(), "tool_calls")
+}
+
+func responsesTerminalEvent(t *testing.T, finish string) (event string, response map[string]any, sse string) {
+	t.Helper()
+	// The last chunk carries only finish_reason with an empty delta.
+	in := strings.Join([]string{
+		`data: {"id":"c1","model":"m","choices":[{"delta":{"content":"partial"}}]}`,
+		``,
+		`data: {"choices":[{"delta":{},"finish_reason":"` + finish + `"}]}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n")
+	var out bytes.Buffer
+	if err := OpenAISSEToResponses(strings.NewReader(in), &out, "m"); err != nil {
+		t.Fatal(err)
+	}
+	sse = out.String()
+	blocks := strings.Split(strings.TrimSpace(sse), "\n\n")
+	last := strings.Split(blocks[len(blocks)-1], "\n")
+	if len(last) != 2 || !strings.HasPrefix(last[0], "event: ") || !strings.HasPrefix(last[1], "data: ") {
+		t.Fatalf("malformed last event: %q", sse)
+	}
+	var data struct {
+		Type     string         `json:"type"`
+		Response map[string]any `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(last[1], "data: ")), &data); err != nil {
+		t.Fatal(err)
+	}
+	event = strings.TrimPrefix(last[0], "event: ")
+	if data.Type != event {
+		t.Fatalf("event %q has type %q", event, data.Type)
+	}
+	return event, data.Response, sse
+}
+
+func TestOpenAISSEToResponsesLengthEmitsIncomplete(t *testing.T) {
+	// Given a chat stream that ends on the token limit.
+	// When converting it to Responses SSE.
+	event, response, sse := responsesTerminalEvent(t, "length")
+	// Then the terminal event is response.incomplete for max_output_tokens.
+	details, _ := response["incomplete_details"].(map[string]any)
+	if event != "response.incomplete" || response["status"] != "incomplete" || details["reason"] != "max_output_tokens" {
+		t.Fatalf("event=%q response=%v", event, response)
+	}
+	if strings.Contains(sse, "response.completed") {
+		t.Fatalf("response.completed emitted: %s", sse)
+	}
+}
+
+func TestOpenAISSEToResponsesContentFilterEmitsIncomplete(t *testing.T) {
+	// Given a chat stream the upstream stopped with a content filter.
+	// When converting it to Responses SSE.
+	event, response, sse := responsesTerminalEvent(t, "content_filter")
+	// Then the terminal event is response.incomplete for content_filter.
+	details, _ := response["incomplete_details"].(map[string]any)
+	if event != "response.incomplete" || response["status"] != "incomplete" || details["reason"] != "content_filter" {
+		t.Fatalf("event=%q response=%v", event, response)
+	}
+	if strings.Contains(sse, "response.completed") {
+		t.Fatalf("response.completed emitted: %s", sse)
+	}
+}
+
+func TestOpenAISSEToResponsesToolCallsFinishCompleted(t *testing.T) {
+	// Given a chat stream that ends on a tool call.
+	// When converting it to Responses SSE.
+	event, response, _ := responsesTerminalEvent(t, "tool_calls")
+	// Then the terminal event is response.completed with no incomplete_details.
+	if _, has := response["incomplete_details"]; event != "response.completed" || response["status"] != "completed" || has {
+		t.Fatalf("event=%q response=%v", event, response)
+	}
 }
 
 func sseDataPayloads(s string) []string {

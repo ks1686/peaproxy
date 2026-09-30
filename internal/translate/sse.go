@@ -532,7 +532,8 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 // OpenAISSEToResponses converts chat.completion.chunk SSE into Responses API SSE.
 // Text deltas become response.output_text.delta. Chat tool_calls are mapped to
 // function_call output items on response.completed (plus argument deltas when
-// present). This does not execute tools or invent tool results.
+// present); a length or content_filter finish ends on response.incomplete
+// instead. This does not execute tools or invent tool results.
 func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	started := false
 	id := "resp_peaproxy"
@@ -550,6 +551,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	calls := map[int]*pendingCall{}
 	var order []int
 	var carried []responsesOutMsg
+	lastFinish := ""
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -576,6 +578,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 						} `json:"function"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -612,6 +615,9 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if f := chunk.Choices[0].FinishReason; f != "" {
+			lastFinish = f
 		}
 		delta := chunk.Choices[0].Delta
 		if len(delta.ReasoningOpaque) > 0 {
@@ -730,25 +736,31 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			}},
 		})
 	}
-	completed := struct {
+	status, details := responsesStatus(lastFinish)
+	event := "response.completed"
+	if status == "incomplete" {
+		event = "response.incomplete"
+	}
+	terminal := struct {
 		Type     string          `json:"type"`
 		Response responsesOutput `json:"response"`
 	}{
-		Type: "response.completed",
+		Type: event,
 		Response: responsesOutput{
-			ID:         id,
-			Object:     "response",
-			Status:     "completed",
-			Model:      model,
-			Output:     output,
-			OutputText: text.String(),
+			ID:                id,
+			Object:            "response",
+			Status:            status,
+			IncompleteDetails: details,
+			Model:             model,
+			Output:            output,
+			OutputText:        text.String(),
 		},
 	}
-	raw, err := json.Marshal(completed)
+	raw, err := json.Marshal(terminal)
 	if err != nil {
 		return err
 	}
-	return writeEvent("response.completed", string(raw))
+	return writeEvent(event, string(raw))
 }
 
 func jsonString(s string) string {
