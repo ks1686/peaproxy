@@ -119,6 +119,9 @@ func (l Layout) Disconnect(name string) error {
 	if err != nil {
 		return err
 	}
+	if bytes.Equal(updated, raw) {
+		return nil
+	}
 	return writeAtomic(path, updated)
 }
 
@@ -229,7 +232,7 @@ func insertClaudeCode(raw []byte, baseURL, model string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
+	return formatJSON(raw, next), nil
 }
 
 func removeClaudeCode(raw []byte) ([]byte, error) {
@@ -240,12 +243,18 @@ func removeClaudeCode(raw []byte) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("client config is not json")
 	}
+	_, legacy := getJSONKey(body, legacyOwnedKey)
+	env, ok := getJSONKey(body, "env")
+	key, _ := getJSONKey(env, "ANTHROPIC_API_KEY")
+	owned := ok && string(key) == `"`+ownedAPIKey+`"`
+	if !legacy && !owned {
+		return raw, nil
+	}
 	body, err := deleteJSONKey(body, legacyOwnedKey)
 	if err != nil {
 		return nil, err
 	}
-	env, ok := getJSONKey(body, "env")
-	if key, _ := getJSONKey(env, "ANTHROPIC_API_KEY"); ok && string(key) == `"`+ownedAPIKey+`"` {
+	if owned {
 		for _, k := range claudeCodeEnv {
 			if env, err = deleteJSONKey(env, k); err != nil {
 				return nil, err
@@ -260,7 +269,7 @@ func removeClaudeCode(raw []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return append(commentPrefix(raw), append(body, '\n')...), nil
+	return formatJSON(raw, body), nil
 }
 
 func insertPi(raw []byte, baseURL string) ([]byte, error) {
@@ -299,7 +308,7 @@ func insertPi(raw []byte, baseURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
+	return formatJSON(raw, next), nil
 }
 
 func removePi(raw []byte) ([]byte, error) {
@@ -314,6 +323,7 @@ func removePi(raw []byte) ([]byte, error) {
 	if !ok {
 		return raw, nil
 	}
+	changed := false
 	for _, o := range piOverrides {
 		entry, ok := getJSONKey(providers, o.provider)
 		if !ok {
@@ -323,6 +333,7 @@ func removePi(raw []byte) ([]byte, error) {
 		if string(key) != `"`+ownedAPIKey+`"` {
 			continue
 		}
+		changed = true
 		var err error
 		if entry, err = deleteJSONKey(entry, "baseUrl"); err != nil {
 			return nil, err
@@ -339,11 +350,31 @@ func removePi(raw []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if !changed {
+		return raw, nil
+	}
 	next, err := upsertJSONKey(body, "providers", json.RawMessage(providers))
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
+	return formatJSON(raw, next), nil
+}
+
+// formatJSON re-indents next like the original file when that file was
+// multi-line, keeping its trailing-newline choice, and hoists its comments.
+func formatJSON(raw, next []byte) []byte {
+	out := next
+	indent, multiline := detectIndent(stripJSONC(raw))
+	if multiline {
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, next, "", indent); err == nil {
+			out = buf.Bytes()
+		}
+	}
+	if !multiline || bytes.HasSuffix(raw, []byte("\n")) {
+		out = append(out, '\n')
+	}
+	return append(commentPrefix(raw), out...)
 }
 
 func commentPrefix(raw []byte) []byte {
@@ -367,11 +398,14 @@ func removeJSON(raw []byte) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("client config is not json")
 	}
+	if _, ok := getJSONKey(body, legacyOwnedKey); !ok {
+		return raw, nil
+	}
 	next, err := deleteJSONKey(body, legacyOwnedKey)
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
+	return formatJSON(raw, next), nil
 }
 
 func stripJSONC(raw []byte) []byte {

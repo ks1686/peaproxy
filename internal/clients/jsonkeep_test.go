@@ -20,3 +20,21 @@ func TestUpsertJSONKeyDoesNotAliasSourceCapacity(t *testing.T) {
 		t.Fatalf("got %s want %s", body, want)
 	}
 }
+
+func TestDetectIndent(t *testing.T) {
+	for _, tc := range []struct {
+		body      string
+		indent    string
+		multiline bool
+	}{
+		{"{\n  \"a\": 1\n}", "  ", true},
+		{"{\n    \"a\": {\n        \"b\": 1\n    }\n}", "    ", true},
+		{"{\n\t\"a\": 1\n}", "\t", true},
+		{`{"a": 1}`, "", false},
+	} {
+		indent, multiline := detectIndent([]byte(tc.body))
+		if indent != tc.indent || multiline != tc.multiline {
+			t.Errorf("detectIndent(%q) = %q, %v; want %q, %v", tc.body, indent, multiline, tc.indent, tc.multiline)
+		}
+	}
+}

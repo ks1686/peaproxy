@@ -184,3 +184,20 @@ func scanValue(b []byte, i int) int {
 		return i
 	}
 }
+
+// detectIndent reports the indent unit of a JSON object body: the leading
+// whitespace of the first indented line after the opening brace. multiline is
+// false for single-line bodies, which are written back compact.
+func detectIndent(body []byte) (indent string, multiline bool) {
+	body = bytes.TrimSpace(body)
+	if bytes.IndexByte(body, '\n') < 0 {
+		return "", false
+	}
+	for _, line := range bytes.Split(body, []byte("\n"))[1:] {
+		trimmed := bytes.TrimLeft(line, " \t")
+		if len(trimmed) != 0 && len(trimmed) != len(line) {
+			return string(line[:len(line)-len(trimmed)]), true
+		}
+	}
+	return "", true
+}

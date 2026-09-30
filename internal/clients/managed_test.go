@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConnectPreservesJSONKeyOrder(t *testing.T) {
@@ -229,7 +230,7 @@ func TestPiConnectMergesIntoUserProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(got)
-	if strings.Count(text, `"apiKey":"peaproxy"`) != 2 {
+	if strings.Count(text, `"apiKey": "peaproxy"`) != 2 {
 		t.Fatalf("connect must be idempotent and own exactly anthropic+openai: %s", text)
 	}
 	if !strings.Contains(text, "qwen2.5-coder:7b") || !strings.Contains(text, `"modelOverrides"`) {
@@ -452,5 +453,122 @@ func TestCodexConnectRejectsInjectingModel(t *testing.T) {
 	text := string(insertCodex(nil, "http://127.0.0.1:8317/v1", `m\"`+"\nmodel = \"evil"))
 	if n := strings.Count(text, "\nmodel = "); n != 1 {
 		t.Fatalf("model lines = %d, want 1:\n%s", n, text)
+	}
+}
+
+func writeFixture(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertFile(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestClaudeCodeConnectPreservesIndent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	original := "{\n  \"theme\": \"dark\",\n  \"env\": {\n    \"FOO\": \"1\"\n  }\n}\n"
+	writeFixture(t, path, original)
+	layout := Layout{Root: root}
+	if err := layout.Connect("claude-code", "http://127.0.0.1:8317/v1", "m"); err != nil {
+		t.Fatal(err)
+	}
+	expected := struct {
+		Theme string `json:"theme"`
+		Env   struct {
+			FOO     string `json:"FOO"`
+			BaseURL string `json:"ANTHROPIC_BASE_URL"`
+			APIKey  string `json:"ANTHROPIC_API_KEY"`
+			Model   string `json:"ANTHROPIC_MODEL"`
+		} `json:"env"`
+	}{Theme: "dark"}
+	expected.Env.FOO = "1"
+	expected.Env.BaseURL = "http://127.0.0.1:8317"
+	expected.Env.APIKey = "peaproxy"
+	expected.Env.Model = "m"
+	want, err := json.MarshalIndent(expected, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, path, string(want)+"\n")
+	if err := layout.Disconnect("claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, path, original)
+}
+
+func TestPiConnectPreservesIndent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".pi", "agent", "models.json")
+	original := "{\n\t\"providers\": {\n\t\t\"ollama\": {\n\t\t\t\"baseUrl\": \"http://localhost:11434/v1\",\n\t\t\t\"apiKey\": \"ollama\"\n\t\t}\n\t}\n}"
+	writeFixture(t, path, original)
+	layout := Layout{Root: root}
+	if err := layout.Connect("pi", "http://127.0.0.1:8317/v1", ""); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n\t\"providers\": {\n\t\t\"ollama\": {\n\t\t\t\"baseUrl\": \"http://localhost:11434/v1\",\n\t\t\t\"apiKey\": \"ollama\"\n\t\t},\n" +
+		"\t\t\"anthropic\": {\n\t\t\t\"baseUrl\": \"http://127.0.0.1:8317\",\n\t\t\t\"apiKey\": \"peaproxy\"\n\t\t},\n" +
+		"\t\t\"openai\": {\n\t\t\t\"baseUrl\": \"http://127.0.0.1:8317/v1\",\n\t\t\t\"apiKey\": \"peaproxy\"\n\t\t}\n\t}\n}"
+	assertFile(t, path, want)
+	if err := layout.Disconnect("pi"); err != nil {
+		t.Fatal(err)
+	}
+	assertFile(t, path, original)
+}
+
+func TestDisconnectWithoutOwnedKeysIsNoop(t *testing.T) {
+	root := t.TempDir()
+	layout := Layout{Root: root}
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	for name, text := range map[string]string{
+		"claude-code": "{\n    \"theme\": \"dark\",\n    \"env\": {\"FOO\": \"1\"}\n}\n",
+		"opencode":    "{\n  \"theme\":   \"dark\"\n}",
+		"pi":          "{\"providers\": {\"ollama\": {\"apiKey\": \"ollama\"}}}",
+	} {
+		path := layout.path(name)
+		writeFixture(t, path, text)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+		if err := layout.Disconnect(name); err != nil {
+			t.Fatal(name, err)
+		}
+		assertFile(t, path, text)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(old) {
+			t.Fatalf("%s: disconnect rewrote a file it does not own (mtime %v)", name, info.ModTime())
+		}
+	}
+}
+
+func TestMidFileCommentIsHoistedNotLost(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".claude", "settings.json")
+	writeFixture(t, path, "{\n  // why dark\n  \"theme\": \"dark\"\n}\n")
+	if err := (Layout{Root: root}).Connect("claude-code", "http://127.0.0.1:8317/v1", ""); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(got), "  // why dark\n{\n") {
+		t.Fatalf("comment not hoisted above the object: %s", got)
 	}
 }
