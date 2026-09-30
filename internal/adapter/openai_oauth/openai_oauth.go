@@ -499,7 +499,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, err
 	}
 	if raw == nil {
-		raw, err = chatToResponsesFromMessages(req.Model, req.Messages, true)
+		raw, err = chatToResponsesFromMessages(req.Model, req.Messages, chatCarry{}, true)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
@@ -528,7 +528,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 		return err
 	}
 	if raw == nil {
-		raw, err = chatToResponsesFromMessages(req.Model, req.Messages, true)
+		raw, err = chatToResponsesFromMessages(req.Model, req.Messages, chatCarry{}, true)
 		if err != nil {
 			return err
 		}
@@ -641,6 +641,42 @@ type responsesBody struct {
 	Stream       bool              `json:"stream"`
 	Tools        json.RawMessage   `json:"tools,omitempty"`
 	ToolChoice   json.RawMessage   `json:"tool_choice,omitempty"`
+
+	ServiceTier       string              `json:"service_tier,omitempty"`
+	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+}
+
+type responsesReasoning struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// chatCarry holds the chat request fields that have a Responses equivalent.
+type chatCarry struct {
+	ServiceTier       string
+	ReasoningEffort   string
+	ParallelToolCalls *bool
+}
+
+func (c chatCarry) apply(body *responsesBody) {
+	body.ServiceTier = normalizeServiceTier(c.ServiceTier)
+	if c.ReasoningEffort != "" {
+		body.Reasoning = &responsesReasoning{Effort: c.ReasoningEffort}
+	}
+	body.ParallelToolCalls = c.ParallelToolCalls
+}
+
+// normalizeServiceTier maps a chat service_tier onto the values the ChatGPT
+// backend accepts. Codex omits the field for the default tier, so every other
+// value is dropped rather than risk a 400.
+func normalizeServiceTier(s string) string {
+	switch s {
+	case "fast", "priority":
+		return "priority"
+	case "flex":
+		return "flex"
+	}
+	return ""
 }
 
 type responsesFunctionCall struct {
@@ -703,10 +739,13 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 		return prepareResponses(raw, stream), nil
 	}
 	var parsed struct {
-		Model      string               `json:"model"`
-		Tools      json.RawMessage      `json:"tools"`
-		ToolChoice json.RawMessage      `json:"tool_choice"`
-		Messages   []chatInboundMessage `json:"messages"`
+		Model             string               `json:"model"`
+		Tools             json.RawMessage      `json:"tools"`
+		ToolChoice        json.RawMessage      `json:"tool_choice"`
+		Messages          []chatInboundMessage `json:"messages"`
+		ServiceTier       string               `json:"service_tier"`
+		ReasoningEffort   string               `json:"reasoning_effort"`
+		ParallelToolCalls *bool                `json:"parallel_tool_calls"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, err
@@ -714,14 +753,19 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 	if parsed.Model != "" {
 		model = parsed.Model
 	}
+	carry := chatCarry{
+		ServiceTier:       parsed.ServiceTier,
+		ReasoningEffort:   parsed.ReasoningEffort,
+		ParallelToolCalls: parsed.ParallelToolCalls,
+	}
 	if len(parsed.Tools) > 0 || len(parsed.ToolChoice) > 0 || chatMessagesHaveTools(parsed.Messages) || chatMessagesHaveOpaque(parsed.Messages) || chatMessagesHaveImages(parsed.Messages) {
-		return chatToResponsesWithTools(model, parsed.Messages, parsed.Tools, parsed.ToolChoice, stream)
+		return chatToResponsesWithTools(model, parsed.Messages, parsed.Tools, parsed.ToolChoice, carry, stream)
 	}
 	msgs := make([]adapter.Message, 0, len(parsed.Messages))
 	for _, m := range parsed.Messages {
 		msgs = append(msgs, adapter.Message{Role: m.Role, Content: messageContentString(m.Content)})
 	}
-	return chatToResponsesFromMessages(model, msgs, stream)
+	return chatToResponsesFromMessages(model, msgs, carry, stream)
 }
 
 func chatMessagesHaveOpaque(msgs []chatInboundMessage) bool {
@@ -901,7 +945,7 @@ func mergeResponsesDeltaText(completed []byte, text string) ([]byte, error) {
 	return jsonx.SetTopLevelRaw(out, "output", rawItems), nil
 }
 
-func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bool) ([]byte, error) {
+func chatToResponsesFromMessages(model string, msgs []adapter.Message, carry chatCarry, stream bool) ([]byte, error) {
 	var instr strings.Builder
 	var input []json.RawMessage
 	for _, m := range msgs {
@@ -926,19 +970,21 @@ func chatToResponsesFromMessages(model string, msgs []adapter.Message, stream bo
 			input = append(input, raw)
 		}
 	}
-	raw, err := json.Marshal(responsesBody{
+	body := responsesBody{
 		Model:        model,
 		Instructions: instr.String(),
 		Input:        input,
 		Stream:       stream,
-	})
+	}
+	carry.apply(&body)
+	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	return prepareResponses(raw, stream), nil
 }
 
-func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, toolChoice json.RawMessage, stream bool) ([]byte, error) {
+func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, toolChoice json.RawMessage, carry chatCarry, stream bool) ([]byte, error) {
 	var instr strings.Builder
 	var input []json.RawMessage
 	for _, m := range msgs {
@@ -1008,6 +1054,7 @@ func chatToResponsesWithTools(model string, msgs []chatInboundMessage, tools, to
 		Tools:        chatToolsToResponses(tools),
 		ToolChoice:   chatToolChoiceToResponses(toolChoice),
 	}
+	carry.apply(&body)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
