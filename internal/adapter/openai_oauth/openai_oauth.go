@@ -672,6 +672,16 @@ type responsesBody struct {
 	ServiceTier       string              `json:"service_tier,omitempty"`
 	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
 	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+	// Text carries responses-only fields. It is omitted entirely when empty so
+	// an absent verbosity does not add a "text":{} block to every request.
+	Text *responsesText `json:"text,omitempty"`
+	// PromptCacheKey is what keeps a long conversation's prefix cached across
+	// turns. Codex always sends one.
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+}
+
+type responsesText struct {
+	Verbosity string `json:"verbosity,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -683,6 +693,11 @@ type chatCarry struct {
 	ServiceTier       string
 	ReasoningEffort   string
 	ParallelToolCalls *bool
+	// Verbosity is only carried for a model that implements it; PromptCacheKey
+	// only when it is usable. Both are validated in chatToResponses, so nothing
+	// downstream has to check them (#60).
+	Verbosity      string
+	PromptCacheKey string
 }
 
 func (c chatCarry) apply(body *responsesBody) {
@@ -691,6 +706,43 @@ func (c chatCarry) apply(body *responsesBody) {
 		body.Reasoning = &responsesReasoning{Effort: c.ReasoningEffort}
 	}
 	body.ParallelToolCalls = c.ParallelToolCalls
+	if c.Verbosity != "" {
+		body.Text = &responsesText{Verbosity: c.Verbosity}
+	}
+	body.PromptCacheKey = c.PromptCacheKey
+}
+
+// verbosityLevels are the three values Codex sends. Anything else would be
+// rejected upstream, so it is dropped rather than forwarded.
+var verbosityLevels = map[string]bool{"low": true, "medium": true, "high": true}
+
+// maxPromptCacheKey is the bound upstream puts on the field. It travels in a
+// header, so an unbounded key is a way to send an unbounded header.
+const maxPromptCacheKey = 256
+
+// carryVerbosity keeps verbosity only for a model that implements it. o3,
+// o4-mini and gpt-4.1 have no text.verbosity and reject the field.
+func carryVerbosity(requested, model string) string {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if !verbosityLevels[requested] || !catalog.SupportsVerbosity(model) {
+		return ""
+	}
+	return requested
+}
+
+// carryPromptCacheKey keeps the key when it is short enough and free of control
+// bytes. A control byte in a header-sized field is an injection attempt, not a
+// cache key.
+func carryPromptCacheKey(key string) string {
+	if key == "" || len(key) > maxPromptCacheKey {
+		return ""
+	}
+	for _, b := range []byte(key) {
+		if b < 0x20 || b == 0x7f {
+			return ""
+		}
+	}
+	return key
 }
 
 // normalizeServiceTier maps a chat service_tier onto the values the ChatGPT
@@ -773,6 +825,8 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 		ServiceTier       string               `json:"service_tier"`
 		ReasoningEffort   string               `json:"reasoning_effort"`
 		ParallelToolCalls *bool                `json:"parallel_tool_calls"`
+		Verbosity         string               `json:"verbosity"`
+		PromptCacheKey    string               `json:"prompt_cache_key"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, err
@@ -784,6 +838,8 @@ func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 		ServiceTier:       parsed.ServiceTier,
 		ReasoningEffort:   parsed.ReasoningEffort,
 		ParallelToolCalls: parsed.ParallelToolCalls,
+		Verbosity:         carryVerbosity(parsed.Verbosity, model),
+		PromptCacheKey:    carryPromptCacheKey(parsed.PromptCacheKey),
 	}
 	if len(parsed.Tools) > 0 || len(parsed.ToolChoice) > 0 || chatMessagesHaveTools(parsed.Messages) || chatMessagesHaveOpaque(parsed.Messages) || chatMessagesHaveImages(parsed.Messages) {
 		return chatToResponsesWithTools(model, parsed.Messages, parsed.Tools, parsed.ToolChoice, carry, stream)

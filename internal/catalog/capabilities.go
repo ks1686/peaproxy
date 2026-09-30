@@ -1,6 +1,10 @@
 package catalog
 
-import "github.com/ks1686/peaproxy/internal/compatdata"
+import (
+	"strings"
+
+	"github.com/ks1686/peaproxy/internal/compatdata"
+)
 
 // Support is explicit capability evidence. Unknown is intentionally distinct
 // from yes so automatic routing does not over-promise compatibility.
@@ -20,7 +24,11 @@ const (
 	RequirementParallelTools Requirement = "parallel_tools"
 	RequirementStrictSchema  Requirement = "strict_schema"
 	RequirementVision        Requirement = "vision"
-	RequirementContinuation  Requirement = "continuation"
+	RequirementContinuation  Requirement = "continition"
+	// RequirementVerbosity is text.verbosity on a Responses request. It is a
+	// chat field Codex clients send that has no meaning on a model that never
+	// implemented it (#60).
+	RequirementVerbosity Requirement = "verbosity"
 )
 
 // CapabilityEvidence describes what a model/adapter combination is known to
@@ -32,6 +40,7 @@ type CapabilityEvidence struct {
 	StrictSchema  Support `json:"strictSchema"`
 	Vision        Support `json:"vision"`
 	Continuation  Support `json:"continuation"`
+	Verbosity     Support `json:"verbosity"`
 }
 
 // State returns known support for a requirement.
@@ -47,6 +56,8 @@ func (c CapabilityEvidence) State(requirement Requirement) Support {
 		return c.Vision
 	case RequirementContinuation:
 		return c.Continuation
+	case RequirementVerbosity:
+		return c.Verbosity
 	default:
 		return SupportUnknown
 	}
@@ -84,4 +95,24 @@ func fillSupport(current Support, fact string) Support {
 	default:
 		return SupportUnknown
 	}
+}
+
+// verbosityModels are the model families Codex sends text.verbosity to. It is a
+// Responses field with no chat-completions equivalent, and sending it to a
+// model that does not implement it is a 400 rather than a no-op.
+//
+// Deliberately a positive list. The cost of being wrong is asymmetric: omitting
+// a model that does support it costs one unset field, while including one that
+// does not costs the request.
+var verbosityModels = []string{"gpt-5", "gpt-6", "gpt-daybreak", "codex-auto-review"}
+
+// SupportsVerbosity reports whether a model id takes text.verbosity.
+func SupportsVerbosity(id string) bool {
+	id = strings.ToLower(strings.TrimSpace(id))
+	for _, prefix := range verbosityModels {
+		if id == prefix || strings.HasPrefix(id, prefix+"-") || strings.HasPrefix(id, prefix+"_") {
+			return true
+		}
+	}
+	return false
 }
