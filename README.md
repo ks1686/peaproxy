@@ -175,6 +175,28 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `status` | Bind / config path / version |
 | `config` | `path` / `show` / `validate` / `init` |
 | `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |
+| `completion` | Shell completion script (`bash` / `zsh` / `fish` / `powershell`) |
+
+### Shell completion
+
+```bash
+# bash
+peaproxy completion bash > /etc/bash_completion.d/peaproxy   # or ~/.local/share/bash-completion/completions/peaproxy
+# zsh
+peaproxy completion zsh > "${fpath[1]}/_peaproxy"
+# fish
+peaproxy completion fish > ~/.config/fish/completions/peaproxy.fish
+```
+
+Commands and flags complete from the command tree. So do the names this install
+already knows: client presets (`clients show|verify|connect|disconnect`), account
+presets (`accounts add`), and the model and provider ids in your config and
+`usage.json` (`catalog pin|rename|hide`, and `catalog hide --kind provider`).
+
+That part is deliberately offline. It reads the YAML and the usage file and
+nothing else, so a tab key never makes a network call, never blocks on a
+keychain prompt, and never fails on a config you are halfway through editing.
+The live catalog is not consulted — run `peaproxy models list` for that.
 
 ## HTTP
 
