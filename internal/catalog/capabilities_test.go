@@ -39,3 +39,22 @@ func TestCapabilityEvidenceReportsKnownUnsupported(t *testing.T) {
 		t.Fatalf("state = %q, want no", got)
 	}
 }
+
+// #60: text.verbosity only goes to models that implement it. A positive list,
+// because omitting a model costs an unset field and including one that does not
+// support it costs the request.
+func TestSupportsVerbosity(t *testing.T) {
+	for _, id := range []string{
+		"gpt-5", "gpt-5-codex", "gpt-5-mini", "gpt-6", "gpt-6-codex",
+		"gpt-daybreak", "codex-auto-review", "GPT-5-Codex", " gpt-6 ",
+	} {
+		if !SupportsVerbosity(id) {
+			t.Errorf("%q supports verbosity but was not recognised", id)
+		}
+	}
+	for _, id := range []string{"o3", "o4-mini", "gpt-4.1", "gpt-4o", "claude-sonnet-5-5", "gpt-50", ""} {
+		if SupportsVerbosity(id) {
+			t.Errorf("%q does not support verbosity but was treated as if it did", id)
+		}
+	}
+}
