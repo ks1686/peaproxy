@@ -132,6 +132,13 @@ func (s *Server) ListenAndServe() error {
 	}
 	s.setListenAddr(ln.Addr().String())
 	log.Printf("peaproxy listening on http://%s", ln.Addr())
+	// Adopt config changes another process makes -- `peaproxy auth login`, a
+	// catalog edit, a hand edit -- for as long as this server is up. Stopped by
+	// Shutdown, like the listener. It runs until the context is cancelled, so it
+	// gets its own goroutine.
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	defer stopWatch()
+	go s.gw.WatchConfig(watchCtx)
 	return s.http.Serve(ln)
 }
 

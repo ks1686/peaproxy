@@ -66,6 +66,9 @@ type Gateway struct {
 	// ever assigned clones, never a value that shares memory with cfg.
 	saved          config.Config
 	lastPersistErr string
+	// lastReloadErr is the same idea for the config watcher: one line per
+	// distinct failure, cleared by the next reload that works.
+	lastReloadErr string
 	// saveMu serialises mutate+persist. It is taken before mu and is never
 	// held across Refresh or any adapter call, so a PersistOAuth callback from
 	// ListModels cannot deadlock.

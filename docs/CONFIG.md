@@ -130,6 +130,16 @@ automaticRoutes:
 
 `requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. If that response included rate-limit remaining headers, the row carries a compact `quotaHint` (honest 0 is shown; unknown remaining is omitted). `GET /admin/requests` and `peaproxy requests tail` read that inspector. Usage counters still go to `usage.json` even when the inspector is off. `peaproxy health` prints the same bind / adapterHealth / quota / cooldowns fields as `GET /admin/health`; cooldown lines include last-known remaining when the provider reported it.
 
+## Editing a running config
+
+A running `peaproxy serve` watches `config.yaml` and adopts what it finds. An account added by `peaproxy auth login`, a `catalog`/`hide`/`routes` edit from the CLI, or a hand edit all take effect within about two seconds, with secrets hydrated from the secret store. A file that is invalid while you are mid-edit is logged once and left alone; the running config is not disturbed, and the next valid write is picked up.
+
+**Adopted without a restart:** `providers`, `hide`, `expose`, `catalog`, `routes`, `failover`, `automaticRoutes`, `requestEngine` — everything read per request.
+
+**Needs a restart:** `bind` and `port` (the listener is already bound), `allowNonLoopback` and `adminToken` (a security posture that should not change under live traffic by editing a file), `requestLog` (the log file handle is opened at start), and `schemaVersion`. The UI Settings page still applies these immediately, because that is an explicit action by someone looking at the screen.
+
+The watcher polls the file's size and mtime every 2 s. It takes `saveMu` without blocking, so it never reads a file another writer is in the middle of replacing, and it ignores the signature of its own writes.
+
 ## Validate
 
 ```bash
