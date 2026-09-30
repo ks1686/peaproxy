@@ -124,6 +124,9 @@ func (s *Store) saveBlob(blob fileBlob) error {
 		return err
 	}
 	_, werr := f.Write(enc)
+	if werr == nil {
+		werr = f.Sync()
+	}
 	if err := errors.Join(werr, f.Close()); err != nil {
 		_ = os.Remove(f.Name())
 		return err

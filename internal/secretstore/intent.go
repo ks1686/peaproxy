@@ -163,6 +163,9 @@ func (s *Store) saveIndex(idx index) error {
 		return err
 	}
 	_, werr := f.Write(b)
+	if werr == nil {
+		werr = f.Sync()
+	}
 	if err := errors.Join(werr, f.Close()); err != nil {
 		_ = os.Remove(f.Name())
 		return err
