@@ -1135,7 +1135,11 @@ func geminiSchema(v any) any {
 	case len(types) == 1:
 		out["type"] = types[0]
 	case len(types) > 1:
-		anyOf = append(typeUnion(out, types), anyOf...)
+		if kept := listedBranches(out, types, anyOf); kept != nil {
+			anyOf = kept
+		} else {
+			anyOf = append(typeUnion(out, types), anyOf...)
+		}
 	}
 	return collapseNullable(out, anyOf)
 }
@@ -1184,6 +1188,52 @@ func typeUnion(out map[string]any, types []any) []any {
 		branches = append(branches, branch)
 	}
 	return branches
+}
+
+// listedBranches intersects a multi-type list with anyOf: it keeps untyped
+// branches and those whose type is listed (integer fits number), drops null
+// branches unless null is listed, and gives items-less array branches the
+// parent's items. It returns nil when no non-null branch fits, so the caller
+// falls back to the plain type union.
+func listedBranches(out map[string]any, types, anyOf []any) []any {
+	listed := map[string]bool{}
+	for _, t := range types {
+		if s, ok := t.(string); ok {
+			listed[s] = true
+		}
+	}
+	items, hasItems := out["items"]
+	var kept []any
+	fits := false
+	for _, b := range anyOf {
+		m, ok := b.(map[string]any)
+		if !ok {
+			kept, fits = append(kept, b), true
+			continue
+		}
+		raw, typed := m["type"]
+		t, _ := raw.(string)
+		switch {
+		case t == "null":
+			if out["nullable"] == true {
+				kept = append(kept, b)
+			}
+			continue
+		case typed && !listed[t] && (t != "integer" || !listed["number"]):
+			continue
+		}
+		if _, set := m["items"]; t == "array" && hasItems && !set {
+			m["items"] = items
+		}
+		kept, fits = append(kept, b), true
+	}
+	if !fits {
+		return nil
+	}
+	if listed["array"] {
+		delete(out, "items")
+	}
+	return kept
 }
 
 // collapseNullable folds a {"type":"null"} branch into nullable. When one

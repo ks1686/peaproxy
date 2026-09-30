@@ -895,6 +895,58 @@ func TestSanitizeGeminiSchemaPreservesTypeUnion(t *testing.T) {
 	}
 }
 
+func TestSanitizeGeminiSchemaTypeListIntersectsAnyOf(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{
+			"branch constraints survive",
+			`{"type":["string","integer"],"KEYWORD":[{"type":"string","maxLength":5},{"type":"integer"}]}`,
+			`{"anyOf":[{"maxLength":5,"type":"string"},{"type":"integer"}]}`,
+		},
+		{
+			"enum and minimum with null become nullable",
+			`{"type":["string","integer","null"],"KEYWORD":[{"type":"string","enum":["a","b"]},{"type":"integer","minimum":1},{"type":"null"}]}`,
+			`{"anyOf":[{"enum":["a","b"],"type":"string"},{"minimum":1,"type":"integer"}],"nullable":true}`,
+		},
+		{
+			"array branch borrows the parent items",
+			`{"type":["string","array"],"items":{"type":"string"},"KEYWORD":[{"type":"string","maxLength":3},{"type":"array","minItems":1}]}`,
+			`{"anyOf":[{"maxLength":3,"type":"string"},{"items":{"type":"string"},"minItems":1,"type":"array"}]}`,
+		},
+		{
+			"no overlap falls back to the union",
+			`{"type":["string","integer"],"KEYWORD":[{"type":"boolean"}]}`,
+			`{"anyOf":[{"type":"string"},{"type":"integer"},{"type":"boolean"}]}`,
+		},
+		{
+			"a null branch is dropped when the list has no null",
+			`{"type":["string","integer"],"KEYWORD":[{"type":"string","maxLength":2},{"type":"null"}]}`,
+			`{"maxLength":2,"type":"string"}`,
+		},
+		{
+			"untyped branches are kept",
+			`{"type":["string","integer"],"KEYWORD":[{"maxLength":3},{"type":"integer"}]}`,
+			`{"anyOf":[{"maxLength":3},{"type":"integer"}]}`,
+		},
+		{
+			"an integer branch fits a number type",
+			`{"type":["number","string"],"KEYWORD":[{"type":"integer","minimum":0},{"type":"boolean"}]}`,
+			`{"minimum":0,"type":"integer"}`,
+		},
+	} {
+		for _, keyword := range []string{"anyOf", "oneOf"} {
+			t.Run(tc.name+" "+keyword, func(t *testing.T) {
+				// Given a type list alongside anyOf or oneOf branches.
+				// When reducing it to the Gemini Schema proto.
+				got := sanitizedSchema(t, strings.ReplaceAll(tc.in, "KEYWORD", keyword))
+				// Then only branches the type list allows remain, with their constraints.
+				if got != tc.want {
+					t.Fatalf("got  %s\nwant %s", got, tc.want)
+				}
+			})
+		}
+	}
+}
+
 func TestSanitizeGeminiSchemaSingleBranchKeepsConstraints(t *testing.T) {
 	for _, tc := range []struct{ name, in, want string }{
 		{
