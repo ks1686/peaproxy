@@ -205,12 +205,13 @@ func TestClientConnectRejectsBadBaseURL(t *testing.T) {
 }
 
 type adminClient struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"baseURL"`
-	Cloak   string `json:"cloak"`
-	Notes   string `json:"notes"`
-	Snippet string `json:"snippet"`
-	Verify  string `json:"verify"`
+	Name        string `json:"name"`
+	BaseURL     string `json:"baseURL"`
+	Cloak       string `json:"cloak"`
+	Notes       string `json:"notes"`
+	Snippet     string `json:"snippet"`
+	Verify      string `json:"verify"`
+	Connectable bool   `json:"connectable"`
 }
 
 func getAdminClients(t *testing.T, s *Server) (string, []adminClient) {
@@ -271,7 +272,7 @@ func TestAdminClientsUseListenPort(t *testing.T) {
 	var want []adminClient
 	for _, n := range clients.List() {
 		p, _ := clients.Get(n)
-		want = append(want, adminClient{Name: p.Name, BaseURL: p.BaseURL, Cloak: p.Cloak, Notes: p.Notes, Snippet: p.Snippet, Verify: p.Verify})
+		want = append(want, adminClient{Name: p.Name, BaseURL: p.BaseURL, Cloak: p.Cloak, Notes: p.Notes, Snippet: p.Snippet, Verify: p.Verify, Connectable: clients.Connectable(n)})
 	}
 	var buf strings.Builder
 	if err := json.NewEncoder(&buf).Encode(map[string]any{"clients": want}); err != nil {
@@ -282,5 +283,42 @@ func TestAdminClientsUseListenPort(t *testing.T) {
 	}
 	if got := postVerify(t, s, "claude-code"); got != "peaproxy clients verify claude-code" {
 		t.Fatalf("default-port verify = %q", got)
+	}
+}
+
+// #61: the UI decided which clients it could connect from a list hardcoded in
+// app.js, so Pi was missing even though connect works for it. The payload says
+// which ones are connectable instead, and the list cannot drift.
+func TestAdminClientsSaysWhichAreConnectable(t *testing.T) {
+	s, _ := testServer(t)
+	s.clientRoot = t.TempDir()
+	req := httptest.NewRequest(http.MethodGet, "/admin/clients", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Clients []struct {
+			Name        string `json:"name"`
+			Connectable bool   `json:"connectable"`
+		} `json:"clients"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, c := range payload.Clients {
+		got[c.Name] = c.Connectable
+	}
+	for _, name := range []string{"pi", "opencode", "continue", "codex", "claude-code"} {
+		if !got[name] {
+			t.Errorf("%s should be reported connectable; payload says %v", name, got)
+		}
+	}
+	for _, name := range []string{"cursor", "cline", "amp"} {
+		if got[name] {
+			t.Errorf("%s has no managed config and should not be connectable", name)
+		}
 	}
 }

@@ -57,11 +57,23 @@ func (l Layout) Detect() []ManagedClient {
 	return out
 }
 
+// Connectable reports whether Layout can write this client's config, which is
+// what decides if the admin API and the web UI offer a Connect button for it.
+// The UI used to keep its own list of names, and Pi was missing from it.
+func Connectable(name string) bool {
+	return (Layout{}).path(name) != ""
+}
+
 func (l Layout) path(name string) string {
 	switch name {
 	case "opencode":
 		return filepath.Join(l.Root, "opencode.json")
 	case "pi":
+		// Pi reads PI_CODING_AGENT_DIR when it is set, so that is where its
+		// provider list has to land. Without it the layout root is the story.
+		if dir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); dir != "" {
+			return filepath.Join(dir, "models.json")
+		}
 		return filepath.Join(l.Root, ".pi", "agent", "models.json")
 	case "continue":
 		return filepath.Join(l.Root, ".continue", "config.yaml")

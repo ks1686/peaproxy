@@ -158,6 +158,35 @@ try {
     throw new Error("disconnect left the PeaProxy env");
   }
 
+  // Pi is connectable from the UI too: the button list comes from the server,
+  // not from a list of names in this file.
+  const piConnect = page.locator("[data-connect='pi']");
+  await piConnect.waitFor();
+  const piPath = join(clientRoot, ".pi", "agent", "models.json");
+  await piConnect.click();
+  await page.getByText("Connected pi").waitFor();
+  const piFile = JSON.parse(await readFile(piPath, "utf8"));
+  const origin = `http://127.0.0.1:${proxyPort}`;
+  if (piFile.providers?.anthropic?.baseUrl !== origin) {
+    throw new Error("pi anthropic baseUrl should have no /v1: " + piFile.providers?.anthropic?.baseUrl);
+  }
+  if (piFile.providers?.openai?.baseUrl !== origin + "/v1") {
+    throw new Error("pi openai baseUrl should carry /v1: " + piFile.providers?.openai?.baseUrl);
+  }
+  if (piFile.providers?.anthropic?.apiKey !== "peaproxy") {
+    throw new Error("pi connect did not write the api key");
+  }
+  await page.locator("[data-disconnect='pi']").click();
+  await page.getByText("Disconnected pi").waitFor();
+  const piAfter = await readFile(piPath, "utf8");
+  if (piAfter.includes("peaproxy")) {
+    throw new Error("pi disconnect left the PeaProxy provider");
+  }
+  // A client with no managed config gets no Connect button.
+  if (await page.locator("[data-connect='cursor']").count()) {
+    throw new Error("cursor has no managed config and should not offer Connect");
+  }
+
   await page.evaluate((origin) => {
     window.__chatCtrl = new AbortController();
     window.__chatDone = fetch(origin + "/v1/chat/completions", {

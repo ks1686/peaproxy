@@ -833,7 +833,7 @@ function clientsPage(root) {
         <div class="row snippet-actions">
           <button class="btn" data-copy>Copy snippet</button>
           <button class="btn" data-verify="${escapeHtml(c.verify || "")}">Copy verify</button>
-          ${["opencode", "continue", "codex", "claude-code"].includes(c.name) ? `<button class="btn" data-connect="${escapeHtml(c.name)}">Connect</button><button class="btn" data-disconnect="${escapeHtml(c.name)}">Disconnect</button><button class="btn" data-probe="${escapeHtml(c.name)}">Check</button>` : ""}
+          ${c.connectable ? `<button class="btn" data-connect="${escapeHtml(c.name)}">Connect</button><button class="btn" data-disconnect="${escapeHtml(c.name)}">Disconnect</button><button class="btn" data-probe="${escapeHtml(c.name)}">Check</button>` : ""}
         </div>
         <pre>${escapeHtml(c.snippet)}</pre>
       </div>`

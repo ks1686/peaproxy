@@ -851,6 +851,10 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		Notes   string `json:"notes"`
 		Snippet string `json:"snippet"`
 		Verify  string `json:"verify"`
+		// Connectable is what Layout can actually write. The web UI renders its
+		// Connect button from this rather than from a list of names of its own,
+		// which is how Pi went missing from it.
+		Connectable bool `json:"connectable"`
 	}
 	origin := s.clientOrigin()
 	var out []item
@@ -858,12 +862,13 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 		p, _ := clients.Get(n)
 		p = clients.WithOrigin(p, origin)
 		out = append(out, item{
-			Name:    p.Name,
-			BaseURL: p.BaseURL,
-			Cloak:   p.Cloak,
-			Notes:   p.Notes,
-			Snippet: p.Snippet,
-			Verify:  p.Verify,
+			Name:        p.Name,
+			BaseURL:     p.BaseURL,
+			Cloak:       p.Cloak,
+			Notes:       p.Notes,
+			Snippet:     p.Snippet,
+			Verify:      p.Verify,
+			Connectable: clients.Connectable(n),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"clients": out})
