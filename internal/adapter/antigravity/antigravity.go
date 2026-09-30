@@ -1193,8 +1193,9 @@ func typeUnion(out map[string]any, types []any) []any {
 // listedBranches intersects a multi-type list with anyOf: it keeps untyped
 // branches and those whose type is listed (integer fits number), drops null
 // branches unless null is listed, and gives items-less array branches the
-// parent's items. It returns nil when no non-null branch fits, so the caller
-// falls back to the plain type union.
+// parent's items. When only untyped branches fit, each becomes one branch per
+// listed type, so the type list is not lost. It returns nil when no non-null
+// branch fits, so the caller falls back to the plain type union.
 func listedBranches(out map[string]any, types, anyOf []any) []any {
 	listed := map[string]bool{}
 	for _, t := range types {
@@ -1204,7 +1205,7 @@ func listedBranches(out map[string]any, types, anyOf []any) []any {
 	}
 	items, hasItems := out["items"]
 	var kept []any
-	fits := false
+	fits, typedFits := false, false
 	for _, b := range anyOf {
 		m, ok := b.(map[string]any)
 		if !ok {
@@ -1225,15 +1226,44 @@ func listedBranches(out map[string]any, types, anyOf []any) []any {
 		if _, set := m["items"]; t == "array" && hasItems && !set {
 			m["items"] = items
 		}
-		kept, fits = append(kept, b), true
+		kept, fits, typedFits = append(kept, b), true, typedFits || typed
 	}
 	if !fits {
 		return nil
+	}
+	if !typedFits {
+		kept = typedCopies(kept, types, items, hasItems)
 	}
 	if listed["array"] {
 		delete(out, "items")
 	}
 	return kept
+}
+
+// typedCopies replaces each untyped branch with one copy per listed type,
+// the array copy taking the parent's items when it has none. Null branches
+// pass through.
+func typedCopies(branches, types []any, items any, hasItems bool) []any {
+	var out []any
+	for _, b := range branches {
+		m, ok := b.(map[string]any)
+		if ok && m["type"] == "null" {
+			out = append(out, b)
+			continue
+		}
+		for _, t := range types {
+			branch := map[string]any{}
+			for k, v := range m {
+				branch[k] = v
+			}
+			branch["type"] = t
+			if _, set := branch["items"]; t == "array" && hasItems && !set {
+				branch["items"] = items
+			}
+			out = append(out, branch)
+		}
+	}
+	return out
 }
 
 // collapseNullable folds a {"type":"null"} branch into nullable. When one
