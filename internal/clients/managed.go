@@ -377,7 +377,8 @@ func objectOrEmpty(body []byte, key, what string) ([]byte, error) {
 }
 
 // formatJSON re-indents next like the original file when that file was
-// multi-line, keeping its trailing-newline choice, and hoists its comments.
+// multi-line, keeping its trailing-newline choice and CRLF line endings, and
+// hoists its comments.
 func formatJSON(raw, next []byte) []byte {
 	out := next
 	indent, multiline := detectIndent(stripJSONC(raw))
@@ -389,6 +390,9 @@ func formatJSON(raw, next []byte) []byte {
 	}
 	if !multiline || bytes.HasSuffix(raw, []byte("\n")) {
 		out = append(out, '\n')
+	}
+	if bytes.Contains(raw, []byte("\r\n")) {
+		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
 	}
 	return append(commentPrefix(raw), out...)
 }

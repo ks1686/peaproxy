@@ -510,6 +510,41 @@ func TestClaudeCodeConnectPreservesIndent(t *testing.T) {
 	assertFile(t, path, original)
 }
 
+func TestConnectPreservesCRLF(t *testing.T) {
+	for _, tc := range []struct{ name, rel, original string }{
+		{"claude-code", filepath.Join(".claude", "settings.json"), "{\r\n  \"theme\": \"dark\",\r\n  \"env\": {\r\n    \"FOO\": \"1\"\r\n  }\r\n}\r\n"},
+		{"pi", filepath.Join(".pi", "agent", "models.json"), "// mine\r\n{\r\n\t\"providers\": {\r\n\t\t\"ollama\": {\r\n\t\t\t\"apiKey\": \"ollama\"\r\n\t\t}\r\n\t}\r\n}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given a pretty-printed config with CRLF line endings.
+			root := t.TempDir()
+			path := filepath.Join(root, tc.rel)
+			writeFixture(t, path, tc.original)
+			layout := Layout{Root: root}
+			// When connecting.
+			if err := layout.Connect(tc.name, "http://127.0.0.1:8317/v1", "m"); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Then every line still ends in CRLF.
+			if n := strings.Count(string(got), "\n"); n < 5 || strings.Count(string(got), "\r\n") != n {
+				t.Fatalf("connect output lost CRLF:\n%q", got)
+			}
+			if strings.HasSuffix(tc.original, "\r\n") != strings.HasSuffix(string(got), "\r\n") {
+				t.Fatalf("trailing newline changed:\n%q", got)
+			}
+			// And disconnecting restores the file byte for byte.
+			if err := layout.Disconnect(tc.name); err != nil {
+				t.Fatal(err)
+			}
+			assertFile(t, path, tc.original)
+		})
+	}
+}
+
 func TestPiConnectPreservesIndent(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, ".pi", "agent", "models.json")
