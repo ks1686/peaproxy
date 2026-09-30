@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-const defaultOrigin = "http://127.0.0.1:8317"
-
 // ClientWire is the HTTP path a harness uses for a tiny completion.
 type ClientWire string
 
@@ -80,10 +78,10 @@ func Verify(ctx context.Context, name, origin string, doChat bool) (VerifyResult
 	if !ok {
 		return VerifyResult{}, fmt.Errorf("unknown client %q", name)
 	}
+	origin = NormalizeOrigin(origin)
 	if origin == "" {
-		origin = defaultOrigin
+		origin = DefaultOrigin
 	}
-	origin = strings.TrimRight(origin, "/")
 	out := VerifyResult{Name: p.Name, ModelsURL: origin + "/v1/models"}
 	client := &http.Client{Timeout: 8 * time.Second}
 

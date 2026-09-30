@@ -424,7 +424,7 @@ func clientsCmd() *cobra.Command {
 			return nil
 		},
 	}
-	show.Flags().StringVar(&showOrigin, "origin", clients.DefaultOrigin, "Gateway origin to print")
+	show.Flags().StringVar(&showOrigin, "origin", clients.DefaultOrigin, "Gateway origin to print (a trailing /v1 is accepted)")
 	cmd.AddCommand(show)
 	var doChat bool
 	var origin string
@@ -444,7 +444,7 @@ func clientsCmd() *cobra.Command {
 		},
 	}
 	verify.Flags().BoolVar(&doChat, "chat", false, "Also POST a tiny completion using the first listed model")
-	verify.Flags().StringVar(&origin, "origin", "http://127.0.0.1:8317", "Gateway origin")
+	verify.Flags().StringVar(&origin, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted)")
 	cmd.AddCommand(verify)
 	var root string
 	var model string
@@ -512,7 +512,7 @@ func clientsCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 	connect.Flags().StringVar(&model, "model", "", "Model id to record")
-	connect.Flags().StringVar(&baseURL, "origin", "http://127.0.0.1:8317/v1", "Gateway base URL to record")
+	connect.Flags().StringVar(&baseURL, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted; each client gets the suffix its wire needs)")
 	return cmd
 }
 

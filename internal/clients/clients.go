@@ -257,18 +257,43 @@ func init() {
 // DefaultOrigin is the gateway address baked into the presets.
 const DefaultOrigin = "http://127.0.0.1:8317"
 
+// NormalizeOrigin reduces either form of a gateway address to the bare origin:
+// the base URL with /v1 on it, and the plain origin, mean the same thing, and
+// every command takes the same flag. Exactly one trailing /v1 is stripped, and
+// only when it is the whole final segment, so a path like /v1beta is kept.
+//
+// This lives here so the CLI, the server and the verify path cannot drift
+// apart over what --origin means.
+func NormalizeOrigin(origin string) string {
+	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	if origin == "" {
+		return ""
+	}
+	if rest, ok := strings.CutSuffix(origin, "/v1"); ok {
+		return rest
+	}
+	return origin
+}
+
+// VerifyHint appends the --origin a verify command needs, unless the hint is
+// empty or already points at the default.
+func VerifyHint(hint, origin string) string {
+	if hint == "" || origin == "" || origin == DefaultOrigin {
+		return hint
+	}
+	return hint + " --origin " + origin
+}
+
 // WithOrigin returns a copy of p whose base URL and snippet point at origin
 // instead of DefaultOrigin, with a verify hint that passes --origin.
 func WithOrigin(p Preset, origin string) Preset {
-	origin = strings.TrimSuffix(strings.TrimRight(origin, "/"), "/v1")
+	origin = NormalizeOrigin(origin)
 	if origin == DefaultOrigin || origin == "" {
 		return p
 	}
 	p.BaseURL = strings.ReplaceAll(p.BaseURL, DefaultOrigin, origin)
 	p.Snippet = strings.ReplaceAll(p.Snippet, DefaultOrigin, origin)
-	if p.Verify != "" {
-		p.Verify += " --origin " + origin
-	}
+	p.Verify = VerifyHint(p.Verify, origin)
 	return p
 }
 

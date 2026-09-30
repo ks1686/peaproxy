@@ -337,3 +337,66 @@ func TestConfigShowReportsSecretBackend(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+// #56: the origin "clients show" prints is the one a user pastes into
+// "clients connect --origin". Before, the printed bare origin was written into
+// an OpenAI client verbatim, with no /v1, and the client could not work.
+// clientFile is where each managed client keeps its config under --root.
+var clientFile = map[string]string{
+	"codex":    ".codex/config.toml",
+	"continue": ".continue/config.yaml",
+}
+
+// #56: --origin means the same bare origin on every clients subcommand, and
+// whatever a user copies out of one of them has to work in the next. Before,
+// the bare origin was written into an OpenAI client verbatim, with no /v1, and
+// the client could not work.
+func TestClientsShowOriginPastedIntoConnect(t *testing.T) {
+	shown := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"clients", "show", "codex", "--origin", "http://127.0.0.1:9000"}, shown); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(shown.String(), "http://127.0.0.1:9000") {
+		t.Fatalf("show did not follow --origin: %s", shown.String())
+	}
+
+	for _, name := range []string{"codex", "continue"} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			out := &bytes.Buffer{}
+			// The user copies exactly what show printed.
+			if err := ExecuteWithArgs([]string{"clients", "connect", name, "--root", home, "--origin", "http://127.0.0.1:9000", "--model", "m"}, out); err != nil {
+				t.Fatal(err)
+			}
+			written, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(clientFile[name])))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(written), "http://127.0.0.1:9000/v1") {
+				t.Fatalf("%s needs the /v1 its wire appends to:\n%s", name, written)
+			}
+			if strings.Contains(string(written), "/v1/v1") {
+				t.Fatalf("%s got a doubled suffix:\n%s", name, written)
+			}
+		})
+	}
+
+	// Claude Code is the other direction: it appends /v1/messages itself.
+	t.Run("claude-code", func(t *testing.T) {
+		home := t.TempDir()
+		out := &bytes.Buffer{}
+		if err := ExecuteWithArgs([]string{"clients", "connect", "claude-code", "--root", home, "--origin", "http://127.0.0.1:9000", "--model", "m"}, out); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(filepath.Join(home, ".claude", "settings.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(written), "http://127.0.0.1:9000") {
+			t.Fatalf("claude-code lost the origin:\n%s", written)
+		}
+		if strings.Contains(string(written), "/v1") {
+			t.Fatalf("claude-code must not be given a /v1 base URL, it appends the path itself:\n%s", written)
+		}
+	})
+}
