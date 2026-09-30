@@ -106,7 +106,7 @@ func TestAutomaticSkipsCooledAccount(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(&hitsA, "a"), countOK(&hitsB, "b"))
 	gw.cfg.AutomaticRoutes.Enabled = true
 	gw.mu.Lock()
-	gw.cool["acct-a"] = Cooldown{AccountID: "acct-a", Until: time.Now().Add(time.Hour)}
+	gw.cool["acct-a"] = cooldownSlots{wide: Cooldown{AccountID: "acct-a", Until: time.Now().Add(time.Hour)}}
 	gw.mu.Unlock()
 	_, account, err := gw.Chat(context.Background(), []byte(`{"model":"pea/auto","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
@@ -422,7 +422,7 @@ func TestCooldownErrorNamesAccountAndCause(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.mu.Lock()
 	for _, id := range []string{"acct-a", "acct-b"} {
-		gw.cool[id] = Cooldown{AccountID: id, Until: time.Now().Add(time.Minute), Reason: "HTTP 429 (rate-limit)"}
+		gw.cool[id] = cooldownSlots{wide: Cooldown{AccountID: id, Until: time.Now().Add(time.Minute), Reason: "HTTP 429 (rate-limit)"}}
 	}
 	gw.mu.Unlock()
 	_, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))

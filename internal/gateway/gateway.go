@@ -48,7 +48,7 @@ type Gateway struct {
 	inst          []instance
 	models        []catalog.Model
 	Usage         *usage.Store
-	cool          map[string]Cooldown
+	cool          map[string]cooldownSlots
 	rr            uint64
 	sticky        map[string]string
 	affinity      map[string]affinityBind
@@ -119,7 +119,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, saved: config.Clone(cfg), path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, continuations: map[string]continuationBind{}, accountStats: map[string]router.AccountStat{}, admission: &router.Gate{}, flight: &responsecache.Flight{}, quota: quota.NewStore()}
+	g := &Gateway{cfg: cfg, saved: config.Clone(cfg), path: path, reg: reg, cool: map[string]cooldownSlots{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, continuations: map[string]continuationBind{}, accountStats: map[string]router.AccountStat{}, admission: &router.Gate{}, flight: &responsecache.Flight{}, quota: quota.NewStore()}
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -1463,12 +1463,16 @@ func (g *Gateway) cooldownCause(model string) error {
 	now := time.Now()
 	var parts []string
 	for _, id := range catalog.AccountsForModel(g.models, g.queryLocked(), model) {
-		c, ok := g.cool[id]
-		if !ok || !now.Before(c.Until) {
+		slots := g.cool[id]
+		c, ok := activeCooldown(slots, model, now)
+		if !ok {
+			// Cooling a different model is no reason to hold up this request.
+			// Anything else listed for it but unavailable is recovering: the
+			// entry expired and a half-open probe has not cleared it yet.
+			if slots.coolingOtherModel(model, now) {
+				continue
+			}
 			parts = append(parts, fmt.Sprintf("%s recovering from cooldown, retry shortly", id))
-			continue
-		}
-		if c.Model != "" && c.Model != model {
 			continue
 		}
 		parts = append(parts, fmt.Sprintf("%s after %s, %ds left", id, c.Reason, int(time.Until(c.Until).Round(time.Second).Seconds())))
@@ -1501,7 +1505,9 @@ func (g *Gateway) markCooldown(id, model string, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.noteStatLocked(id, err, 0)
-	g.cool[id] = Cooldown{AccountID: id, Model: scopedModel, Until: time.Now().Add(wait), Reason: reason}
+	slots := g.cool[id]
+	slots.set(scopedModel, Cooldown{AccountID: id, Model: scopedModel, Until: time.Now().Add(wait), Reason: reason})
+	g.cool[id] = slots
 }
 
 func (g *Gateway) observeLatency(account string, latency time.Duration, err error) {
@@ -1538,17 +1544,19 @@ func (g *Gateway) Cooldowns() []Cooldown {
 	defer g.mu.Unlock()
 	now := time.Now()
 	var out []Cooldown
-	for id, c := range g.cool {
-		if now.After(c.Until) {
-			delete(g.cool, id)
-			continue
+	for id, slots := range g.cool {
+		slots.prune(now)
+		g.cool[id] = slots
+		// Every active slot is listed, so a person debugging a model that will
+		// not route can see which one and why.
+		for _, c := range slots.all(now) {
+			c.RemainingMs = c.Until.Sub(now).Milliseconds()
+			if c.RemainingMs < 0 {
+				c.RemainingMs = 0
+			}
+			c.QuotaHint = g.quotaHintFor(id)
+			out = append(out, c)
 		}
-		c.RemainingMs = c.Until.Sub(now).Milliseconds()
-		if c.RemainingMs < 0 {
-			c.RemainingMs = 0
-		}
-		c.QuotaHint = g.quotaHintFor(id)
-		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AccountID < out[j].AccountID })
 	if out == nil {
@@ -1565,7 +1573,7 @@ func (g *Gateway) AdapterHealth() []AdapterHealth {
 	out := make([]AdapterHealth, len(g.health))
 	copy(out, g.health)
 	for i := range out {
-		if c, ok := g.cool[out[i].AccountID]; ok && now.Before(c.Until) && out[i].Status == "ok" {
+		if _, ok := g.cool[out[i].AccountID].anyActive(now); ok && out[i].Status == "ok" {
 			out[i].Status = "cooldown"
 		}
 		out[i].QuotaHint = g.quotaHintFor(out[i].AccountID)
@@ -1704,11 +1712,14 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	defer g.mu.Unlock()
 	now := time.Now()
 	expired := map[string]struct{}{}
-	for id, c := range g.cool {
-		if !now.Before(c.Until) {
-			delete(g.cool, id)
-			expired[id] = struct{}{}
+	for id, slots := range g.cool {
+		slots.prune(now)
+		g.cool[id] = slots
+		if slots.wideActive() || len(slots.models) > 0 {
+			continue
 		}
+		delete(g.cool, id)
+		expired[id] = struct{}{}
 	}
 	q := g.queryLocked()
 	ids := catalog.AccountsForModel(g.models, q, model)
@@ -1734,7 +1745,7 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	hot := make([]instance, 0, len(matched))
 	var until time.Time
 	for _, inst := range matched {
-		if c, ok := g.cool[inst.Provider.ID]; ok && now.Before(c.Until) && (c.Model == "" || c.Model == model) {
+		if c, ok := activeCooldown(g.cool[inst.Provider.ID], model, now); ok {
 			if until.IsZero() || c.Until.Before(until) {
 				until = c.Until
 			}
