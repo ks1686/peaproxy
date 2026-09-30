@@ -281,9 +281,21 @@ func ApplyRoutes(listed, all []Model, q Query, routes map[string]string) []Model
 }
 
 // ToOpenAIList converts filtered catalog models into the OpenAI list shape.
+// ToOpenAIList renders the client-facing model list. One entry per id: a model
+// three accounts can serve is one model, and OpenAI clients key on id, so the
+// duplicates showed up as three rows in every picker (#53). First occurrence
+// wins, and the input is already pin-sorted, so the pinned row is the one kept.
+//
+// The per-account rows are still what /admin/catalog reports -- that is three
+// facts about three accounts, which is a different question.
 func ToOpenAIList(models []Model) OpenAIModelList {
 	data := make([]OpenAIModel, 0, len(models))
+	seen := make(map[string]bool, len(models))
 	for _, m := range models {
+		if seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
 		data = append(data, OpenAIModel{
 			ID:      m.ID,
 			Object:  "model",
