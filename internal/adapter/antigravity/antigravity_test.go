@@ -418,6 +418,55 @@ func TestGeminiSafetyStopIsContentFilter(t *testing.T) {
 	}
 }
 
+func TestGeminiPromptBlockIsContentFilter(t *testing.T) {
+	for _, reason := range []string{"SAFETY", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY", "BLOCK_REASON_UNSPECIFIED"} {
+		feedback := `"promptFeedback":{"blockReason":"` + reason + `"}`
+		for _, body := range []struct{ level, json string }{
+			{"wrapped", `{"response":{` + feedback + `}}`},
+			{"top-level", `{` + feedback + `}`},
+		} {
+			for _, tc := range []struct {
+				name   string
+				finish func(*testing.T) string
+			}{
+				{"stream", func(t *testing.T) string { return streamFinishReason(t, "data: "+body.json+"\n\n") }},
+				{"chat", func(t *testing.T) string { return chatFinishReason(t, body.json) }},
+			} {
+				t.Run(reason+" "+body.level+" "+tc.name, func(t *testing.T) {
+					// Given Gemini blocks the prompt and returns no candidates.
+					// When translating the response to OpenAI.
+					got := tc.finish(t)
+					// Then it reports a content filter, not a clean stop.
+					if got != "content_filter" {
+						t.Fatalf("finish_reason = %q, want content_filter", got)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGeminiPromptFeedbackWithoutBlockKeepsCandidateFinish(t *testing.T) {
+	body := `{"response":{"promptFeedback":{"safetyRatings":[{"category":"HARM_CATEGORY_HARASSMENT","probability":"NEGLIGIBLE"}]},"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}]}}`
+	for _, tc := range []struct {
+		name   string
+		finish func(*testing.T) string
+	}{
+		{"stream", func(t *testing.T) string { return streamFinishReason(t, "data: "+body+"\n\n") }},
+		{"chat", func(t *testing.T) string { return chatFinishReason(t, body) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given prompt feedback that carries only safety ratings and a normal candidate.
+			// When translating the response to OpenAI.
+			got := tc.finish(t)
+			// Then the candidate's own finish reason is reported.
+			if got != "stop" {
+				t.Fatalf("finish_reason = %q, want stop", got)
+			}
+		})
+	}
+}
+
 func TestGeminiOrphanToolResultBecomesUserText(t *testing.T) {
 	a := &Adapter{}
 	body, err := a.geminiBody(adapter.ChatRequest{Raw: []byte(`{"messages":[{"role":"tool","tool_call_id":"compacted","content":"result"}]}`)}, false)

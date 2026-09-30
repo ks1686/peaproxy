@@ -1331,11 +1331,16 @@ func geminiChatMessage(body []byte) (chatMessage, string, error) {
 		Content      geminiContent `json:"content"`
 		FinishReason string        `json:"finishReason"`
 	}
+	type promptFeedback struct {
+		BlockReason string `json:"blockReason"`
+	}
 	var parsed struct {
 		Response struct {
-			Candidates []candidate `json:"candidates"`
+			Candidates     []candidate    `json:"candidates"`
+			PromptFeedback promptFeedback `json:"promptFeedback"`
 		} `json:"response"`
-		Candidates []candidate `json:"candidates"`
+		Candidates     []candidate    `json:"candidates"`
+		PromptFeedback promptFeedback `json:"promptFeedback"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return chatMessage{}, "", err
@@ -1347,6 +1352,9 @@ func geminiChatMessage(body []byte) (chatMessage, string, error) {
 	var b strings.Builder
 	message := chatMessage{Role: "assistant"}
 	finish := ""
+	if len(cands) == 0 && (parsed.Response.PromptFeedback.BlockReason != "" || parsed.PromptFeedback.BlockReason != "") {
+		finish = promptBlocked
+	}
 	if len(cands) > 0 {
 		finish = cands[0].FinishReason
 		for _, p := range cands[0].Content.Parts {
@@ -1379,11 +1387,15 @@ func toOpenAIChatJSON(model string, message chatMessage, finish string) ([]byte,
 	})
 }
 
+// promptBlocked stands in for a finish reason when Gemini rejects the prompt
+// itself: it then sends promptFeedback.blockReason and no candidates.
+const promptBlocked = "PROMPT_BLOCKED"
+
 func geminiFinishReason(calls int, upstream string) string {
 	switch upstream {
 	case "MAX_TOKENS":
 		return "length"
-	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", promptBlocked:
 		// Like MAX_TOKENS, a blocked turn must not read as a finished tool turn.
 		return "content_filter"
 	}
