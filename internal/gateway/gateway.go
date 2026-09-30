@@ -1752,10 +1752,32 @@ func (g *Gateway) persist(mine config.Config) (rebuilt bool, err error) {
 	g.cfg.Providers, g.cfg.Hide, g.cfg.Expose, g.cfg.Catalog, g.cfg.Routes = adopt.Providers, adopt.Hide, adopt.Expose, adopt.Catalog, adopt.Routes
 	g.saved = next
 	if !reflect.DeepEqual(merged.Providers, mine.Providers) {
+		kept := make(map[string]bool, len(merged.Providers))
+		for _, p := range merged.Providers {
+			kept[p.ID] = true
+		}
+		for _, p := range mine.Providers {
+			if !kept[p.ID] {
+				g.forgetAccountLocked(p.ID)
+			}
+		}
 		_ = g.rebuild()
 		return true, nil
 	}
 	return false, nil
+}
+
+// forgetAccountLocked drops continuation bindings and cached responses of a
+// removed account. The caller holds mu.
+func (g *Gateway) forgetAccountLocked(id string) {
+	for responseID, bind := range g.continuations {
+		if bind.Account == id {
+			delete(g.continuations, responseID)
+		}
+	}
+	if g.responses != nil {
+		g.responses.InvalidatePrefix(id + "\x00")
+	}
 }
 
 // notePersistErr logs a failed save once per distinct error; a successful
@@ -1842,14 +1864,7 @@ func (g *Gateway) RemoveProvider(ctx context.Context, id string) error {
 		}
 	}
 	g.cfg.Providers = kept
-	for responseID, bind := range g.continuations {
-		if bind.Account == id {
-			delete(g.continuations, responseID)
-		}
-	}
-	if g.responses != nil {
-		g.responses.InvalidatePrefix(id + "\x00")
-	}
+	g.forgetAccountLocked(id)
 	_ = g.rebuild()
 	mine := config.Clone(g.cfg)
 	g.mu.Unlock()

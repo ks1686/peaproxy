@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -130,4 +131,48 @@ func (a *nativeResponsesAdapter) Responses(_ context.Context, _ []byte) ([]byte,
 }
 func (a *nativeResponsesAdapter) ResponsesStream(context.Context, []byte, io.Writer) error {
 	return adapter.ErrNotImplemented
+}
+
+func TestExternalProviderRemovalInvalidatesContinuationBindings(t *testing.T) {
+	first := &nativeResponsesAdapter{id: "first", model: "model", responseID: "resp_first"}
+	second := &nativeResponsesAdapter{id: "second", model: "model", responseID: "resp_second"}
+	registry := adapter.NewRegistry()
+	registry.Register("native", func(opts adapter.Options) (adapter.Adapter, error) {
+		if opts.ID == "first" {
+			return first, nil
+		}
+		return second, nil
+	})
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.Default()
+	cfg.Providers = []config.Provider{
+		{ID: "first", Adapter: "native", Tier: "paid"},
+		{ID: "second", Adapter: "native", Tier: "paid"},
+	}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw, err := New(loaded, path, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	gw.bindContinuation("resp_second", "model", "second")
+
+	cfg.Providers = cfg.Providers[:1]
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.ToggleHide("model", "unrelated", true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","previous_response_id":"resp_second","input":"continue"}`))
+	if err != nil || account != "first" {
+		t.Fatalf("continuation after external removal: account = %q, error = %v", account, err)
+	}
 }
