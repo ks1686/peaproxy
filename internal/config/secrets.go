@@ -233,7 +233,10 @@ func publicOAuth(t *OAuthToken) *OAuthToken {
 
 func extraKeyIsSecret(k string) bool {
 	switch strings.ToLower(strings.TrimSpace(k)) {
-	case "dca_token", "access_token", "refresh_token", "id_token", "api_key", "password", "secret":
+	// github_token is the Copilot adapter's GitHub access token. It mints
+	// Copilot sessions, so it belongs here with the other bearer values: it
+	// must not be written to config.yaml in the clear.
+	case "dca_token", "access_token", "refresh_token", "id_token", "api_key", "password", "secret", "github_token":
 		return true
 	default:
 		return false

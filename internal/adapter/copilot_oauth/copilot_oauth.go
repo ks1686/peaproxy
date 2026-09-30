@@ -53,6 +53,7 @@ type Adapter struct {
 	mu              sync.Mutex
 	token           oauth.Token
 	generation      uint64
+	commitMu        sync.Mutex
 	pending         *oauth.DeviceCode
 }
 
@@ -170,6 +171,8 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 }
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
+	a.commitMu.Lock()
+	defer a.commitMu.Unlock()
 	a.mu.Lock()
 	a.generation++
 	a.token = tok
@@ -207,8 +210,12 @@ func (a *Adapter) exchangeCopilot(ctx context.Context, githubToken string) (oaut
 		return oauth.Token{}, adapter.NewHTTPError(resp, truncate(raw))
 	}
 	var body struct {
-		Token     string `json:"token"`
-		ExpiresAt int64  `json:"expires_at"`
+		Token string `json:"token"`
+		// GitHub rotates the refresh token on some accounts. Reading it is what
+		// lets a rotated one replace the token we just spent; when the endpoint
+		// omits it the empty value falls back to the one we presented.
+		RefreshToken string `json:"refresh_token"`
+		ExpiresAt    int64  `json:"expires_at"`
 	}
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return oauth.Token{}, err
@@ -216,7 +223,7 @@ func (a *Adapter) exchangeCopilot(ctx context.Context, githubToken string) (oaut
 	if strings.TrimSpace(body.Token) == "" {
 		return oauth.Token{}, fmt.Errorf("copilot_oauth: empty Copilot session token")
 	}
-	tok := oauth.Token{AccessToken: body.Token}
+	tok := oauth.Token{AccessToken: body.Token, RefreshToken: body.RefreshToken}
 	if body.ExpiresAt > 0 {
 		tok.ExpiresAt = time.Unix(body.ExpiresAt, 0)
 	} else {
@@ -255,11 +262,23 @@ func (a *Adapter) fetchLogin(ctx context.Context, githubToken string) string {
 	return user.Login
 }
 
+// githubTokenOf returns the GitHub token that doubles as this account's refresh
+// token: a Copilot session is minted by exchanging it, so it is what a refresh
+// presents. Tokens saved before it was mirrored into RefreshToken carry it only
+// in Extra.
+func githubTokenOf(tok oauth.Token) string {
+	if tok.RefreshToken != "" {
+		return tok.RefreshToken
+	}
+	return tok.ExtraGet(githubTokenExtra)
+}
+
 func (a *Adapter) refresh(ctx context.Context, githubToken string) (oauth.Token, error) {
 	tok, err := a.exchangeCopilot(ctx, githubToken)
 	if err != nil {
 		return oauth.Token{}, err
 	}
+	a.applyAPIBase(tok.AccessToken)
 	return tok.WithFallbackRefresh(githubToken), nil
 }
 
@@ -297,12 +316,8 @@ func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
-	seen := a.generation
 	a.mu.Unlock()
-	github := tok.RefreshToken
-	if github == "" {
-		github = tok.ExtraGet(githubTokenExtra)
-	}
+	github := githubTokenOf(tok)
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
 			return adapter.ErrAuthRequired
@@ -312,19 +327,26 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if github == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := oauth.DefaultRefresh.Do(ctx, "copilot:"+a.id, func(ctx context.Context) (oauth.Token, error) {
-		return a.refresh(ctx, github)
-	})
-	if err != nil {
-		return err
-	}
-	next = next.KeepExtra(tok)
-	next.RefreshToken = github
-	a.applyAPIBase(next.AccessToken)
-	return oauth.CommitRefresh(&a.mu, &a.token, &a.generation, seen, next, a.persist)
+	return oauth.Ensure(ctx, &oauth.DefaultRefresh, "copilot:"+a.id, &a.commitMu, &a.mu, &a.token, &a.generation,
+		5*time.Minute,
+		func(ctx context.Context, tok oauth.Token) (oauth.Token, error) {
+			return a.refresh(ctx, githubTokenOf(tok))
+		},
+		func(old, next oauth.Token) oauth.Token {
+			// A rotated GitHub token is the new refresh token. The previous one
+			// is only a fallback for a response that omits it, because the
+			// provider may have invalidated the one we just spent.
+			return next.KeepExtra(old).WithFallbackRefresh(githubTokenOf(old))
+		},
+		a.persist)
 }
 
+// applyAPIBase points the adapter at the endpoint the session token names.
+// apiBase is read under a.mu on the request path, so the write takes a.mu too:
+// a refresh runs alongside requests, and that is exactly when it lands.
 func (a *Adapter) applyAPIBase(session string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.apiBaseLocked {
 		return
 	}
