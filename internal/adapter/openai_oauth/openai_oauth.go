@@ -600,7 +600,42 @@ func (a *Adapter) doResponses(ctx context.Context, raw []byte, stream bool) (*ht
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 	a.headers(httpReq, stream)
+	if hint := routingHint(raw); hint != "" {
+		httpReq.Header.Set("x-codex-routing-hint", hint)
+	}
 	return a.httpClient.Do(httpReq)
+}
+
+// routingHint builds the x-codex-routing-hint Codex sends on /responses from
+// the body actually posted, so header and body cannot disagree.
+func routingHint(raw []byte) string {
+	var probe struct {
+		Model       string `json:"model"`
+		ServiceTier string `json:"service_tier"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || !routingHintSafe(probe.Model) {
+		return ""
+	}
+	hint := "model=" + probe.Model
+	if probe.ServiceTier != "" {
+		if !routingHintSafe(probe.ServiceTier) {
+			return ""
+		}
+		hint += ";tier=" + probe.ServiceTier
+	}
+	return hint
+}
+
+func routingHintSafe(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e || s[i] == ';' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Adapter) headers(req *http.Request, stream bool) {

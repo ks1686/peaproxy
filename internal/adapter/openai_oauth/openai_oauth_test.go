@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1148,6 +1149,130 @@ func TestChatPostsServiceTierUpstream(t *testing.T) {
 		t.Fatalf("reasoning: %s", gotBody)
 	}
 	assertCodexResponsesBody(t, gotBody, true)
+}
+
+// routingHintServer records the x-codex-routing-hint of every request by path
+// suffix; ok reports whether the header was present at all.
+func routingHintServer(t *testing.T) (*Adapter, func(suffix string) (hint string, ok bool)) {
+	t.Helper()
+	var mu sync.Mutex
+	hints := map[string][]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := "/responses"
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			key = "/models"
+		}
+		mu.Lock()
+		hints[key] = r.Header.Values("x-codex-routing-hint")
+		mu.Unlock()
+		if key == "/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "gpt-5.5"}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "resp_1", "output_text": "ok"})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "tok", AccountID: "acct_99", ExpiresAt: time.Now().Add(time.Hour)}
+	return a, func(suffix string) (string, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		v, seen := hints[suffix]
+		if !seen {
+			t.Fatalf("no request to %s", suffix)
+		}
+		if len(v) == 0 {
+			return "", false
+		}
+		return v[0], true
+	}
+}
+
+func TestResponsesSendsRoutingHintModelOnly(t *testing.T) {
+	a, hint := routingHintServer(t)
+	if _, err := a.Responses(context.Background(), []byte(`{"model":"gpt-5.5","input":"hi"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := hint("/responses"); !ok || got != "model=gpt-5.5" {
+		t.Fatalf("hint=%q present=%v", got, ok)
+	}
+}
+
+func TestResponsesSendsRoutingHintWithTier(t *testing.T) {
+	a, hint := routingHintServer(t)
+	if _, err := a.Responses(context.Background(), []byte(`{"model":"gpt-5.5","service_tier":"priority","input":"hi"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := hint("/responses"); !ok || got != "model=gpt-5.5;tier=priority" {
+		t.Fatalf("hint=%q present=%v", got, ok)
+	}
+}
+
+func TestResponsesStreamSendsRoutingHint(t *testing.T) {
+	a, hint := routingHintServer(t)
+	if err := a.ResponsesStream(context.Background(), []byte(`{"model":"gpt-5.5","service_tier":"flex","input":"hi"}`), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := hint("/responses"); !ok || got != "model=gpt-5.5;tier=flex" {
+		t.Fatalf("hint=%q present=%v", got, ok)
+	}
+}
+
+func TestChatSendsRoutingHintWithTier(t *testing.T) {
+	a, hint := routingHintServer(t)
+	if _, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gpt-5.5",
+		Raw:   []byte(`{"model":"gpt-5.5","service_tier":"fast","messages":[{"role":"user","content":"hi"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := hint("/responses"); !ok || got != "model=gpt-5.5;tier=priority" {
+		t.Fatalf("hint=%q present=%v", got, ok)
+	}
+}
+
+func TestChatRoutingHintOmitsDroppedTier(t *testing.T) {
+	a, hint := routingHintServer(t)
+	if _, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gpt-5.5",
+		Raw:   []byte(`{"model":"gpt-5.5","service_tier":"default","messages":[{"role":"user","content":"hi"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := hint("/responses"); !ok || got != "model=gpt-5.5" {
+		t.Fatalf("hint=%q present=%v", got, ok)
+	}
+}
+
+func TestListModelsOmitsRoutingHint(t *testing.T) {
+	a, hint := routingHintServer(t)
+	if _, err := a.ListModels(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := hint("/models"); ok {
+		t.Fatalf("/models got routing hint %q", got)
+	}
+}
+
+func TestRoutingHintSkippedOnUnsafeValue(t *testing.T) {
+	for name, body := range map[string]string{
+		"semicolon model": `{"model":"gpt-5.5;tier=priority","input":"hi"}`,
+		"control model":   `{"model":"gpt-5.5\u0001","input":"hi"}`,
+		"space model":     `{"model":"gpt 5.5","input":"hi"}`,
+		"semicolon tier":  `{"model":"gpt-5.5","service_tier":"priority;x=y","input":"hi"}`,
+		"newline tier":    `{"model":"gpt-5.5","service_tier":"priority\n","input":"hi"}`,
+		"empty model":     `{"input":"hi"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, hint := routingHintServer(t)
+			if _, err := a.Responses(context.Background(), []byte(body)); err != nil {
+				t.Fatal(err)
+			}
+			if got, ok := hint("/responses"); ok {
+				t.Fatalf("unsafe value produced hint %q", got)
+			}
+		})
+	}
 }
 
 func testAdapter(t *testing.T, base string) *Adapter {
