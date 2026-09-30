@@ -10,6 +10,9 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 type fileBlob struct {
@@ -116,29 +119,61 @@ func (s *Store) saveBlob(blob fileBlob) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.encPath() + ".tmp"
-	if err := os.WriteFile(tmp, enc, 0o600); err != nil {
+	f, err := os.CreateTemp(s.dir, EncryptedFileName+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.encPath())
+	_, werr := f.Write(enc)
+	if err := errors.Join(werr, f.Close()); err != nil {
+		_ = os.Remove(f.Name())
+		return err
+	}
+	if err := fslock.Rename(f.Name(), s.encPath()); err != nil {
+		_ = os.Remove(f.Name())
+		return err
+	}
+	return nil
 }
 
+// keyReadAttempts bounds how long a reader waits for a key file another
+// process has just created to receive its 32 bytes.
+const keyReadAttempts = 50
+
+// loadOrCreateKey creates secret.key with O_EXCL, so processes racing on a
+// first run agree on one key: the loser re-reads the winner's file.
 func (s *Store) loadOrCreateKey() ([]byte, error) {
-	b, err := os.ReadFile(s.keyPath())
-	if err == nil {
-		if len(b) != 32 {
+	for attempt := 1; ; attempt++ {
+		b, err := os.ReadFile(s.keyPath())
+		switch {
+		case err == nil && len(b) == 32:
+			return b, nil
+		case err == nil && attempt < keyReadAttempts:
+			time.Sleep(10 * time.Millisecond)
+			continue
+		case err == nil:
 			return nil, fmt.Errorf("secretstore: %s must be 32 bytes", KeyFileName)
+		case !os.IsNotExist(err):
+			return nil, err
 		}
-		return b, nil
+		key, err := s.createKey()
+		if !os.IsExist(err) || attempt >= keyReadAttempts {
+			return key, err
+		}
 	}
-	if !os.IsNotExist(err) {
-		return nil, err
-	}
+}
+
+func (s *Store) createKey() ([]byte, error) {
 	key := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(s.keyPath(), key, 0o600); err != nil {
+	f, err := os.OpenFile(s.keyPath(), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_, werr := f.Write(key)
+	if err := errors.Join(werr, f.Close()); err != nil {
+		_ = os.Remove(s.keyPath())
 		return nil, err
 	}
 	return key, nil

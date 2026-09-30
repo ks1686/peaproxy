@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -243,6 +244,54 @@ func TestLockCreatesMissingDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, LockFileName)); err != nil {
 		t.Fatalf("secrets.lock not created: %v", err)
+	}
+}
+
+type recordingKeyring struct {
+	memKeyring
+	users []string
+}
+
+func (r *recordingKeyring) Set(service, user, password string) error {
+	r.users = append(r.users, user)
+	return r.memKeyring.Set(service, user, password)
+}
+
+func TestProbeUsesUniqueNameAndCleansUp(t *testing.T) {
+	kr := &recordingKeyring{memKeyring: memKeyring{m: map[string]string{}}}
+	for i := 0; i < 2; i++ {
+		if err := probeKeyring(kr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prefix := probePrefix + strconv.Itoa(os.Getpid()) + "."
+	if len(kr.users) != 2 || kr.users[0] == kr.users[1] {
+		t.Fatalf("probe names %q, want two distinct", kr.users)
+	}
+	for _, u := range kr.users {
+		if !strings.HasPrefix(u, prefix) || len(u) != len(prefix)+8 {
+			t.Errorf("probe name %q, want %s<8 hex>", u, prefix)
+		}
+	}
+	if len(kr.m) != 0 {
+		t.Fatalf("probe left items behind: %v", kr.m)
+	}
+}
+
+func TestFileBackendLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := s.Set("acct", KindAPIKey, strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tmps, err := filepath.Glob(filepath.Join(dir, "*.tmp"))
+	if err != nil || len(tmps) != 0 {
+		t.Fatalf("temp files left: %v %v", tmps, err)
 	}
 }
 

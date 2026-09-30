@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 // The index doubles as an intent log. Before a write creates or replaces a
@@ -165,7 +167,7 @@ func (s *Store) saveIndex(idx index) error {
 		_ = os.Remove(f.Name())
 		return err
 	}
-	if err := os.Rename(f.Name(), s.indexPath()); err != nil {
+	if err := fslock.Rename(f.Name(), s.indexPath()); err != nil {
 		_ = os.Remove(f.Name())
 		return err
 	}

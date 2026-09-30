@@ -1,14 +1,28 @@
 package secretstore
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/zalando/go-keyring"
 )
 
-const probeUser = "_peaproxy_probe"
+const probePrefix = "_peaproxy_probe."
+
+// probeUser is unique per call, so concurrent Opens in any number of
+// processes never read or delete each other's probe item.
+func probeUser() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return probePrefix + strconv.Itoa(os.Getpid()) + "." + hex.EncodeToString(b[:]), nil
+}
 
 type liveKeyring struct{}
 
@@ -29,11 +43,15 @@ func isNotFound(err error) bool {
 }
 
 func probeKeyring(kr keyringAPI) error {
-	if err := kr.Set(Service, probeUser, "ok"); err != nil {
+	user, err := probeUser()
+	if err != nil {
 		return err
 	}
-	defer func() { _ = kr.Delete(Service, probeUser) }()
-	v, err := kr.Get(Service, probeUser)
+	if err := kr.Set(Service, user, "ok"); err != nil {
+		return err
+	}
+	defer func() { _ = kr.Delete(Service, user) }()
+	v, err := kr.Get(Service, user)
 	if err != nil {
 		return err
 	}

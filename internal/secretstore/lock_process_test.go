@@ -3,6 +3,7 @@ package secretstore
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -199,5 +200,59 @@ func TestFileBlobNotLostAcrossProcesses(t *testing.T) {
 	}
 	if len(blob.Items) != children*writes {
 		t.Fatalf("secrets.enc holds %d items, want %d", len(blob.Items), children*writes)
+	}
+}
+
+// Rounds give the children many fresh dirs to race on, so the unlocked
+// create-then-write shows up reliably.
+func TestKeyFileCreatedOnceAcrossProcesses(t *testing.T) {
+	const children, rounds = 4, 25
+	if os.Getenv(helperEnv) != "" {
+		childLockTimeout()
+		dir := os.Getenv(helperDirEnv)
+		if err := waitForFile(filepath.Join(dir, "start"), 30*time.Second); err != nil {
+			helperExit(err)
+		}
+		for r := 0; r < rounds; r++ {
+			s := &Store{backend: BackendFile, dir: filepath.Join(dir, strconv.Itoa(r))}
+			k, err := s.loadOrCreateKey()
+			if err != nil {
+				helperExit(err)
+			}
+			fmt.Fprintf(os.Stdout, "key %d %s\n", r, hex.EncodeToString(k))
+		}
+		helperExit(nil)
+	}
+	requireOSLock(t)
+
+	dir := t.TempDir()
+	for r := 0; r < rounds; r++ {
+		if err := os.Mkdir(filepath.Join(dir, strconv.Itoa(r)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var kids []*child
+	for n := 0; n < children; n++ {
+		kids = append(kids, startChild(t, "TestKeyFileCreatedOnceAcrossProcesses", dir, strconv.Itoa(n)))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "start"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitAll(t, kids, 60*time.Second)
+	if t.Failed() {
+		return
+	}
+
+	for r := 0; r < rounds; r++ {
+		onDisk, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(r), KeyFileName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := fmt.Sprintf("key %d %s", r, hex.EncodeToString(onDisk))
+		for n, c := range kids {
+			if !strings.Contains(c.out.String(), want+"\n") {
+				t.Errorf("round %d: child %d used a key other than the one on disk", r, n)
+			}
+		}
 	}
 }
