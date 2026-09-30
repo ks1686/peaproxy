@@ -703,11 +703,16 @@ func chatHTTPError(resp *http.Response, body []byte) error {
 	}
 	if e.RetryAfter == 0 {
 		if d, ok := cloudCodeResetDelay(body); ok {
-			e.RetryAfter = min(max(d, time.Second), time.Hour)
+			e.RetryAfter = min(max(d, time.Second), maxCloudCodeReset)
 		}
 	}
 	return e
 }
+
+// maxCloudCodeReset bounds the body reset hint. Cloud Code's largest quota
+// window is weekly ("Resets in 166h59m50s"); the cooldown is model-scoped
+// and in memory, so honouring it costs nothing but the hourly failed probe.
+const maxCloudCodeReset = 7 * 24 * time.Hour
 
 var resetsInPattern = regexp.MustCompile(`Resets in ([0-9][0-9hms.]*)`)
 
@@ -1130,7 +1135,11 @@ func geminiSchema(v any) any {
 	case len(types) == 1:
 		out["type"] = types[0]
 	case len(types) > 1:
-		anyOf = append(typeUnion(out, types), anyOf...)
+		if kept := listedBranches(out, types, anyOf); kept != nil {
+			anyOf = kept
+		} else {
+			anyOf = append(typeUnion(out, types), anyOf...)
+		}
 	}
 	return collapseNullable(out, anyOf)
 }
@@ -1139,9 +1148,18 @@ func geminiSchema(v any) any {
 // schema: the element schema when all agree, else an anyOf of the distinct
 // elements, folded like any other anyOf.
 func tupleItems(tuple []any) (any, bool) {
-	var distinct []any
+	schemas := make([]any, 0, len(tuple))
 	for _, el := range tuple {
-		schema := geminiSchema(el)
+		schemas = append(schemas, geminiSchema(el))
+	}
+	return distinctUnion(schemas)
+}
+
+// distinctUnion reduces already-sanitized schemas to one: the schema when all
+// agree, else an anyOf of the distinct ones in first-seen order.
+func distinctUnion(schemas []any) (any, bool) {
+	var distinct []any
+	for _, schema := range schemas {
 		if !slices.ContainsFunc(distinct, func(seen any) bool { return reflect.DeepEqual(seen, schema) }) {
 			distinct = append(distinct, schema)
 		}
@@ -1172,12 +1190,89 @@ func typeUnion(out map[string]any, types []any) []any {
 	return branches
 }
 
+// listedBranches intersects a multi-type list with anyOf: it keeps untyped
+// branches and those whose type is listed (integer fits number), drops null
+// branches unless null is listed, and gives items-less array branches the
+// parent's items. When only untyped branches fit, each becomes one branch per
+// listed type, so the type list is not lost. It returns nil when no non-null
+// branch fits, so the caller falls back to the plain type union.
+func listedBranches(out map[string]any, types, anyOf []any) []any {
+	listed := map[string]bool{}
+	for _, t := range types {
+		if s, ok := t.(string); ok {
+			listed[s] = true
+		}
+	}
+	items, hasItems := out["items"]
+	var kept []any
+	fits, typedFits := false, false
+	for _, b := range anyOf {
+		m, ok := b.(map[string]any)
+		if !ok {
+			kept, fits = append(kept, b), true
+			continue
+		}
+		raw, typed := m["type"]
+		t, _ := raw.(string)
+		switch {
+		case t == "null":
+			if out["nullable"] == true {
+				kept = append(kept, b)
+			}
+			continue
+		case typed && !listed[t] && (t != "integer" || !listed["number"]):
+			continue
+		}
+		if _, set := m["items"]; t == "array" && hasItems && !set {
+			m["items"] = items
+		}
+		kept, fits, typedFits = append(kept, b), true, typedFits || typed
+	}
+	if !fits {
+		return nil
+	}
+	if !typedFits {
+		kept = typedCopies(kept, types, items, hasItems)
+	}
+	if listed["array"] {
+		delete(out, "items")
+	}
+	return kept
+}
+
+// typedCopies replaces each untyped branch with one copy per listed type,
+// the array copy taking the parent's items when it has none. Null branches
+// pass through.
+func typedCopies(branches, types []any, items any, hasItems bool) []any {
+	var out []any
+	for _, b := range branches {
+		m, ok := b.(map[string]any)
+		if ok && m["type"] == "null" {
+			out = append(out, b)
+			continue
+		}
+		for _, t := range types {
+			branch := map[string]any{}
+			for k, v := range m {
+				branch[k] = v
+			}
+			branch["type"] = t
+			if _, set := branch["items"]; t == "array" && hasItems && !set {
+				branch["items"] = items
+			}
+			out = append(out, branch)
+		}
+	}
+	return out
+}
+
 // collapseNullable folds a {"type":"null"} branch into nullable. When one
 // branch is left and none of its keys conflict with the parent, it is merged
 // into the parent, because Gemini requires an array schema to carry its own
 // items (Optional[list] is anyOf[array, null]). A conflicting branch stays
-// whole but still lends its items to an items-less array parent, since every
-// value must match that branch too.
+// whole. An items-less array parent takes the items of every branch that has
+// them, as one schema or their union, since every value must match one of
+// those branches.
 func collapseNullable(out map[string]any, anyOf []any) map[string]any {
 	branches := anyOf[:0]
 	for _, b := range anyOf {
@@ -1188,18 +1283,24 @@ func collapseNullable(out map[string]any, anyOf []any) map[string]any {
 		branches = append(branches, b)
 	}
 	if len(branches) == 1 {
-		if only, ok := branches[0].(map[string]any); ok {
-			if mergesLosslessly(out, only) {
-				for k, v := range only {
-					out[k] = v
-				}
-				return out
+		if only, ok := branches[0].(map[string]any); ok && mergesLosslessly(out, only) {
+			for k, v := range only {
+				out[k] = v
 			}
-			if items, has := only["items"]; has && out["type"] == "array" {
-				if _, set := out["items"]; !set {
-					out["items"] = items
+			return out
+		}
+	}
+	if _, set := out["items"]; !set && out["type"] == "array" {
+		var items []any
+		for _, b := range branches {
+			if m, ok := b.(map[string]any); ok {
+				if it, has := m["items"]; has {
+					items = append(items, it)
 				}
 			}
+		}
+		if union, ok := distinctUnion(items); ok {
+			out["items"] = union
 		}
 	}
 	if len(branches) > 0 {
@@ -1326,11 +1427,16 @@ func geminiChatMessage(body []byte) (chatMessage, string, error) {
 		Content      geminiContent `json:"content"`
 		FinishReason string        `json:"finishReason"`
 	}
+	type promptFeedback struct {
+		BlockReason string `json:"blockReason"`
+	}
 	var parsed struct {
 		Response struct {
-			Candidates []candidate `json:"candidates"`
+			Candidates     []candidate    `json:"candidates"`
+			PromptFeedback promptFeedback `json:"promptFeedback"`
 		} `json:"response"`
-		Candidates []candidate `json:"candidates"`
+		Candidates     []candidate    `json:"candidates"`
+		PromptFeedback promptFeedback `json:"promptFeedback"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return chatMessage{}, "", err
@@ -1342,6 +1448,9 @@ func geminiChatMessage(body []byte) (chatMessage, string, error) {
 	var b strings.Builder
 	message := chatMessage{Role: "assistant"}
 	finish := ""
+	if len(cands) == 0 && (parsed.Response.PromptFeedback.BlockReason != "" || parsed.PromptFeedback.BlockReason != "") {
+		finish = promptBlocked
+	}
 	if len(cands) > 0 {
 		finish = cands[0].FinishReason
 		for _, p := range cands[0].Content.Parts {
@@ -1374,11 +1483,15 @@ func toOpenAIChatJSON(model string, message chatMessage, finish string) ([]byte,
 	})
 }
 
+// promptBlocked stands in for a finish reason when Gemini rejects the prompt
+// itself: it then sends promptFeedback.blockReason and no candidates.
+const promptBlocked = "PROMPT_BLOCKED"
+
 func geminiFinishReason(calls int, upstream string) string {
 	switch upstream {
 	case "MAX_TOKENS":
 		return "length"
-	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY":
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY", promptBlocked:
 		// Like MAX_TOKENS, a blocked turn must not read as a finished tool turn.
 		return "content_filter"
 	}
@@ -1486,12 +1599,44 @@ func streamEventError(event []byte) error {
 	}
 	body := []byte(`{"error":` + string(status) + `}`)
 	var fields struct {
-		Code int `json:"code"`
+		Code   int    `json:"code"`
+		Status string `json:"status"`
 	}
-	if json.Unmarshal(status, &fields) == nil && fields.Code > 0 {
-		return chatHTTPError(&http.Response{StatusCode: fields.Code}, body)
+	if json.Unmarshal(status, &fields) == nil {
+		code := fields.Code
+		if code == 0 {
+			code = googleStatusCodes[fields.Status]
+		}
+		if _, hasReset := cloudCodeResetDelay(body); code == 0 && hasReset {
+			code = http.StatusTooManyRequests
+		}
+		if code > 0 {
+			return chatHTTPError(&http.Response{StatusCode: code}, body)
+		}
 	}
 	return fmt.Errorf("antigravity: stream error: %s", truncate(body))
+}
+
+// googleStatusCodes maps google.rpc.Code names, which a stream error may carry
+// without the numeric code, to the HTTP status the same error has on a
+// non-streaming reply.
+var googleStatusCodes = map[string]int{
+	"INVALID_ARGUMENT":    http.StatusBadRequest,
+	"FAILED_PRECONDITION": http.StatusBadRequest,
+	"OUT_OF_RANGE":        http.StatusBadRequest,
+	"UNAUTHENTICATED":     http.StatusUnauthorized,
+	"PERMISSION_DENIED":   http.StatusForbidden,
+	"NOT_FOUND":           http.StatusNotFound,
+	"ABORTED":             http.StatusConflict,
+	"ALREADY_EXISTS":      http.StatusConflict,
+	"RESOURCE_EXHAUSTED":  http.StatusTooManyRequests,
+	"CANCELLED":           499,
+	"INTERNAL":            http.StatusInternalServerError,
+	"UNKNOWN":             http.StatusInternalServerError,
+	"DATA_LOSS":           http.StatusInternalServerError,
+	"UNIMPLEMENTED":       http.StatusNotImplemented,
+	"UNAVAILABLE":         http.StatusServiceUnavailable,
+	"DEADLINE_EXCEEDED":   http.StatusGatewayTimeout,
 }
 
 func (a *Adapter) headers(req *http.Request) {

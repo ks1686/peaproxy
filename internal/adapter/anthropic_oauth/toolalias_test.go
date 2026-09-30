@@ -294,3 +294,71 @@ func toolUseNames(t *testing.T, raw []byte) []string {
 	}
 	return names
 }
+
+func runSSEFilter(t *testing.T, reverse map[string]string, chunks ...string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	filter := &oAuthToolSSEFilter{dst: &buf, reverse: reverse}
+	for _, c := range chunks {
+		if _, err := filter.Write([]byte(c)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := filter.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+const crlfToolUseEvent = "event: content_block_start\r\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"TodoWrite\",\"input\":{}}}\r\n" +
+	"\r\n"
+
+func TestSSEFilterPreservesCRLFOnRewrittenLine(t *testing.T) {
+	reverse := map[string]string{"TodoWrite": "todowrite"}
+	got := runSSEFilter(t, reverse, crlfToolUseEvent)
+	want := strings.Replace(crlfToolUseEvent, `"name":"TodoWrite"`, `"name":"todowrite"`, 1)
+	if got != want {
+		t.Fatalf("got %q\nwant %q", got, want)
+	}
+	if n := strings.Count(got, "\r\n"); n != 3 {
+		t.Fatalf("CRLF count %d want 3: %q", n, got)
+	}
+}
+
+func TestSSEFilterPreservesBytesAcrossChunkSplit(t *testing.T) {
+	reverse := map[string]string{"TodoWrite": "todowrite"}
+	whole := runSSEFilter(t, reverse, crlfToolUseEvent)
+	var chunks []string
+	for i := 0; i < len(crlfToolUseEvent); i++ {
+		chunks = append(chunks, crlfToolUseEvent[i:i+1])
+	}
+	if split := runSSEFilter(t, reverse, chunks...); split != whole {
+		t.Fatalf("byte-at-a-time %q\nsingle write %q", split, whole)
+	}
+}
+
+func TestSSEFilterPreservesWhitespaceOnRewrittenLine(t *testing.T) {
+	reverse := map[string]string{"TodoWrite": "todowrite"}
+	for _, prefix := range []string{"data:", "data: ", "data:  ", "data:\t"} {
+		for _, suffix := range []string{"", " ", "\t ", " \r"} {
+			in := prefix + `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"TodoWrite","input":{}}}` + suffix + "\n"
+			want := strings.Replace(in, "TodoWrite", "todowrite", 1)
+			if got := runSSEFilter(t, reverse, in); got != want {
+				t.Fatalf("got %q\nwant %q", got, want)
+			}
+		}
+	}
+}
+
+func TestSSEFilterUnchangedLineIsByteIdentical(t *testing.T) {
+	reverse := map[string]string{"TodoWrite": "todowrite"}
+	in := "event: content_block_delta\r\n" +
+		"data:  {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"TodoWrite\"}} \r\n" +
+		"\r\n" +
+		"data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"name\":\"lookup\"}}\n\n" +
+		": ping"
+	if got := runSSEFilter(t, reverse, in); got != in {
+		t.Fatalf("got %q\nwant %q", got, in)
+	}
+}

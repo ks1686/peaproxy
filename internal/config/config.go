@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/fslock"
 	"github.com/ks1686/peaproxy/internal/oauth"
 	"github.com/ks1686/peaproxy/internal/router"
 	"gopkg.in/yaml.v3"
@@ -240,7 +242,9 @@ func LoadOrDefault(path string) (Config, string, error) {
 	return cfg, path, nil
 }
 
-// EnsureFile writes Default() to path when the file does not exist.
+// EnsureFile writes Default() to path when the file does not exist, then
+// overlays PEAPROXY_* env on the returned config (never on the file). An
+// existing file is read without config.lock, so a read-only config dir works.
 func EnsureFile(path string) (Config, string, bool, error) {
 	if path == "" {
 		path = DefaultPath()
@@ -255,12 +259,98 @@ func EnsureFile(path string) (Config, string, bool, error) {
 	} else if !os.IsNotExist(err) {
 		return Config{}, path, false, err
 	}
-	cfg := Default()
-	if err := Save(path, cfg); err != nil {
+	unlock, err := lockConfig(path)
+	if err != nil {
+		return Config{}, path, false, err
+	}
+	cfg, created, err := ensureLocked(path)
+	unlock()
+	if err != nil {
 		return Config{}, path, false, err
 	}
 	ApplyEnv(&cfg)
-	return cfg, path, true, nil
+	return cfg, path, created, nil
+}
+
+// Update runs fn on the config at path (Default() if missing) and saves the
+// result, all under config.lock so concurrent writers cannot lose each
+// other's changes. Env overlays are not applied, so they are never persisted.
+func Update(path string, fn func(*Config) error) (Config, error) {
+	if path == "" {
+		path = DefaultPath()
+	}
+	unlock, err := lockConfig(path)
+	if err != nil {
+		return Config{}, err
+	}
+	defer unlock()
+	cfg, _, err := ensureLocked(path)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := fn(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := saveLocked(path, cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+// SaveMerged writes Merge(base, disk, mine) under config.lock, where disk is
+// the file as it is now (base when missing), and returns the merged config.
+// A file that exists but cannot be read is never overwritten.
+func SaveMerged(path string, base, mine Config) (Config, error) {
+	unlock, err := lockConfig(path)
+	if err != nil {
+		return Config{}, err
+	}
+	defer unlock()
+	var disk Config
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		disk = base
+	} else if disk, err = loadLocked(path); err != nil {
+		return Config{}, err
+	}
+	merged := Merge(base, disk, mine)
+	if err := saveLocked(path, merged); err != nil {
+		return Config{}, err
+	}
+	return merged, nil
+}
+
+// lockTimeout bounds how long a writer waits for config.lock. Tests may shorten it.
+var lockTimeout = 15 * time.Second
+
+// lockConfig takes config.lock next to path, creating the directory first so
+// a first run on a fresh machine works. fslock is not reentrant: every public
+// entry point calls this exactly once and then only *Locked helpers.
+// Lock order is config.lock before secrets.lock, never the reverse.
+func lockConfig(path string) (func(), error) {
+	dir := configDir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil && dir != "." {
+		return nil, err
+	}
+	unlock, err := fslock.Lock(filepath.Join(dir, "config.lock"), lockTimeout)
+	if errors.Is(err, fslock.ErrBusy) {
+		return nil, fmt.Errorf("config %s busy (another peaproxy process is saving): %w", dir, err)
+	}
+	return unlock, err
+}
+
+// ensureLocked loads path, or saves and returns Default() when it is missing.
+func ensureLocked(path string) (Config, bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		cfg, err := loadLocked(path)
+		return cfg, false, err
+	} else if !os.IsNotExist(err) {
+		return Config{}, false, err
+	}
+	cfg := Default()
+	if err := saveLocked(path, cfg); err != nil {
+		return Config{}, false, err
+	}
+	return cfg, true, nil
 }
 
 // ApplyEnv overlays PEAPROXY_* variables (file < env < CLI flags).
@@ -308,8 +398,13 @@ func IsLoopback(bind string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Load reads YAML from path.
+// Load reads YAML from path. It takes no lock: writers replace the file with
+// an atomic rename, and the secret store locks itself.
 func Load(path string) (Config, error) {
+	return loadLocked(path)
+}
+
+func loadLocked(path string) (Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
@@ -336,11 +431,22 @@ func Load(path string) (Config, error) {
 
 // Save writes YAML with mode 0600. OAuth tokens and inline API keys go to the
 // secret store (OS keychain or encrypted file); YAML keeps account metadata.
+// It overwrites the whole file; writers that may race another process use
+// Update or SaveMerged instead.
 func Save(path string, cfg Config) error {
+	unlock, err := lockConfig(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return saveLocked(path, cfg)
+}
+
+func saveLocked(path string, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	dir := filepath.Dir(path)
+	dir := configDir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil && dir != "." {
 		return err
 	}
@@ -352,7 +458,35 @@ func Save(path string, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	return writeAtomic(path, b)
+}
+
+// writeAtomic writes b to a temp file in path's directory (mode 0600) and
+// renames it over path, so readers see the old file or the new one, never a
+// torn write. The temp file is removed on any failure.
+func writeAtomic(path string, b []byte) (err error) {
+	f, err := os.CreateTemp(configDir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err = f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return fslock.Rename(tmp, path)
 }
 
 // Validate enforces loopback-by-default security.

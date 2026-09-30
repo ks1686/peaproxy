@@ -102,32 +102,32 @@ Examples:
 			if err := auth.AuthComplete(waitCtx, sess, ""); err != nil {
 				return err
 			}
-			cfg, path, _, err := config.EnsureFile(*configPath)
-			if err != nil {
-				return err
+			path := *configPath
+			if path == "" {
+				path = config.DefaultPath()
 			}
 			ct := config.OAuthFromRuntime(saved)
-			updated := false
-			for i := range cfg.Providers {
-				if cfg.Providers[i].ID == accountID {
-					cfg.Providers[i].Adapter = adapterName
-					cfg.Providers[i].OAuth = &ct
-					if cfg.Providers[i].Tier == "" {
-						cfg.Providers[i].Tier = "paid"
+			// The read-modify-write must run under config.lock (a running server
+			// may be saving) and must not persist PEAPROXY_* env overlays.
+			if _, err := config.Update(path, func(cfg *config.Config) error {
+				for i := range cfg.Providers {
+					if cfg.Providers[i].ID == accountID {
+						cfg.Providers[i].Adapter = adapterName
+						cfg.Providers[i].OAuth = &ct
+						if cfg.Providers[i].Tier == "" {
+							cfg.Providers[i].Tier = "paid"
+						}
+						return nil
 					}
-					updated = true
-					break
 				}
-			}
-			if !updated {
 				cfg.Providers = append(cfg.Providers, config.Provider{
 					ID:      accountID,
 					Adapter: adapterName,
 					Tier:    "paid",
 					OAuth:   &ct,
 				})
-			}
-			if err := config.Save(path, cfg); err != nil {
+				return nil
+			}); err != nil {
 				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Saved %s account %q to %s (email=%s). Tokens are stored in the OS keychain or an encrypted file next to the config, never printed.\n", adapterName, accountID, path, ct.Email)

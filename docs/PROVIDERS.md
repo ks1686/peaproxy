@@ -29,7 +29,7 @@ Adapters in this repo today (2.0.x):
 | `openai_compat` | Generic base URL + optional key, stream + non-stream | none / API key | required `baseURL` |
 | `opencode_zen` | Named Zen client (CPA declined #6018) | official API key (preferred) | `https://opencode.ai/zen/v1` |
 | `opencode_go` | Named OpenCode Go subscription client (distinct from Zen) | official API key from [opencode.ai/auth](https://opencode.ai/auth) | `https://opencode.ai/zen/go/v1` |
-| `anthropic_oauth` | Claude Pro/Max subscription OAuth + Messages (Bearer) + Claude Code fingerprint / **system cloak**. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
+| `anthropic_oauth` | Claude Pro/Max/Team/Enterprise subscription OAuth + Messages (Bearer) + Claude Code fingerprint / **system cloak**. **ToS/ban risk.** | OAuth (`peaproxy auth login --provider anthropic`) | `https://api.anthropic.com` |
 | `openai_oauth` | ChatGPT/Codex subscription OAuth + native Responses tools pass-through (`store: false`; omit `max_output_tokens`). **ToS/ban risk.** | OAuth (`peaproxy auth login --provider openai`) | `https://chatgpt.com/backend-api/codex` |
 | `antigravity` / `gemini_oauth` | Gemini consumer / Antigravity Cloud Code OAuth + generateContent, tool calling both directions. **ToS/ban risk.** Distinct from AI Studio keys. | OAuth (`--provider gemini`) | `https://cloudcode-pa.googleapis.com` |
 | `xai_oauth` | xAI Grok subscription device OAuth + CLI chat proxy. **ToS/ban risk.** | OAuth (`--provider xai`) | `https://cli-chat-proxy.grok.com/v1` |
@@ -55,14 +55,15 @@ Antigravity details:
 
 - Tool calling works both directions: OpenAI `tools` become `functionDeclarations`, and Gemini `functionCall` parts come back as `tool_calls` (stream and non-stream).
 - Tool schemas are reduced to the Gemini Schema proto. Unsupported JSON Schema keywords are dropped, a type list becomes `anyOf` branches, a `null` branch folds into `nullable`, tuple `items` become one schema or an `anyOf` of the distinct elements, and non-string `enum`s are dropped.
-- Gemini safety stops (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`) finish as `content_filter`; `MAX_TOKENS` finishes as `length`.
+- A type list next to `anyOf`/`oneOf` is intersected with the branches: only untyped branches and branches whose type is listed are kept (an `integer` branch fits `number`), a `null` branch is kept only when `null` is listed, and the old union is used only when no non-null branch fits. An array schema without its own `items` takes the `items` of every `anyOf` branch that has them (one schema, or an `anyOf` of the distinct ones).
+- Gemini safety stops (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`) and a blocked prompt (`promptFeedback.blockReason` with no candidates) finish as `content_filter`; `MAX_TOKENS` finishes as `length`.
 - `gemini-3.1-pro-high` and `gemini-3-pro-high` are listed by `fetchAvailableModels` but rejected by `v1internal`; both are sent upstream as `gemini-pro-agent`. The `gemini-3.1-pro-high` mapping was not live-verified on the v2.0.7 binary.
 - A 429, or a 503 "No capacity available", cools only that model on the account. Other Gemini models stay eligible.
-- The reset hint in the error body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "Resets in X") sets the cooldown length, clamped to 1s–1h.
+- The reset hint in the error body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "Resets in X") sets the cooldown length, clamped to 1s–7 days so a weekly-quota reset ("Resets in 166h…") is honoured. A `Retry-After` header is still clamped to 1s–1h, as for other providers; see [CONFIG.md](CONFIG.md).
 
 ## Paid / subscription
 
-**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
+**P0 OAuth (shipped):** Anthropic Claude Pro/Max/Team/Enterprise, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
 **P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
 

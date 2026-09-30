@@ -1,14 +1,28 @@
 package secretstore
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/zalando/go-keyring"
 )
 
-const probeUser = "_peaproxy_probe"
+const probePrefix = "_peaproxy_probe."
+
+// probeUser is unique per call, so concurrent Opens in any number of
+// processes never read or delete each other's probe item.
+func probeUser() (string, error) {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return probePrefix + strconv.Itoa(os.Getpid()) + "." + hex.EncodeToString(b[:]), nil
+}
 
 type liveKeyring struct{}
 
@@ -29,11 +43,15 @@ func isNotFound(err error) bool {
 }
 
 func probeKeyring(kr keyringAPI) error {
-	if err := kr.Set(Service, probeUser, "ok"); err != nil {
+	user, err := probeUser()
+	if err != nil {
 		return err
 	}
-	defer func() { _ = kr.Delete(Service, probeUser) }()
-	v, err := kr.Get(Service, probeUser)
+	if err := kr.Set(Service, user, "ok"); err != nil {
+		return err
+	}
+	defer func() { _ = kr.Delete(Service, user) }()
+	v, err := kr.Get(Service, user)
 	if err != nil {
 		return err
 	}
@@ -93,7 +111,6 @@ func (s *Store) keyringSet(key, value string) error {
 	if s.kr == nil {
 		return errors.New("secretstore: keyring not configured")
 	}
-	defer lockDir(s.dir)()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err
@@ -136,9 +153,9 @@ func (s *Store) keyringGet(key string) (string, error) {
 	if s.kr == nil {
 		return "", ErrNotFound
 	}
-	defer lockDir(s.dir)()
-	// Another process can publish a new generation and delete the one this
-	// read is following; a vanished chunk under a changed header is retried.
+	// A pre-v2.0.10 binary does not take secrets.lock, so it can publish a
+	// new generation and delete the one this read is following; a vanished
+	// chunk under a changed header is retried.
 	var last string
 	for attempt := 0; attempt < 3; attempt++ {
 		v, err := s.kr.Get(Service, key)
@@ -200,7 +217,6 @@ func (s *Store) keyringDelete(key string) error {
 	if s.kr == nil {
 		return nil
 	}
-	defer lockDir(s.dir)()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err
@@ -214,7 +230,6 @@ func (s *Store) keyringDelete(key string) error {
 }
 
 func (s *Store) keyringPrune(keep map[string]struct{}) error {
-	defer lockDir(s.dir)()
 	idx, err := s.loadIndex()
 	if err != nil {
 		return err

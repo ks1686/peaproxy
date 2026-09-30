@@ -141,6 +141,73 @@ func TestFromOpenAIChatWrapsOutputText(t *testing.T) {
 	}
 }
 
+func responsesStatusFields(t *testing.T, raw []byte) (status string, details map[string]any, hasDetails bool) {
+	t.Helper()
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(parsed["status"], &status); err != nil {
+		t.Fatalf("status: %v in %s", err, raw)
+	}
+	rawDetails, hasDetails := parsed["incomplete_details"]
+	if hasDetails {
+		if err := json.Unmarshal(rawDetails, &details); err != nil {
+			t.Fatalf("incomplete_details: %v in %s", err, raw)
+		}
+	}
+	return status, details, hasDetails
+}
+
+func TestFromOpenAIChatLengthIsIncomplete(t *testing.T) {
+	// Given a chat completion the upstream cut off at the token limit.
+	in := []byte(`{"id":"chatcmpl-1","model":"m","choices":[{"message":{"role":"assistant","content":"partial"},"finish_reason":"length"}]}`)
+	// When mapping it to a Responses object.
+	out, err := FromOpenAIChat(in, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Then it is incomplete because of max_output_tokens.
+	status, details, _ := responsesStatusFields(t, out)
+	if status != "incomplete" || details["reason"] != "max_output_tokens" {
+		t.Fatalf("status=%q incomplete_details=%v: %s", status, details, out)
+	}
+}
+
+func TestFromOpenAIChatContentFilterIsIncomplete(t *testing.T) {
+	// Given a chat completion the upstream stopped with a content filter.
+	in := []byte(`{"id":"chatcmpl-1","model":"m","choices":[{"message":{"role":"assistant","content":""},"finish_reason":"content_filter"}]}`)
+	// When mapping it to a Responses object.
+	out, err := FromOpenAIChat(in, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Then it is incomplete because of the content filter.
+	status, details, _ := responsesStatusFields(t, out)
+	if status != "incomplete" || details["reason"] != "content_filter" {
+		t.Fatalf("status=%q incomplete_details=%v: %s", status, details, out)
+	}
+}
+
+func TestFromOpenAIChatStopHasNoIncompleteDetails(t *testing.T) {
+	for _, finish := range []string{"stop", "tool_calls", ""} {
+		t.Run(finish, func(t *testing.T) {
+			// Given a chat completion that finished normally.
+			in := []byte(`{"id":"chatcmpl-1","model":"m","choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"` + finish + `"}]}`)
+			// When mapping it to a Responses object.
+			out, err := FromOpenAIChat(in, "m")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Then it is completed with no incomplete_details key.
+			status, _, hasDetails := responsesStatusFields(t, out)
+			if status != "completed" || hasDetails {
+				t.Fatalf("status=%q incomplete_details present=%v: %s", status, hasDetails, out)
+			}
+		})
+	}
+}
+
 func messageContents(t *testing.T, raw []byte) []byte {
 	t.Helper()
 	var parsed struct {

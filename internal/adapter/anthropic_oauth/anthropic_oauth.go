@@ -475,7 +475,9 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 		_ = pr.Close()
 	}()
 	err = a.MessagesStream(ctx, raw, pw)
-	_ = pw.Close()
+	// A failed call reaches the translator as a read error, not a clean EOF,
+	// so it never finishes the partial turn.
+	_ = pw.CloseWithError(err)
 	convErr := <-errCh
 	if err != nil {
 		return err

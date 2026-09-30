@@ -159,24 +159,24 @@ func TestV2CacheHitSkipsUpstreamUsage(t *testing.T) {
 	if len(recent) != 2 || !recent[0].CacheHit || recent[0].PromptTokens != 0 || recent[1].PromptTokens != 9 {
 		t.Fatalf("%#v", recent)
 	}
-	connect := httptest.NewRequest(http.MethodPost, "/admin/clients/opencode/connect", strings.NewReader(`{"model":"m"}`))
+	connect := httptest.NewRequest(http.MethodPost, "/admin/clients/claude-code/connect", strings.NewReader(`{"model":"m"}`))
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, connect)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("connect %d %s", rr.Code, rr.Body.String())
 	}
-	written, err := os.ReadFile(filepath.Join(root, "opencode.json"))
-	if err != nil || !strings.Contains(string(written), "peaproxy") {
+	written, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	if err != nil || !strings.Contains(string(written), `"ANTHROPIC_API_KEY":"peaproxy"`) {
 		t.Fatalf("connect file %v %s", err, written)
 	}
-	disconnect := httptest.NewRequest(http.MethodPost, "/admin/clients/opencode/disconnect", strings.NewReader(`{}`))
+	disconnect := httptest.NewRequest(http.MethodPost, "/admin/clients/claude-code/disconnect", strings.NewReader(`{}`))
 	rr = httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, disconnect)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("disconnect %d %s", rr.Code, rr.Body.String())
 	}
-	after, err := os.ReadFile(filepath.Join(root, "opencode.json"))
-	if err != nil || strings.Contains(string(after), `"peaproxy"`) {
+	after, err := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	if err != nil || strings.Contains(string(after), "peaproxy") {
 		t.Fatalf("disconnect file %v %s", err, after)
 	}
 }

@@ -39,6 +39,16 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 		if payload == "[DONE]" {
 			break
 		}
+		if msg, ok := openAIStreamError(payload); ok {
+			upstream := fmt.Errorf("upstream stream error: %s", msg)
+			if !started {
+				return upstream
+			}
+			if werr := writeClaudeStreamError(writeEvent, msg); werr != nil {
+				return errors.Join(upstream, werr)
+			}
+			return upstream
+		}
 		var chunk struct {
 			ID      string `json:"id"`
 			Model   string `json:"model"`
@@ -135,11 +145,17 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 		// The upstream broke off mid-turn. Flushing the buffered tool calls and
 		// a stop_reason would hand the client truncated arguments to run, so
 		// the stream ends with Anthropic's error event instead.
-		if werr := writeEvent("error", `{"type":"error","error":{"type":"api_error","message":"upstream stream failed"}}`); werr != nil {
+		if werr := writeClaudeStreamError(writeEvent, ""); werr != nil {
 			return errors.Join(err, werr)
 		}
 		return err
 	}
+	// A clean EOF without [DONE] still finishes the turn. ClaudeSSEToOpenAI
+	// (the Anthropic adapters' chat wire) writes no [DONE] for a turn that
+	// produced nothing, and the openai-compatible presets relay upstream bytes
+	// as-is, so [DONE] is not guaranteed on every healthy stream. A connection
+	// cut mid-body reaches here as a read error (io.ErrUnexpectedEOF from a
+	// truncated chunked body), not as a clean EOF.
 	if err := writeEvent("content_block_stop", `{"type":"content_block_stop","index":0}`); err != nil {
 		return err
 	}
@@ -161,6 +177,99 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 		return err
 	}
 	return writeEvent("message_stop", `{"type":"message_stop"}`)
+}
+
+const upstreamStreamFailed = "upstream stream failed"
+
+// openAIStreamError reports whether an OpenAI-wire data payload carries a
+// non-null top-level error, and its message. OpenAI sends
+// {"error":{"message","type","code"}}; OpenRouter adds it to a chunk that also
+// has choices (finish_reason "error"); some servers send a bare string.
+func openAIStreamError(payload string) (string, bool) {
+	var body struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal([]byte(payload), &body) != nil || len(body.Error) == 0 || string(body.Error) == "null" {
+		return "", false
+	}
+	var s string
+	if json.Unmarshal(body.Error, &s) == nil {
+		if s == "" {
+			s = upstreamStreamFailed
+		}
+		return s, true
+	}
+	var obj struct {
+		Message string          `json:"message"`
+		Type    string          `json:"type"`
+		Code    json.RawMessage `json:"code"`
+	}
+	if json.Unmarshal(body.Error, &obj) != nil {
+		return string(body.Error), true
+	}
+	switch {
+	case obj.Message != "":
+		return obj.Message, true
+	case obj.Type != "":
+		return obj.Type, true
+	case len(obj.Code) > 0 && string(obj.Code) != "null":
+		return strings.Trim(string(obj.Code), `"`), true
+	}
+	return upstreamStreamFailed, true
+}
+
+// writeClaudeStreamError ends a started Messages stream with Anthropic's error
+// event. An empty message becomes the generic upstream failure text.
+func writeClaudeStreamError(writeEvent func(event, data string) error, message string) error {
+	if message == "" {
+		message = upstreamStreamFailed
+	}
+	raw, err := json.Marshal(struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{Type: "error", Error: struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}{Type: "api_error", Message: message}})
+	if err != nil {
+		return err
+	}
+	return writeEvent("error", string(raw))
+}
+
+// writeResponsesFailed ends a started Responses stream with response.failed.
+// An empty message becomes the generic upstream failure text.
+func writeResponsesFailed(writeEvent func(event, data string) error, id, model, message string) error {
+	if message == "" {
+		message = upstreamStreamFailed
+	}
+	failed := struct {
+		Type     string `json:"type"`
+		Response struct {
+			ID     string `json:"id"`
+			Object string `json:"object"`
+			Status string `json:"status"`
+			Model  string `json:"model"`
+			Error  struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"response"`
+	}{Type: "response.failed"}
+	failed.Response.ID = id
+	failed.Response.Object = "response"
+	failed.Response.Status = "failed"
+	failed.Response.Model = model
+	failed.Response.Error.Code = "server_error"
+	failed.Response.Error.Message = message
+	raw, err := json.Marshal(failed)
+	if err != nil {
+		return err
+	}
+	return writeEvent("response.failed", string(raw))
 }
 
 func writeClaudeDelta(writeEvent func(event, data string) error, index int, delta any) error {
@@ -310,6 +419,20 @@ func openAIChatFinishReason(hadToolCalls bool) string {
 	return "stop"
 }
 
+// openAIFinishFromClaude checks truncation and refusal before tool use: a turn
+// cut off or blocked inside a tool call must not be handed to the client to run.
+func openAIFinishFromClaude(stopReason string, hadToolCalls bool) string {
+	switch stopReason {
+	case "max_tokens":
+		return "length"
+	case "refusal":
+		return "content_filter"
+	}
+	return openAIChatFinishReason(hadToolCalls || stopReason == "tool_use")
+}
+
+const openAIStreamFailedChunk = `data: {"error":{"message":"upstream stream failed","type":"api_error"}}` + "\n\n"
+
 // ClaudeSSEToOpenAI converts Anthropic SSE into chat.completion.chunk SSE.
 func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	sc := bufio.NewScanner(r)
@@ -319,6 +442,7 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	wrote := false
 	wroteRole := false
 	hadToolCalls := false
+	stopReason := ""
 	type thinkAcc struct {
 		kind, thinking, signature, data string
 	}
@@ -363,11 +487,26 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				Thinking  string `json:"thinking"`
 				Signature string `json:"signature"`
 			} `json:"content_block"`
+			Error *struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
 		}
 		switch ev.Type {
+		case "error":
+			upstream := fmt.Errorf("anthropic stream error: %s", payload)
+			if ev.Error != nil {
+				upstream = fmt.Errorf("anthropic stream error: %s: %s", ev.Error.Type, ev.Error.Message)
+			}
+			if wroteRole {
+				if _, err := io.WriteString(w, openAIStreamFailedChunk); err != nil {
+					return errors.Join(upstream, err)
+				}
+			}
+			return upstream
 		case "message_start":
 			if ev.Message != nil {
 				if ev.Message.ID != "" {
@@ -443,6 +582,9 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 			}
 			wrote = true
 		case "message_delta":
+			if ev.Delta.StopReason != "" {
+				stopReason = ev.Delta.StopReason
+			}
 			if ev.Delta.StopReason == "tool_use" {
 				hadToolCalls = true
 				wrote = true
@@ -450,6 +592,16 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 		default:
 			// ignore ping, content_block_stop, message_stop
 		}
+	}
+	if err := sc.Err(); err != nil {
+		// The upstream broke off mid-turn: a finish chunk would hand the client
+		// truncated tool arguments to run.
+		if wroteRole {
+			if _, werr := io.WriteString(w, openAIStreamFailedChunk); werr != nil {
+				return errors.Join(err, werr)
+			}
+		}
+		return err
 	}
 	var entries []opaqueEntry
 	for _, idx := range accOrder {
@@ -479,17 +631,18 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				return err
 			}
 		}
-		if err := WriteOpenAIChatSSEFinish(w, id, model, openAIChatFinishReason(hadToolCalls)); err != nil {
+		if err := WriteOpenAIChatSSEFinish(w, id, model, openAIFinishFromClaude(stopReason, hadToolCalls)); err != nil {
 			return err
 		}
 	}
-	return sc.Err()
+	return nil
 }
 
 // OpenAISSEToResponses converts chat.completion.chunk SSE into Responses API SSE.
 // Text deltas become response.output_text.delta. Chat tool_calls are mapped to
 // function_call output items on response.completed (plus argument deltas when
-// present). This does not execute tools or invent tool results.
+// present); a length or content_filter finish ends on response.incomplete
+// instead. This does not execute tools or invent tool results.
 func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	started := false
 	id := "resp_peaproxy"
@@ -507,6 +660,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	calls := map[int]*pendingCall{}
 	var order []int
 	var carried []responsesOutMsg
+	lastFinish := ""
 	for sc.Scan() {
 		line := sc.Text()
 		if !strings.HasPrefix(line, "data:") {
@@ -515,6 +669,16 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
 			break
+		}
+		if msg, ok := openAIStreamError(payload); ok {
+			upstream := fmt.Errorf("upstream stream error: %s", msg)
+			if !started {
+				return upstream
+			}
+			if werr := writeResponsesFailed(writeEvent, id, model, msg); werr != nil {
+				return errors.Join(upstream, werr)
+			}
+			return upstream
 		}
 		var chunk struct {
 			ID      string `json:"id"`
@@ -533,6 +697,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 						} `json:"function"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -569,6 +734,9 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if f := chunk.Choices[0].FinishReason; f != "" {
+			lastFinish = f
 		}
 		delta := chunk.Choices[0].Delta
 		if len(delta.ReasoningOpaque) > 0 {
@@ -663,9 +831,15 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	}
 	if err := sc.Err(); err != nil {
 		// The upstream broke off mid-turn: response.completed would hand the
-		// client the truncated function_call arguments to run.
+		// client the truncated function_call arguments to run. Emit
+		// response.failed so a Responses client sees a terminal event instead
+		// of a bare EOF after response.created.
+		if werr := writeResponsesFailed(writeEvent, id, model, ""); werr != nil {
+			return errors.Join(err, werr)
+		}
 		return err
 	}
+	// A clean EOF without [DONE] completes, as in OpenAISSEToClaude.
 	output := make([]responsesOutMsg, 0, len(carried)+len(order)+1)
 	output = append(output, carried...)
 	for _, idx := range order {
@@ -687,25 +861,31 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			}},
 		})
 	}
-	completed := struct {
+	status, details := responsesStatus(lastFinish)
+	event := "response.completed"
+	if status == "incomplete" {
+		event = "response.incomplete"
+	}
+	terminal := struct {
 		Type     string          `json:"type"`
 		Response responsesOutput `json:"response"`
 	}{
-		Type: "response.completed",
+		Type: event,
 		Response: responsesOutput{
-			ID:         id,
-			Object:     "response",
-			Status:     "completed",
-			Model:      model,
-			Output:     output,
-			OutputText: text.String(),
+			ID:                id,
+			Object:            "response",
+			Status:            status,
+			IncompleteDetails: details,
+			Model:             model,
+			Output:            output,
+			OutputText:        text.String(),
 		},
 	}
-	raw, err := json.Marshal(completed)
+	raw, err := json.Marshal(terminal)
 	if err != nil {
 		return err
 	}
-	return writeEvent("response.completed", string(raw))
+	return writeEvent(event, string(raw))
 }
 
 func jsonString(s string) string {

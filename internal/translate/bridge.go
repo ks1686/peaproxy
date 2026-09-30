@@ -379,10 +379,7 @@ func FromClaude(raw []byte) ([]byte, error) {
 	out.Choices[0].Message.Content = content
 	out.Choices[0].Message.ToolCalls = calls
 	out.Choices[0].Message.ReasoningOpaque = opaqueRaw
-	out.Choices[0].FinishReason = openAIChatFinishReason(len(calls) > 0 || in.StopReason == "tool_use")
-	if in.StopReason == "max_tokens" && len(calls) == 0 {
-		out.Choices[0].FinishReason = "length"
-	}
+	out.Choices[0].FinishReason = openAIFinishFromClaude(in.StopReason, len(calls) > 0)
 	if in.Usage != nil {
 		out.Usage = &struct {
 			PromptTokens     int `json:"prompt_tokens"`

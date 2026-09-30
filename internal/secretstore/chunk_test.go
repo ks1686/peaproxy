@@ -111,9 +111,9 @@ func TestOverwriteKeepsOldValueWhenAChunkWriteFails(t *testing.T) {
 	}
 }
 
-// The two writers below interleave inside one Set, which the per-dir lock
-// forbids in-process. Distinct dirs model what the lock cannot cover (another
-// process sharing the keychain); generation-scoped chunks must still hold.
+// The two writers below interleave inside one Set, which secrets.lock
+// forbids. Distinct dirs model what the lock cannot cover (a pre-v2.0.10
+// binary sharing the keychain); generation-scoped chunks must still hold.
 func TestConcurrentWritersNeverSplice(t *testing.T) {
 	kr := newFault()
 	a := &Store{backend: BackendKeyring, dir: t.TempDir(), kr: kr}

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,12 @@ var ErrUnknownClient = errors.New("unknown managed client")
 // ErrGuidedSetup means the harness has no writable config. Callers show the preset snippet.
 var ErrGuidedSetup = errors.New("guided setup")
 
+// ErrInvalidInput means the base URL or model cannot be recorded safely.
+var ErrInvalidInput = errors.New("invalid connect input")
+
+// ErrUnexpectedShape means a key PeaProxy merges into holds a non-object value.
+var ErrUnexpectedShape = errors.New("client config has unexpected shape")
+
 // Layout resolves config paths under root instead of the real home directory.
 type Layout struct {
 	Root string
@@ -37,7 +45,7 @@ type ManagedClient struct {
 // Detect lists managed clients that have a config file under the layout.
 func (l Layout) Detect() []ManagedClient {
 	var out []ManagedClient
-	for _, name := range []string{"opencode", "continue", "codex", "claude-code"} {
+	for _, name := range []string{"opencode", "pi", "continue", "codex", "claude-code"} {
 		path := l.path(name)
 		if path == "" {
 			continue
@@ -53,6 +61,8 @@ func (l Layout) path(name string) string {
 	switch name {
 	case "opencode":
 		return filepath.Join(l.Root, "opencode.json")
+	case "pi":
+		return filepath.Join(l.Root, ".pi", "agent", "models.json")
 	case "continue":
 		return filepath.Join(l.Root, ".continue", "config.yaml")
 	case "codex":
@@ -66,12 +76,12 @@ func (l Layout) path(name string) string {
 
 // Connect records a PeaProxy provider without removing unrelated keys.
 func (l Layout) Connect(name, baseURL, model string) error {
-	if name == "pi" {
-		return ErrGuidedSetup
-	}
 	path := l.path(name)
 	if path == "" {
 		return ErrUnknownClient
+	}
+	if err := validateConnect(baseURL, model); err != nil {
+		return err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -112,7 +122,30 @@ func (l Layout) Disconnect(name string) error {
 	if err != nil {
 		return err
 	}
+	if bytes.Equal(updated, raw) {
+		return nil
+	}
 	return writeAtomic(path, updated)
+}
+
+func validateConnect(baseURL, model string) error {
+	u, err := url.Parse(baseURL)
+	if unsafeText(baseURL) || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("%w: base URL must be an http(s) URL without quotes, backslashes or control characters", ErrInvalidInput)
+	}
+	if len(model) > 256 || unsafeText(model) {
+		return fmt.Errorf("%w: model must be at most 256 bytes without quotes, backslashes or control characters", ErrInvalidInput)
+	}
+	return nil
+}
+
+func unsafeText(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 || c == '"' || c == '\\' {
+			return true
+		}
+	}
+	return false
 }
 
 func hash(raw []byte) string {
@@ -126,8 +159,12 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 		return insertCodex(raw, baseURL, model), nil
 	case "continue":
 		return insertContinue(raw, baseURL, model), nil
+	case "pi":
+		return insertPi(raw, baseURL)
+	case "claude-code":
+		return insertClaudeCode(raw, baseURL, model)
 	default:
-		return insertJSON(raw, baseURL, model)
+		return nil, ErrGuidedSetup
 	}
 }
 
@@ -137,12 +174,32 @@ func removeOwned(name string, raw []byte) ([]byte, error) {
 		return []byte(removeCodex(string(raw))), nil
 	case "continue":
 		return []byte(removeContinue(string(raw))), nil
+	case "pi":
+		return removePi(raw)
+	case "claude-code":
+		return removeClaudeCode(raw)
 	default:
 		return removeJSON(raw)
 	}
 }
 
-func insertJSON(raw []byte, baseURL, model string) ([]byte, error) {
+const ownedAPIKey = "peaproxy"
+
+// legacyOwnedKey is the top-level key connect wrote before v2.0.10. Neither
+// OpenCode nor Claude Code ever read it; disconnect still removes it.
+const legacyOwnedKey = "peaproxy"
+
+var piOverrides = []struct {
+	provider string
+	trimV1   bool
+}{
+	{"anthropic", true},
+	{"openai", false},
+}
+
+var claudeCodeEnv = []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"}
+
+func insertClaudeCode(raw []byte, baseURL, model string) ([]byte, error) {
 	body := bytes.TrimSpace(stripJSONC(raw))
 	if len(body) == 0 {
 		body = []byte("{}")
@@ -150,11 +207,194 @@ func insertJSON(raw []byte, baseURL, model string) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("client config is not json")
 	}
-	next, err := upsertJSONKey(body, "peaproxy", map[string]any{"baseURL": baseURL, "model": model})
+	body, err := deleteJSONKey(body, legacyOwnedKey)
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
+	env, err := objectOrEmpty(body, "env", "claude-code settings: env")
+	if err != nil {
+		return nil, err
+	}
+	values := map[string]string{
+		"ANTHROPIC_BASE_URL": strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1"),
+		"ANTHROPIC_API_KEY":  ownedAPIKey,
+		"ANTHROPIC_MODEL":    model,
+	}
+	for _, key := range claudeCodeEnv {
+		if values[key] == "" {
+			if env, err = deleteJSONKey(env, key); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if env, err = upsertJSONKey(env, key, values[key]); err != nil {
+			return nil, err
+		}
+	}
+	next, err := upsertJSONKey(body, "env", json.RawMessage(env))
+	if err != nil {
+		return nil, err
+	}
+	return formatJSON(raw, next), nil
+}
+
+func removeClaudeCode(raw []byte) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		return raw, nil
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	_, legacy := getJSONKey(body, legacyOwnedKey)
+	env, ok := getJSONKey(body, "env")
+	key, _ := getJSONKey(env, "ANTHROPIC_API_KEY")
+	owned := ok && string(key) == `"`+ownedAPIKey+`"`
+	if !legacy && !owned {
+		return raw, nil
+	}
+	body, err := deleteJSONKey(body, legacyOwnedKey)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		for _, k := range claudeCodeEnv {
+			if env, err = deleteJSONKey(env, k); err != nil {
+				return nil, err
+			}
+		}
+		if string(env) == "{}" {
+			body, err = deleteJSONKey(body, "env")
+		} else {
+			body, err = upsertJSONKey(body, "env", json.RawMessage(env))
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return formatJSON(raw, body), nil
+}
+
+func insertPi(raw []byte, baseURL string) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		body = []byte("{}")
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	providers, err := objectOrEmpty(body, "providers", "pi models: providers")
+	if err != nil {
+		return nil, err
+	}
+	for _, o := range piOverrides {
+		entry, err := objectOrEmpty(providers, o.provider, "pi models: providers."+o.provider)
+		if err != nil {
+			return nil, err
+		}
+		url := baseURL
+		if o.trimV1 {
+			url = strings.TrimSuffix(strings.TrimRight(url, "/"), "/v1")
+		}
+		if entry, err = upsertJSONKey(entry, "baseUrl", url); err != nil {
+			return nil, err
+		}
+		if entry, err = upsertJSONKey(entry, "apiKey", ownedAPIKey); err != nil {
+			return nil, err
+		}
+		if providers, err = upsertJSONKey(providers, o.provider, json.RawMessage(entry)); err != nil {
+			return nil, err
+		}
+	}
+	next, err := upsertJSONKey(body, "providers", json.RawMessage(providers))
+	if err != nil {
+		return nil, err
+	}
+	return formatJSON(raw, next), nil
+}
+
+func removePi(raw []byte) ([]byte, error) {
+	body := bytes.TrimSpace(stripJSONC(raw))
+	if len(body) == 0 {
+		return raw, nil
+	}
+	if !json.Valid(body) {
+		return nil, errors.New("client config is not json")
+	}
+	providers, ok := getJSONKey(body, "providers")
+	if !ok {
+		return raw, nil
+	}
+	changed := false
+	for _, o := range piOverrides {
+		entry, ok := getJSONKey(providers, o.provider)
+		if !ok {
+			continue
+		}
+		key, _ := getJSONKey(entry, "apiKey")
+		if string(key) != `"`+ownedAPIKey+`"` {
+			continue
+		}
+		changed = true
+		var err error
+		if entry, err = deleteJSONKey(entry, "baseUrl"); err != nil {
+			return nil, err
+		}
+		if entry, err = deleteJSONKey(entry, "apiKey"); err != nil {
+			return nil, err
+		}
+		if string(entry) == "{}" {
+			providers, err = deleteJSONKey(providers, o.provider)
+		} else {
+			providers, err = upsertJSONKey(providers, o.provider, json.RawMessage(entry))
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	next, err := upsertJSONKey(body, "providers", json.RawMessage(providers))
+	if err != nil {
+		return nil, err
+	}
+	return formatJSON(raw, next), nil
+}
+
+// objectOrEmpty returns body[key] when it is an object, {} when it is missing
+// or null, and ErrUnexpectedShape otherwise so user data is never replaced.
+func objectOrEmpty(body []byte, key, what string) ([]byte, error) {
+	value, ok := getJSONKey(body, key)
+	switch {
+	case !ok || string(value) == "null":
+		return []byte("{}"), nil
+	case bytes.HasPrefix(value, []byte("{")):
+		return value, nil
+	default:
+		return nil, fmt.Errorf("%s is not an object: %w", what, ErrUnexpectedShape)
+	}
+}
+
+// formatJSON re-indents next like the original file when that file was
+// multi-line, keeping its trailing-newline choice and CRLF line endings, and
+// hoists its comments.
+func formatJSON(raw, next []byte) []byte {
+	out := next
+	indent, multiline := detectIndent(stripJSONC(raw))
+	if multiline {
+		var buf bytes.Buffer
+		if err := json.Indent(&buf, next, "", indent); err == nil {
+			out = buf.Bytes()
+		}
+	}
+	if !multiline || bytes.HasSuffix(raw, []byte("\n")) {
+		out = append(out, '\n')
+	}
+	if bytes.Contains(raw, []byte("\r\n")) {
+		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+	}
+	return append(commentPrefix(raw), out...)
 }
 
 func commentPrefix(raw []byte) []byte {
@@ -178,11 +418,14 @@ func removeJSON(raw []byte) ([]byte, error) {
 	if !json.Valid(body) {
 		return nil, errors.New("client config is not json")
 	}
-	next, err := deleteJSONKey(body, "peaproxy")
+	if _, ok := getJSONKey(body, legacyOwnedKey); !ok {
+		return raw, nil
+	}
+	next, err := deleteJSONKey(body, legacyOwnedKey)
 	if err != nil {
 		return nil, err
 	}
-	return append(commentPrefix(raw), append(next, '\n')...), nil
+	return formatJSON(raw, next), nil
 }
 
 func stripJSONC(raw []byte) []byte {
@@ -260,8 +503,14 @@ func removeContinue(text string) string {
 	return strings.Join(out, "\n")
 }
 
+// quote encodes s as a JSON string, which is also a valid TOML basic string
+// and YAML double-quoted scalar.
 func quote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 func writeAtomic(path string, raw []byte) error {

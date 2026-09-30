@@ -5,28 +5,54 @@ import (
 	"encoding/json"
 )
 
+// upsertJSONKey sets key to value, keeping an existing key at its position and
+// appending a new one at the end.
 func upsertJSONKey(body []byte, key string, value any) ([]byte, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
 	}
-	without, err := deleteJSONKey(body, key)
-	if err != nil {
-		return nil, err
+	return rewriteJSONKey(body, key, encoded)
+}
+
+func getJSONKey(body []byte, key string) ([]byte, bool) {
+	if len(body) == 0 || body[0] != '{' {
+		return nil, false
 	}
-	end := bytes.LastIndexByte(without, '}')
-	if end < 0 {
-		return nil, errorsNewJSON()
+	i := 1
+	for {
+		i = skipWS(body, i)
+		if i >= len(body) || body[i] != '"' {
+			return nil, false
+		}
+		nameStart := i
+		i = scanString(body, i)
+		name := body[nameStart:i]
+		i = skipWS(body, i)
+		if i >= len(body) || body[i] != ':' {
+			return nil, false
+		}
+		i++
+		valueStart := skipWS(body, i)
+		i = scanValue(body, valueStart)
+		if string(name) == `"`+key+`"` {
+			return bytes.TrimSpace(body[valueStart:i]), true
+		}
+		i = skipWS(body, i)
+		if i < len(body) && body[i] == ',' {
+			i++
+		}
 	}
-	member := append([]byte(`"`+key+`":`), encoded...)
-	inner := bytes.TrimSpace(without[:end])
-	if len(inner) == 0 || inner[len(inner)-1] == '{' {
-		return append(append(without[:end], member...), without[end:]...), nil
-	}
-	return append(append(without[:end], append([]byte{','}, member...)...), without[end:]...), nil
 }
 
 func deleteJSONKey(body []byte, key string) ([]byte, error) {
+	return rewriteJSONKey(body, key, nil)
+}
+
+// rewriteJSONKey compacts body and replaces the first occurrence of key with
+// replacement (dropping any duplicates), appending it when key is absent. A
+// nil replacement deletes key. key must be a plain ASCII JSON name; it is not escaped.
+func rewriteJSONKey(body []byte, key string, replacement []byte) ([]byte, error) {
 	if len(body) == 0 || body[0] != '{' {
 		return nil, errorsNewJSON()
 	}
@@ -34,12 +60,25 @@ func deleteJSONKey(body []byte, key string) ([]byte, error) {
 	out = append(out, '{')
 	i := 1
 	first := true
+	found := false
+	emit := func(name, value []byte) {
+		if !first {
+			out = append(out, ',')
+		}
+		first = false
+		out = append(out, name...)
+		out = append(out, ':')
+		out = append(out, value...)
+	}
 	for {
 		i = skipWS(body, i)
 		if i >= len(body) {
 			return nil, errorsNewJSON()
 		}
 		if body[i] == '}' {
+			if !found && replacement != nil {
+				emit([]byte(`"`+key+`"`), replacement)
+			}
 			out = append(out, '}')
 			return out, nil
 		}
@@ -62,15 +101,13 @@ func deleteJSONKey(body []byte, key string) ([]byte, error) {
 			i++
 		}
 		if string(name) == `"`+key+`"` {
+			if !found && replacement != nil {
+				emit(name, replacement)
+			}
+			found = true
 			continue
 		}
-		if !first {
-			out = append(out, ',')
-		}
-		first = false
-		out = append(out, name...)
-		out = append(out, ':')
-		out = append(out, bytes.TrimSpace(value)...)
+		emit(name, bytes.TrimSpace(value))
 	}
 }
 
@@ -148,4 +185,21 @@ func scanValue(b []byte, i int) int {
 		}
 		return i
 	}
+}
+
+// detectIndent reports the indent unit of a JSON object body: the leading
+// whitespace of the first indented line after the opening brace. multiline is
+// false for single-line bodies, which are written back compact.
+func detectIndent(body []byte) (indent string, multiline bool) {
+	body = bytes.TrimSpace(body)
+	if bytes.IndexByte(body, '\n') < 0 {
+		return "", false
+	}
+	for _, line := range bytes.Split(body, []byte("\n"))[1:] {
+		trimmed := bytes.TrimLeft(line, " \t")
+		if len(trimmed) != 0 && len(trimmed) != len(line) {
+			return string(line[:len(line)-len(trimmed)]), true
+		}
+	}
+	return "", true
 }

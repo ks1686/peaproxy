@@ -1,9 +1,12 @@
 # Releasing PeaProxy
 
-Push an annotated `v*` tag on `main`. GitHub Actions runs GoReleaser
-(linux/darwin/windows × amd64/arm64), publishes GitHub Release archives, and
-on stable tags pushes the Homebrew cask to `ks1686/homebrew-tap` when
-`HOMEBREW_TAP_GITHUB_TOKEN` is set.
+Push an annotated `v*` tag on `main`. The `release` workflow first runs the
+whole `ci` workflow as its `ci` job (the test matrix on Linux, macOS and
+Windows, the race job with `goreleaser check`, and the UI smoke test). The
+`goreleaser` job `needs: ci`, so nothing is built or published unless all of
+it passes. GoReleaser then builds linux/darwin/windows × amd64/arm64,
+publishes GitHub Release archives, and on stable tags pushes the Homebrew cask
+to `ks1686/homebrew-tap` when `HOMEBREW_TAP_GITHUB_TOKEN` is set.
 
 ## macOS Developer ID + notarization
 

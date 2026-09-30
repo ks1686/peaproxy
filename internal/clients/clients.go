@@ -50,16 +50,45 @@ export ANTHROPIC_API_KEY=peaproxy
 		BaseURL:    "http://127.0.0.1:8317/v1",
 		AuthHeader: "Authorization: Bearer peaproxy",
 		Cloak:      "off",
-		Notes:      "OpenCode Anthropic provider wants baseURL INCLUDING /v1. Do not reuse the Claude Code env as-is. Cloak defaults off.",
+		Notes:      "baseURL INCLUDES /v1. Custom providers get no models.dev metadata: declare each model's limit, modalities and variants (copy them from `opencode models anthropic --verbose` / `openai`), or compaction never fires and effort variants are ignored. @ai-sdk/openai (Responses) is the only wire that carries GPT reasoning variants; @ai-sdk/openai-compatible suits other models. Keep the ids peaproxy-*: a provider named anthropic is also rewritten by opencode-claude-auth. Cloak defaults off.",
 		Snippet: `{
   "provider": {
-    "peaproxy-openai": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
-    },
     "peaproxy-anthropic": {
       "npm": "@ai-sdk/anthropic",
-      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" }
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "claude-opus-5-5": {
+          "reasoning": true, "attachment": true, "tool_call": true,
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
+          "limit": { "context": 1000000, "output": 128000 },
+          "variants": {
+            "high": { "thinking": { "type": "adaptive" }, "effort": "high" },
+            "max": { "thinking": { "type": "adaptive" }, "effort": "max" }
+          }
+        }
+      }
+    },
+    "peaproxy-openai": {
+      "npm": "@ai-sdk/openai",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "gpt-5.6-sol": {
+          "reasoning": true, "attachment": true, "tool_call": true,
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "limit": { "context": 400000, "input": 272000, "output": 128000 },
+          "variants": {
+            "low": { "reasoningEffort": "low" },
+            "high": { "reasoningEffort": "high" }
+          }
+        }
+      }
+    },
+    "peaproxy-compat": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+      "models": {
+        "llama3.2": { "tool_call": true, "limit": { "context": 128000, "output": 8192 } }
+      }
     }
   }
 }
@@ -69,16 +98,25 @@ export ANTHROPIC_API_KEY=peaproxy
 	"pi": {
 		Name:       "pi",
 		BaseURL:    "http://127.0.0.1:8317",
-		AuthHeader: "depends on anthropic-messages vs OpenAI path",
+		AuthHeader: "x-api-key (anthropic-messages) or Authorization: Bearer (openai-responses / openai-completions); PeaProxy accepts any value",
 		Cloak:      "off",
-		Notes:      "Pi speaks both wires. Anthropic path has no /v1; OpenAI path includes /v1. PeaProxy cloak defaults are off (CLIProxyAPI #6120) — do not apply Claude-Code cloak / clear_thinking to Pi. verify --chat hits both wires.",
-		Snippet: `# Pi — Anthropic-messages wire (NO /v1; Pi appends /v1/messages)
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8317
-export ANTHROPIC_API_KEY=peaproxy
-
-# Pi — OpenAI chat-completions wire (includes /v1)
-export OPENAI_BASE_URL=http://127.0.0.1:8317/v1
-export OPENAI_API_KEY=peaproxy
+		Notes:      "Pi reads endpoints from ~/.pi/agent/models.json only; pi honours PI_CODING_AGENT_DIR, but connect pi always writes <root>/.pi/agent/models.json; when PI_CODING_AGENT_DIR points elsewhere, apply the clients show pi snippet by hand. It does not read ANTHROPIC_BASE_URL or OPENAI_BASE_URL. Override the built-in anthropic (baseUrl WITHOUT /v1, the SDK appends /v1/messages) and openai (WITH /v1, Responses) providers so pi keeps its bundled model metadata: thinking levels, compat flags, cache lifetimes. apiKey is what makes the provider show in /model; a stored /login credential for the same provider takes precedence but still goes to PeaProxy. Models PeaProxy serves that pi's catalog lacks need a models entry with their own metadata (custom entries default to 128k context, no reasoning, text only). Put non-Claude/GPT catalog models under a peaproxy provider on openai-completions. /model reloads the file. `clients connect pi` writes the two overrides and ignores --model. PeaProxy cloak defaults are off (CLIProxyAPI #6120) — do not apply Claude-Code cloak / clear_thinking to Pi. verify --chat hits both wires.",
+		Snippet: `{
+  "providers": {
+    "anthropic": { "baseUrl": "http://127.0.0.1:8317", "apiKey": "peaproxy",
+      "models": [
+        { "id": "claude-sonnet-5-5", "name": "Claude Sonnet 5.5", "reasoning": true, "input": ["text", "image"],
+          "contextWindow": 1000000, "maxTokens": 128000,
+          "thinkingLevelMap": { "off": null, "minimal": null, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" },
+          "compat": { "forceAdaptiveThinking": true, "supportsTemperature": false, "supportsStrictTools": true } }
+      ] },
+    "openai": { "baseUrl": "http://127.0.0.1:8317/v1", "apiKey": "peaproxy" },
+    "peaproxy": { "baseUrl": "http://127.0.0.1:8317/v1", "api": "openai-completions", "apiKey": "peaproxy",
+      "models": [
+        { "id": "REPLACE_WITH_CATALOG_ID", "reasoning": true, "input": ["text", "image"], "contextWindow": 1048576, "maxTokens": 65536 }
+      ] }
+  }
+}
 `,
 		VerifyTODO: "peaproxy clients verify pi --chat",
 	},
@@ -214,6 +252,24 @@ func init() {
 			presets[k] = p
 		}
 	}
+}
+
+// DefaultOrigin is the gateway address baked into the presets.
+const DefaultOrigin = "http://127.0.0.1:8317"
+
+// WithOrigin returns a copy of p whose base URL and snippet point at origin
+// instead of DefaultOrigin, with a verify hint that passes --origin.
+func WithOrigin(p Preset, origin string) Preset {
+	origin = strings.TrimSuffix(strings.TrimRight(origin, "/"), "/v1")
+	if origin == DefaultOrigin || origin == "" {
+		return p
+	}
+	p.BaseURL = strings.ReplaceAll(p.BaseURL, DefaultOrigin, origin)
+	p.Snippet = strings.ReplaceAll(p.Snippet, DefaultOrigin, origin)
+	if p.Verify != "" {
+		p.Verify += " --origin " + origin
+	}
+	return p
 }
 
 // Format prints a preset for humans and agents.

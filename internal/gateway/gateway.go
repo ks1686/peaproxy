@@ -6,8 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"maps"
 	"net/http"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -57,6 +61,15 @@ type Gateway struct {
 	quota         *quota.Store
 	refreshSeq    uint64
 	refreshCommit uint64
+	// saved is the merge base: what cfg looked like at the last save (adopted
+	// fields as merged from disk, the rest as they were in cfg). It is only
+	// ever assigned clones, never a value that shares memory with cfg.
+	saved          config.Config
+	lastPersistErr string
+	// saveMu serialises mutate+persist. It is taken before mu and is never
+	// held across Refresh or any adapter call, so a PersistOAuth callback from
+	// ListModels cannot deadlock.
+	saveMu sync.Mutex
 }
 
 // Cooldown is a temporary skip of an account after a retryable failure.
@@ -103,7 +116,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if reg == nil {
 		reg = adapters.DefaultRegistry()
 	}
-	g := &Gateway{cfg: cfg, path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, continuations: map[string]continuationBind{}, accountStats: map[string]router.AccountStat{}, admission: &router.Gate{}, flight: &responsecache.Flight{}, quota: quota.NewStore()}
+	g := &Gateway{cfg: cfg, saved: config.Clone(cfg), path: path, reg: reg, cool: map[string]Cooldown{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, continuations: map[string]continuationBind{}, accountStats: map[string]router.AccountStat{}, admission: &router.Gate{}, flight: &responsecache.Flight{}, quota: quota.NewStore()}
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -144,8 +157,12 @@ func (g *Gateway) rebuild() error {
 			opts.OAuth = p.OAuth.Runtime()
 		}
 		id := p.ID
+		// A failed save must not fail the request that refreshed the token:
+		// SaveOAuth has already updated cfg in memory, persist has logged the
+		// error, and the next successful save writes the token.
 		opts.PersistOAuth = func(tok oauth.Token) error {
-			return g.SaveOAuth(id, tok)
+			_ = g.SaveOAuth(id, tok)
+			return nil
 		}
 		adp, err := g.reg.Open(p.Adapter, opts)
 		if err != nil {
@@ -166,7 +183,11 @@ func (g *Gateway) rebuild() error {
 }
 
 // ConfigPath is the YAML file used for Save.
-func (g *Gateway) ConfigPath() string { return g.path }
+func (g *Gateway) ConfigPath() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.path
+}
 
 // Config returns a copy of the current config.
 func (g *Gateway) Config() config.Config {
@@ -176,12 +197,20 @@ func (g *Gateway) Config() config.Config {
 }
 
 // SetConfigPath updates the save target.
-func (g *Gateway) SetConfigPath(path string) { g.path = path }
+func (g *Gateway) SetConfigPath(path string) {
+	g.mu.Lock()
+	g.path = path
+	g.mu.Unlock()
+}
 
-// SetConfig replaces the in-memory config. It does not write the YAML file.
+// SetConfig replaces the in-memory config and the merge base. It does not
+// write the YAML file.
 func (g *Gateway) SetConfig(cfg config.Config) {
+	g.saveMu.Lock()
+	defer g.saveMu.Unlock()
 	g.mu.Lock()
 	g.cfg = cfg
+	g.saved = config.Clone(cfg)
 	g.mu.Unlock()
 }
 
@@ -1701,12 +1730,92 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 	return filterExactLocal(model, g.models, out), 0
 }
 
+// persist merges mine into the config file and adopts what other processes
+// changed there. The caller holds saveMu (not mu) and passes a config.Clone
+// of cfg taken under mu. Providers, Hide, Expose, Catalog and Routes are
+// adopted from the merge into cfg; the other fields are overlaid by flags and
+// env, so saved keeps the running values and those overlays never win a later
+// merge against disk. When adopted providers differ, persist calls rebuild()
+// to reinitialise adapters and returns rebuilt=true so the caller can run
+// Refresh() after releasing saveMu; persist never calls Refresh itself.
+func (g *Gateway) persist(mine config.Config) (rebuilt bool, err error) {
+	g.mu.RLock()
+	path, base := g.path, g.saved
+	g.mu.RUnlock()
+	if path == "" {
+		g.mu.Lock()
+		g.saved = mine
+		g.mu.Unlock()
+		return false, nil
+	}
+	merged, err := config.SaveMerged(path, base, mine)
+	g.notePersistErr(path, err)
+	if err != nil {
+		return false, err
+	}
+	adopt := config.Clone(merged)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	next := mine
+	next.Providers, next.Hide, next.Expose, next.Catalog, next.Routes = merged.Providers, merged.Hide, merged.Expose, merged.Catalog, merged.Routes
+	g.cfg.Providers, g.cfg.Hide, g.cfg.Expose, g.cfg.Catalog, g.cfg.Routes = adopt.Providers, adopt.Hide, adopt.Expose, adopt.Catalog, adopt.Routes
+	g.saved = next
+	if !reflect.DeepEqual(merged.Providers, mine.Providers) {
+		kept := make(map[string]bool, len(merged.Providers))
+		for _, p := range merged.Providers {
+			kept[p.ID] = true
+		}
+		for _, p := range mine.Providers {
+			if !kept[p.ID] {
+				g.forgetAccountLocked(p.ID)
+			}
+		}
+		_ = g.rebuild()
+		return true, nil
+	}
+	return false, nil
+}
+
+// forgetAccountLocked drops continuation bindings and cached responses of a
+// removed account. The caller holds mu.
+func (g *Gateway) forgetAccountLocked(id string) {
+	for responseID, bind := range g.continuations {
+		if bind.Account == id {
+			delete(g.continuations, responseID)
+		}
+	}
+	if g.responses != nil {
+		g.responses.InvalidatePrefix(id + "\x00")
+	}
+}
+
+// tempName matches the random part os.CreateTemp puts in a temp file name.
+var tempName = regexp.MustCompile(`\.[0-9]+\.tmp\b`)
+
+// notePersistErr logs a failed save once per distinct error; a successful
+// save (nil) clears it so the next failure is logged again. Errors that
+// differ only in a temp file name count as the same error.
+func (g *Gateway) notePersistErr(path string, err error) {
+	msg := ""
+	if err != nil {
+		msg = tempName.ReplaceAllString(err.Error(), ".*.tmp")
+	}
+	g.mu.Lock()
+	changed := msg != g.lastPersistErr
+	g.lastPersistErr = msg
+	g.mu.Unlock()
+	if err != nil && changed {
+		log.Printf("peaproxy: config save failed (%s): %v", path, err)
+	}
+}
+
 // SetRequestLog toggles the opt-in redacted JSONL log and persists config.
 func (g *Gateway) SetRequestLog(on bool) error {
+	g.saveMu.Lock()
 	g.mu.Lock()
 	g.cfg.RequestLog = on
 	path := g.path
-	cfg := g.cfg
+	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
 	if g.Usage != nil {
 		if on && path != "" {
@@ -1715,18 +1824,17 @@ func (g *Gateway) SetRequestLog(on bool) error {
 			g.Usage.SetRequestLog("")
 		}
 	}
-	if path != "" {
-		return config.Save(path, cfg)
-	}
-	return nil
+	return g.persistAndRefresh(mine)
 }
 
 // AddProvider appends an account, rebuilds, saves, and refreshes.
 func (g *Gateway) AddProvider(ctx context.Context, p config.Provider) error {
+	g.saveMu.Lock()
 	g.mu.Lock()
 	for _, e := range g.cfg.Providers {
 		if e.ID == p.ID {
 			g.mu.Unlock()
+			g.saveMu.Unlock()
 			return fmt.Errorf("account %q already exists", p.ID)
 		}
 	}
@@ -1738,20 +1846,21 @@ func (g *Gateway) AddProvider(ctx context.Context, p config.Provider) error {
 		Tier:      catalog.Tier(p.Tier),
 	}); err != nil {
 		g.mu.Unlock()
+		g.saveMu.Unlock()
 		return err
 	}
 	g.cfg.Providers = append(g.cfg.Providers, p)
 	if err := g.rebuild(); err != nil {
 		g.mu.Unlock()
+		g.saveMu.Unlock()
 		return err
 	}
-	path := g.path
-	cfg := g.cfg
+	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
-	if path != "" {
-		if err := config.Save(path, cfg); err != nil {
-			return err
-		}
+	_, err := g.persist(mine)
+	g.saveMu.Unlock()
+	if err != nil {
+		return err
 	}
 	g.Refresh(ctx)
 	return nil
@@ -1759,29 +1868,23 @@ func (g *Gateway) AddProvider(ctx context.Context, p config.Provider) error {
 
 // RemoveProvider deletes an account.
 func (g *Gateway) RemoveProvider(ctx context.Context, id string) error {
+	g.saveMu.Lock()
 	g.mu.Lock()
-	kept := g.cfg.Providers[:0]
+	kept := make([]config.Provider, 0, len(g.cfg.Providers))
 	for _, p := range g.cfg.Providers {
 		if p.ID != id {
 			kept = append(kept, p)
 		}
 	}
 	g.cfg.Providers = kept
-	for responseID, bind := range g.continuations {
-		if bind.Account == id {
-			delete(g.continuations, responseID)
-		}
-	}
-	if g.responses != nil {
-		g.responses.InvalidatePrefix(id + "\x00")
-	}
+	g.forgetAccountLocked(id)
 	_ = g.rebuild()
-	path, cfg := g.path, g.cfg
+	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
-	if path != "" {
-		if err := config.Save(path, cfg); err != nil {
-			return err
-		}
+	_, err := g.persist(mine)
+	g.saveMu.Unlock()
+	if err != nil {
+		return err
 	}
 	g.Refresh(ctx)
 	return nil
@@ -1789,20 +1892,32 @@ func (g *Gateway) RemoveProvider(ctx context.Context, id string) error {
 
 // ToggleHide listing-only hide for a provider or model id.
 func (g *Gateway) ToggleHide(kind, id string, hidden bool) error {
+	g.saveMu.Lock()
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	switch kind {
 	case "provider":
 		g.cfg.Hide.Providers = setHidden(g.cfg.Hide.Providers, id, hidden)
 	case "model":
 		g.cfg.Hide.Models = setHidden(g.cfg.Hide.Models, id, hidden)
 	default:
+		g.mu.Unlock()
+		g.saveMu.Unlock()
 		return fmt.Errorf("kind must be provider or model")
 	}
-	if g.path != "" {
-		return config.Save(g.path, g.cfg)
+	mine := config.Clone(g.cfg)
+	g.mu.Unlock()
+	return g.persistAndRefresh(mine)
+}
+
+// persistAndRefresh persists mine, releases saveMu (which the caller holds),
+// and refreshes in the background when adopted providers changed the adapters.
+func (g *Gateway) persistAndRefresh(mine config.Config) error {
+	rebuilt, err := g.persist(mine)
+	g.saveMu.Unlock()
+	if rebuilt {
+		go g.Refresh(context.Background())
 	}
-	return nil
+	return err
 }
 
 // SetCatalogOverlay pins and/or renames a live model id. Empty displayName clears the overlay.
@@ -1811,29 +1926,31 @@ func (g *Gateway) SetCatalogOverlay(id string, displayName *string, pinned *bool
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
+	g.saveMu.Lock()
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if pinned != nil {
 		g.cfg.Catalog.Pin = setHidden(g.cfg.Catalog.Pin, id, *pinned)
 	}
 	if displayName != nil {
 		name := strings.TrimSpace(*displayName)
-		if g.cfg.Catalog.Rename == nil {
-			g.cfg.Catalog.Rename = map[string]string{}
+		// Copy on write: Config() callers hold the old map.
+		rename := maps.Clone(g.cfg.Catalog.Rename)
+		if rename == nil {
+			rename = map[string]string{}
 		}
 		if name == "" {
-			delete(g.cfg.Catalog.Rename, id)
+			delete(rename, id)
 		} else {
-			g.cfg.Catalog.Rename[id] = name
+			rename[id] = name
 		}
-		if len(g.cfg.Catalog.Rename) == 0 {
-			g.cfg.Catalog.Rename = nil
+		if len(rename) == 0 {
+			rename = nil
 		}
+		g.cfg.Catalog.Rename = rename
 	}
-	if g.path != "" {
-		return config.Save(g.path, g.cfg)
-	}
-	return nil
+	mine := config.Clone(g.cfg)
+	g.mu.Unlock()
+	return g.persistAndRefresh(mine)
 }
 
 func setHidden(list []string, id string, hidden bool) []string {
@@ -1849,14 +1966,18 @@ func setHidden(list []string, id string, hidden bool) []string {
 	return out
 }
 
-// Save persists config.
+// Save persists config, merged with what other processes wrote.
 func (g *Gateway) Save() error {
+	g.saveMu.Lock()
 	g.mu.RLock()
-	defer g.mu.RUnlock()
 	if g.path == "" {
+		g.mu.RUnlock()
+		g.saveMu.Unlock()
 		return errors.New("no config path")
 	}
-	return config.Save(g.path, g.cfg)
+	mine := config.Clone(g.cfg)
+	g.mu.RUnlock()
+	return g.persistAndRefresh(mine)
 }
 
 // Instances returns provider metadata for the UI.
@@ -1894,9 +2015,11 @@ func (g *Gateway) AdapterByID(id string) (adapter.Adapter, bool) {
 	return nil, false
 }
 
-// SaveOAuth persists refreshed subscription tokens via the secret store.
+// SaveOAuth persists refreshed subscription tokens via the secret store. The
+// in-memory token is updated even when the save fails.
 func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
 	ct := config.OAuthFromRuntime(tok)
+	g.saveMu.Lock()
 	g.mu.Lock()
 	for i := range g.cfg.Providers {
 		if g.cfg.Providers[i].ID == id {
@@ -1904,11 +2027,7 @@ func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
 			break
 		}
 	}
-	path := g.path
-	cfg := g.cfg
+	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
-	if path != "" {
-		return config.Save(path, cfg)
-	}
-	return nil
+	return g.persistAndRefresh(mine)
 }

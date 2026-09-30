@@ -257,14 +257,15 @@ func TestGeminiStreamErrorPayloadFailsTheStream(t *testing.T) {
 		})
 	}
 	t.Run("status without a code", func(t *testing.T) {
-		// Given a first event whose error carries no status code.
+		// Given a first event whose error carries only the google.rpc status name.
 		var out bytes.Buffer
 		// When translating the stream.
 		err := geminiSSEToOpenAI(strings.NewReader("data: "+`{"error":{"message":"Internal error encountered.","status":"INTERNAL"}}`+"\n\n"), &out, "gemini-3-flash")
-		// Then it fails as a plain error, having no status to classify, and writes nothing.
+		// Then it fails as the HTTP status that name means on a non-streaming
+		// reply, so the gateway classifies it the same way, and writes nothing.
 		var he adapter.HTTPError
-		if err == nil || errors.As(err, &he) || out.Len() != 0 {
-			t.Fatalf("err = %#v, output %q; want a plain error and no output", err, out.String())
+		if !errors.As(err, &he) || he.Status != http.StatusInternalServerError || out.Len() != 0 {
+			t.Fatalf("err = %#v, output %q; want a 500 and no output", err, out.String())
 		}
 	})
 }
@@ -414,6 +415,55 @@ func TestGeminiSafetyStopIsContentFilter(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGeminiPromptBlockIsContentFilter(t *testing.T) {
+	for _, reason := range []string{"SAFETY", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY", "BLOCK_REASON_UNSPECIFIED"} {
+		feedback := `"promptFeedback":{"blockReason":"` + reason + `"}`
+		for _, body := range []struct{ level, json string }{
+			{"wrapped", `{"response":{` + feedback + `}}`},
+			{"top-level", `{` + feedback + `}`},
+		} {
+			for _, tc := range []struct {
+				name   string
+				finish func(*testing.T) string
+			}{
+				{"stream", func(t *testing.T) string { return streamFinishReason(t, "data: "+body.json+"\n\n") }},
+				{"chat", func(t *testing.T) string { return chatFinishReason(t, body.json) }},
+			} {
+				t.Run(reason+" "+body.level+" "+tc.name, func(t *testing.T) {
+					// Given Gemini blocks the prompt and returns no candidates.
+					// When translating the response to OpenAI.
+					got := tc.finish(t)
+					// Then it reports a content filter, not a clean stop.
+					if got != "content_filter" {
+						t.Fatalf("finish_reason = %q, want content_filter", got)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestGeminiPromptFeedbackWithoutBlockKeepsCandidateFinish(t *testing.T) {
+	body := `{"response":{"promptFeedback":{"safetyRatings":[{"category":"HARM_CATEGORY_HARASSMENT","probability":"NEGLIGIBLE"}]},"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}]}}`
+	for _, tc := range []struct {
+		name   string
+		finish func(*testing.T) string
+	}{
+		{"stream", func(t *testing.T) string { return streamFinishReason(t, "data: "+body+"\n\n") }},
+		{"chat", func(t *testing.T) string { return chatFinishReason(t, body) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Given prompt feedback that carries only safety ratings and a normal candidate.
+			// When translating the response to OpenAI.
+			got := tc.finish(t)
+			// Then the candidate's own finish reason is reported.
+			if got != "stop" {
+				t.Fatalf("finish_reason = %q, want stop", got)
+			}
+		})
 	}
 }
 
@@ -762,7 +812,8 @@ func TestCloudCode429UsesBodyResetDelay(t *testing.T) {
 		{"retry info", `{"error":{"code":429,"message":"slow down","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3.5s"}]}}`, 3500 * time.Millisecond},
 		{"quota reset metadata", `{"error":{"code":429,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED","metadata":{"quotaResetDelay":"754.431528ms","model":"gemini-3-flash"}}]}}`, time.Second},
 		{"resets in zero", `{"error":{"code":429,"message":"You have exhausted your capacity on this model. Resets in 0s.","status":"RESOURCE_EXHAUSTED"}}`, time.Second},
-		{"weekly quota is capped", `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 166h59m50s.","status":"RESOURCE_EXHAUSTED"}}`, time.Hour},
+		{"weekly quota is honoured", `{"error":{"code":429,"message":"Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 166h59m50s.","status":"RESOURCE_EXHAUSTED"}}`, 166*time.Hour + 59*time.Minute + 50*time.Second},
+		{"hint beyond a week is capped", `{"error":{"code":429,"message":"Resets in 400h.","status":"RESOURCE_EXHAUSTED"}}`, 7 * 24 * time.Hour},
 		{"no hint keeps default", `{"error":{"code":429,"message":"Resource has been exhausted"}}`, 0},
 	}
 	for _, tc := range cases {
@@ -841,6 +892,58 @@ func TestSanitizeGeminiSchemaPreservesTypeUnion(t *testing.T) {
 				t.Fatalf("got  %s\nwant %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSanitizeGeminiSchemaTypeListIntersectsAnyOf(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{
+			"branch constraints survive",
+			`{"type":["string","integer"],"KEYWORD":[{"type":"string","maxLength":5},{"type":"integer"}]}`,
+			`{"anyOf":[{"maxLength":5,"type":"string"},{"type":"integer"}]}`,
+		},
+		{
+			"enum and minimum with null become nullable",
+			`{"type":["string","integer","null"],"KEYWORD":[{"type":"string","enum":["a","b"]},{"type":"integer","minimum":1},{"type":"null"}]}`,
+			`{"anyOf":[{"enum":["a","b"],"type":"string"},{"minimum":1,"type":"integer"}],"nullable":true}`,
+		},
+		{
+			"array branch borrows the parent items",
+			`{"type":["string","array"],"items":{"type":"string"},"KEYWORD":[{"type":"string","maxLength":3},{"type":"array","minItems":1}]}`,
+			`{"anyOf":[{"maxLength":3,"type":"string"},{"items":{"type":"string"},"minItems":1,"type":"array"}]}`,
+		},
+		{
+			"no overlap falls back to the union",
+			`{"type":["string","integer"],"KEYWORD":[{"type":"boolean"}]}`,
+			`{"anyOf":[{"type":"string"},{"type":"integer"},{"type":"boolean"}]}`,
+		},
+		{
+			"a null branch is dropped when the list has no null",
+			`{"type":["string","integer"],"KEYWORD":[{"type":"string","maxLength":2},{"type":"null"}]}`,
+			`{"maxLength":2,"type":"string"}`,
+		},
+		{
+			"untyped branches are kept",
+			`{"type":["string","integer"],"KEYWORD":[{"maxLength":3},{"type":"integer"}]}`,
+			`{"anyOf":[{"maxLength":3},{"type":"integer"}]}`,
+		},
+		{
+			"an integer branch fits a number type",
+			`{"type":["number","string"],"KEYWORD":[{"type":"integer","minimum":0},{"type":"boolean"}]}`,
+			`{"minimum":0,"type":"integer"}`,
+		},
+	} {
+		for _, keyword := range []string{"anyOf", "oneOf"} {
+			t.Run(tc.name+" "+keyword, func(t *testing.T) {
+				// Given a type list alongside anyOf or oneOf branches.
+				// When reducing it to the Gemini Schema proto.
+				got := sanitizedSchema(t, strings.ReplaceAll(tc.in, "KEYWORD", keyword))
+				// Then only branches the type list allows remain, with their constraints.
+				if got != tc.want {
+					t.Fatalf("got  %s\nwant %s", got, tc.want)
+				}
+			})
+		}
 	}
 }
 
@@ -933,9 +1036,34 @@ func TestSanitizeGeminiSchemaArrayParentGetsBranchItems(t *testing.T) {
 			`{"description":"p","anyOf":[{"type":"array","description":"b","items":{"type":"string"}}]}`,
 			`{"anyOf":[{"description":"b","items":{"type":"string"},"type":"array"}],"description":"p"}`,
 		},
+		{
+			"array branches with different items give a union",
+			`{"type":"array","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"array","items":{"type":"integer"}}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"items":{"type":"integer"},"type":"array"}],"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array"}`,
+		},
+		{
+			"array branches with equal items give that schema",
+			`{"type":"array","anyOf":[{"type":"array","minItems":1,"items":{"type":"string"}},{"type":"array","maxItems":3,"items":{"type":"string"}}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"minItems":1,"type":"array"},{"items":{"type":"string"},"maxItems":3,"type":"array"}],"items":{"type":"string"},"type":"array"}`,
+		},
+		{
+			"array branches and a null branch give nullable and a union",
+			`{"type":"array","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"array","items":{"type":"integer"}},{"type":"null"}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"items":{"type":"integer"},"type":"array"}],"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"nullable":true,"type":"array"}`,
+		},
+		{
+			"one array branch among others lends its items",
+			`{"type":"array","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"string"}],"items":{"type":"string"},"type":"array"}`,
+		},
+		{
+			"parent items are kept",
+			`{"type":"array","items":{"type":"boolean"},"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"array","items":{"type":"integer"}}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"items":{"type":"integer"},"type":"array"}],"items":{"type":"boolean"},"type":"array"}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given a lone anyOf branch with items that conflicts with its parent.
+			// Given anyOf branches with items under a parent that may lack them.
 			// When reducing it to the Gemini Schema proto.
 			got := sanitizedSchema(t, tc.in)
 			// Then only an array parent gains the items Cloud Code requires of it.
@@ -943,5 +1071,36 @@ func TestSanitizeGeminiSchemaArrayParentGetsBranchItems(t *testing.T) {
 				t.Fatalf("got  %s\nwant %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestStreamErrorWithoutCodeStillClassifies(t *testing.T) {
+	cases := []struct {
+		name   string
+		event  string
+		status int
+		retry  time.Duration
+	}{
+		{"status string", `{"error":{"message":"Individual quota reached. Resets in 2h.","status":"RESOURCE_EXHAUSTED"}}`, http.StatusTooManyRequests, 2 * time.Hour},
+		{"nested response error", `{"response":{"error":{"status":"UNAVAILABLE","message":"try later"}}}`, http.StatusServiceUnavailable, 0},
+		{"reset hint alone means quota", `{"error":{"message":"slow down","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"9s"}]}}`, http.StatusTooManyRequests, 9 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := streamEventError([]byte(tc.event))
+			var he adapter.HTTPError
+			if !errors.As(err, &he) {
+				t.Fatalf("not an HTTPError: %v", err)
+			}
+			if he.Status != tc.status || he.RetryAfter != tc.retry {
+				t.Fatalf("status %d retry %s, want %d %s", he.Status, he.RetryAfter, tc.status, tc.retry)
+			}
+			if he.Scope != adapter.ScopeModel {
+				t.Fatalf("scope %q, want model", he.Scope)
+			}
+		})
+	}
+	if err := streamEventError([]byte(`{"error":{"message":"odd","status":"SOMETHING_NEW"}}`)); err == nil || errors.As(err, new(adapter.HTTPError)) {
+		t.Fatalf("an unknown status without a code must stay a plain error: %v", err)
 	}
 }

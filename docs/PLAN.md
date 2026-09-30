@@ -55,7 +55,7 @@ See [PROVIDERS.md](PROVIDERS.md).
 
 ### Paid / subscription (OAuth maximize + keys)
 
-**P0 OAuth (shipped):** Anthropic Claude Pro/Max, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, GitHub Copilot. **ToS/ban risk** — [OAUTH.md](OAUTH.md). Prefer official API keys.
+**P0 OAuth (shipped):** Anthropic Claude Pro/Max/Team/Enterprise, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, GitHub Copilot. **ToS/ban risk** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
 **P0 OAuth (not yet):** Qwen consumer OAuth — stub only. No CPA flow. Factory/Droid consumer chat OAuth — stub only (Droid is a client preset).
 
@@ -82,7 +82,7 @@ Each free adapter still uses **live ListModels** — new local pulls appear with
 - CLI: `serve | auth | accounts | models | catalog | requests | health | status | config | clients` (`catalog pin|rename|hide`, `requests tail`, `health`, `accounts add`)
 - Localhost UI: Accounts (onboarding CTAs), Catalog (filters/hide/pin/rename), Showcase, Clients (harness presets + verify copy), Health (adapter probe + quota remaining + cooldowns), Request log (opt-in), Settings (bind/LAN/secret backend)
 - HTTP: OpenAI `/v1/chat/completions`, `/v1/models`, `/v1/images/generations`, `/v1/embeddings`; Claude `/v1/messages`; Codex `/v1/responses`; admin loopback routes
-- OAuth wire details (1.6.x): `anthropic_oauth` Messages send Claude Code fingerprint + **system cloak** (billing header + CLI identity; caller system relocated, never deleted). `openai_oauth` Codex Responses force `store: false`, omit `max_output_tokens` / `stream_options`. Translated chat SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is chat `reasoning_opaque` (Anthropic and Responses kinds stay distinct; OpenAI-compat upstreams strip the field).
+- OAuth wire details (2.0.x): `anthropic_oauth` Messages send Claude Code fingerprint + **system cloak** (billing header + CLI identity; caller system relocated, never deleted). `openai_oauth` Codex Responses force `store: false`, omit `max_output_tokens` / `stream_options`. Translated chat SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is chat `reasoning_opaque` (Anthropic and Responses kinds stay distinct; OpenAI-compat upstreams strip the field).
 
 ## 7. Showcase
 
@@ -109,7 +109,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 4. OAuth maximize + remaining free/local hosted presets ✅ (v0.2.0 OAuth; v0.2.2–v0.2.5 presets). **Qwen consumer OAuth still stubbed.**
 5. Releases — **v0.2.0 through v0.2.8, then 1.1.0 through v1.6.9, then v2.0.0 through v2.0.9 tagged** (GoReleaser linux/darwin/windows amd64+arm64; macOS Developer ID + notarization; Homebrew cask `ks1686/tap`). Historic GitHub `v1.0.0` (0.2.8-era docs) predates 1.6.x. **Formal v1.0.0** is the honesty declaration from current `main` after this docs PR ([V1.md](V1.md)); this PR does not cut 1.6.10. Site/marketing is not this repo.
 
-**Shipped in this tree (1.6.x):** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, **image-out proxy** (`POST /v1/images/generations`), **embeddings proxy** (`POST /v1/embeddings`), **quota remaining** (documented headers + OpenRouter `GET /key`), failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add`, subscription OAuth including Copilot (ToS documented), OpenCode Go API key, OS keychain / encrypted-file secrets, Homebrew cask + signed/notarized macOS binaries, `anthropic_oauth` Claude Code fingerprint + system cloak on Messages, `openai_oauth` `store: false` + omit `max_output_tokens`, chat SSE `finish_reason` before `[DONE]`.
+**Shipped in this tree (2.0.x):** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, **image-out proxy** (`POST /v1/images/generations`), **embeddings proxy** (`POST /v1/embeddings`), **quota remaining** (documented headers + OpenRouter `GET /key`), failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add`, subscription OAuth including Copilot (ToS documented), OpenCode Go API key, OS keychain / encrypted-file secrets, Homebrew cask + signed/notarized macOS binaries, `anthropic_oauth` Claude Code fingerprint + system cloak on Messages, `openai_oauth` `store: false` + omit `max_output_tokens`, chat SSE `finish_reason` before `[DONE]`.
 
 ## 11. Security
 

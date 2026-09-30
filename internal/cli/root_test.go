@@ -35,6 +35,40 @@ func TestClientsShowCursor(t *testing.T) {
 	}
 }
 
+func TestClientsShowOrigin(t *testing.T) {
+	// Given a gateway listening off the default address.
+	out := &bytes.Buffer{}
+	// When showing a preset with --origin.
+	if err := ExecuteWithArgs([]string{"clients", "show", "pi", "--origin", "http://127.0.0.1:9000"}, out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	// Then the snippet and verify hint point at that origin, not the default.
+	if strings.Contains(s, "8317") {
+		t.Fatalf("default origin leaked:\n%s", s)
+	}
+	for _, want := range []string{`"baseUrl": "http://127.0.0.1:9000"`, `"baseUrl": "http://127.0.0.1:9000/v1"`, "# verify: peaproxy clients verify pi --chat --origin http://127.0.0.1:9000"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing %q in:\n%s", want, s)
+		}
+	}
+}
+
+func TestClientsConnectGuidedFollowsOrigin(t *testing.T) {
+	// Given a gateway listening off the default address.
+	out := &bytes.Buffer{}
+	root := t.TempDir()
+	// When guided-connecting OpenCode with that --origin base URL.
+	if err := ExecuteWithArgs([]string{"clients", "connect", "opencode", "--root", root, "--origin", "http://127.0.0.1:9000/v1"}, out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	// Then the printed snippet points at that origin, not the default.
+	if strings.Contains(s, ":8317") || !strings.Contains(s, "http://127.0.0.1:9000") {
+		t.Fatalf("guided snippet does not follow --origin:\n%s", s)
+	}
+}
+
 func TestAuthLoginWithoutProviderErrors(t *testing.T) {
 	out := &bytes.Buffer{}
 	err := ExecuteWithArgs([]string{"auth", "login"}, out)
@@ -47,6 +81,7 @@ func TestAuthLoginWithoutProviderErrors(t *testing.T) {
 }
 
 func TestStatusUsesDefaultBind(t *testing.T) {
+	isolateUserConfig(t)
 	out := &bytes.Buffer{}
 	if err := ExecuteWithArgs([]string{"status"}, out); err != nil {
 		t.Fatal(err)
@@ -57,6 +92,7 @@ func TestStatusUsesDefaultBind(t *testing.T) {
 }
 
 func TestConfigValidateOK(t *testing.T) {
+	isolateUserConfig(t)
 	out := &bytes.Buffer{}
 	if err := ExecuteWithArgs([]string{"config", "validate"}, out); err != nil {
 		t.Fatal(err)
@@ -151,11 +187,14 @@ func TestClientsShowPiBothWires(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := out.String()
-	if !strings.Contains(s, "ANTHROPIC_BASE_URL=http://127.0.0.1:8317\n") {
+	if !strings.Contains(s, `"anthropic": { "baseUrl": "http://127.0.0.1:8317"`) {
 		t.Fatalf("%s", s)
 	}
-	if !strings.Contains(s, "OPENAI_BASE_URL=http://127.0.0.1:8317/v1") {
+	if !strings.Contains(s, `"openai": { "baseUrl": "http://127.0.0.1:8317/v1"`) {
 		t.Fatalf("%s", s)
+	}
+	if strings.Contains(s, "_BASE_URL=") {
+		t.Fatalf("pi does not read base URLs from the environment: %s", s)
 	}
 }
 

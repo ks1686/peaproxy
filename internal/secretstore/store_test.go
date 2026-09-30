@@ -4,8 +4,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 func TestFileBackendRoundTrip(t *testing.T) {
@@ -207,6 +211,87 @@ func TestKeyringBackendChunksOversizedSecrets(t *testing.T) {
 	}
 	if len(kr.m) != 0 {
 		t.Fatalf("prune left %d items", len(kr.m))
+	}
+}
+
+func TestHeldLockReportsBusy(t *testing.T) {
+	old := lockTimeout
+	lockTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { lockTimeout = old })
+
+	dir := t.TempDir()
+	unlock, err := fslock.Lock(filepath.Join(dir, LockFileName), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	for name, s := range map[string]*Store{
+		"file":    {backend: BackendFile, dir: dir},
+		"keyring": {backend: BackendKeyring, dir: dir, kr: &memKeyring{m: map[string]string{}}},
+	} {
+		err := s.Set("acct", KindAPIKey, "sk")
+		if !errors.Is(err, fslock.ErrBusy) || !strings.Contains(err.Error(), "busy (another peaproxy process is saving)") {
+			t.Errorf("%s: Set under a held lock = %v, want busy", name, err)
+		}
+	}
+}
+
+func TestLockCreatesMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	s := &Store{backend: BackendFile, dir: dir}
+	if err := s.Set("acct", KindAPIKey, "sk"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, LockFileName)); err != nil {
+		t.Fatalf("secrets.lock not created: %v", err)
+	}
+}
+
+type recordingKeyring struct {
+	memKeyring
+	users []string
+}
+
+func (r *recordingKeyring) Set(service, user, password string) error {
+	r.users = append(r.users, user)
+	return r.memKeyring.Set(service, user, password)
+}
+
+func TestProbeUsesUniqueNameAndCleansUp(t *testing.T) {
+	kr := &recordingKeyring{memKeyring: memKeyring{m: map[string]string{}}}
+	for i := 0; i < 2; i++ {
+		if err := probeKeyring(kr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prefix := probePrefix + strconv.Itoa(os.Getpid()) + "."
+	if len(kr.users) != 2 || kr.users[0] == kr.users[1] {
+		t.Fatalf("probe names %q, want two distinct", kr.users)
+	}
+	for _, u := range kr.users {
+		if !strings.HasPrefix(u, prefix) || len(u) != len(prefix)+8 {
+			t.Errorf("probe name %q, want %s<8 hex>", u, prefix)
+		}
+	}
+	if len(kr.m) != 0 {
+		t.Fatalf("probe left items behind: %v", kr.m)
+	}
+}
+
+func TestFileBackendLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := s.Set("acct", KindAPIKey, strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tmps, err := filepath.Glob(filepath.Join(dir, "*.tmp"))
+	if err != nil || len(tmps) != 0 {
+		t.Fatalf("temp files left: %v %v", tmps, err)
 	}
 }
 

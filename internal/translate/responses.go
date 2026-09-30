@@ -24,12 +24,30 @@ type ResponsesRequest struct {
 }
 
 type responsesOutput struct {
-	ID         string            `json:"id"`
-	Object     string            `json:"object"`
-	Status     string            `json:"status"`
-	Model      string            `json:"model"`
-	Output     []responsesOutMsg `json:"output"`
-	OutputText string            `json:"output_text"`
+	ID                string                      `json:"id"`
+	Object            string                      `json:"object"`
+	Status            string                      `json:"status"`
+	IncompleteDetails *responsesIncompleteDetails `json:"incomplete_details,omitempty"`
+	Model             string                      `json:"model"`
+	Output            []responsesOutMsg           `json:"output"`
+	OutputText        string                      `json:"output_text"`
+}
+
+type responsesIncompleteDetails struct {
+	Reason string `json:"reason"`
+}
+
+// responsesStatus maps a chat finish_reason to the Responses status and, for
+// a truncated or filtered turn, its incomplete_details.
+func responsesStatus(finish string) (string, *responsesIncompleteDetails) {
+	switch finish {
+	case "length":
+		return "incomplete", &responsesIncompleteDetails{Reason: "max_output_tokens"}
+	case "content_filter":
+		return "incomplete", &responsesIncompleteDetails{Reason: "content_filter"}
+	default:
+		return "completed", nil
+	}
 }
 
 type responsesOutMsg struct {
@@ -417,7 +435,7 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	text := ""
+	text, finish := "", ""
 	var calls []struct {
 		ID        string
 		Name      string
@@ -426,6 +444,7 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 	var reasoning []responsesOutMsg
 	if len(in.Choices) > 0 {
 		text = in.Choices[0].Message.Content
+		finish = in.Choices[0].FinishReason
 		for _, tc := range in.Choices[0].Message.ToolCalls {
 			calls = append(calls, struct {
 				ID        string
@@ -478,13 +497,15 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 			}},
 		})
 	}
+	status, details := responsesStatus(finish)
 	out := responsesOutput{
-		ID:         id,
-		Object:     "response",
-		Status:     "completed",
-		Model:      model,
-		Output:     output,
-		OutputText: text,
+		ID:                id,
+		Object:            "response",
+		Status:            status,
+		IncompleteDetails: details,
+		Model:             model,
+		Output:            output,
+		OutputText:        text,
 	}
 	return json.Marshal(out)
 }

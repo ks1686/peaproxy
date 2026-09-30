@@ -103,8 +103,8 @@ func TestReplacedGenerationOrphansAreSweptOnNextPrune(t *testing.T) {
 	}
 }
 
-// The dir lock is in-process only: a fresh pending generation may belong to
-// another process that is still writing it, so it must not be swept yet.
+// A pre-v2.0.10 binary does not take secrets.lock: a fresh pending generation
+// may belong to one that is still writing it, so it must not be swept yet.
 func TestSweepSparesGenerationsYoungEnoughToBeInFlight(t *testing.T) {
 	// Given
 	kr := newFault()

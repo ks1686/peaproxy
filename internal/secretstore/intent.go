@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 // The index doubles as an intent log. Before a write creates or replaces a
@@ -18,8 +20,8 @@ import (
 // index files written before this change load unchanged.
 const pendingPrefix = "pending:"
 
-// pendingGrace keeps a sweep from deleting a generation that another process
-// (which the in-process dir lock cannot see) may still be writing.
+// pendingGrace keeps a sweep from deleting a generation that a pre-v2.0.10
+// binary, which does not take secrets.lock, may still be writing.
 const pendingGrace = 30 * time.Minute
 
 type pending struct {
@@ -161,11 +163,14 @@ func (s *Store) saveIndex(idx index) error {
 		return err
 	}
 	_, werr := f.Write(b)
+	if werr == nil {
+		werr = f.Sync()
+	}
 	if err := errors.Join(werr, f.Close()); err != nil {
 		_ = os.Remove(f.Name())
 		return err
 	}
-	if err := os.Rename(f.Name(), s.indexPath()); err != nil {
+	if err := fslock.Rename(f.Name(), s.indexPath()); err != nil {
 		_ = os.Remove(f.Name())
 		return err
 	}

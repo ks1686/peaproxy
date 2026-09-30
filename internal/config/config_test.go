@@ -1,9 +1,12 @@
 package config_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ks1686/peaproxy/internal/config"
@@ -149,7 +152,15 @@ func TestOAuthTokenRoundTrip(t *testing.T) {
 }
 
 func TestExampleYAMLLoads(t *testing.T) {
-	cfg, err := config.Load(filepath.Join("..", "..", "configs", "peaproxy.example.yaml"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "configs", "peaproxy.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "peaproxy.example.yaml")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +213,150 @@ func TestEnsureFileWritesOnce(t *testing.T) {
 	}
 	if again.Providers[0].ID != "ollama-local" {
 		t.Fatalf("%#v", again.Providers)
+	}
+}
+
+func TestSaveIsAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := config.Save(path, config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	// A hard link keeps the old inode: an in-place write would change it too.
+	old := filepath.Join(dir, "old.yaml")
+	if err := os.Link(path, old); err != nil {
+		t.Skipf("hard links unsupported: %v", err)
+	}
+	before, _ := os.ReadFile(old)
+	next := config.Default()
+	next.Port = 9001
+	if err := config.Save(path, next); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(old)
+	if string(before) != string(after) {
+		t.Fatal("Save rewrote the file in place instead of renaming a new one over it")
+	}
+	got, err := config.Load(path)
+	if err != nil || got.Port != 9001 {
+		t.Fatalf("Load after Save: port=%d err=%v", got.Port, err)
+	}
+	if tmp, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmp) != 0 {
+		t.Fatalf("temp files left behind: %v", tmp)
+	}
+}
+
+func TestSaveAtomicRemovesTempOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	// A non-empty directory at the target path makes the final rename fail.
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.MkdirAll(filepath.Join(path, "occupied"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(path, config.Default()); err == nil {
+		t.Fatal("Save over a directory succeeded")
+	}
+	if tmp, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(tmp) != 0 {
+		t.Fatalf("temp files left behind: %v", tmp)
+	}
+}
+
+func TestFirstRunCreatesConfigDir(t *testing.T) {
+	appendOne := func(c *config.Config) error {
+		c.Providers = append(c.Providers, config.Provider{ID: "a", Adapter: "native", Tier: "paid"})
+		return nil
+	}
+	for name, run := range map[string]func(path string) error{
+		"EnsureFile": func(path string) error { _, _, _, err := config.EnsureFile(path); return err },
+		"Update":     func(path string) error { _, err := config.Update(path, appendOne); return err },
+		"Save":       func(path string) error { return config.Save(path, config.Default()) },
+		"SaveMerged": func(path string) error {
+			_, err := config.SaveMerged(path, config.Default(), config.Default())
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "fresh", "peaproxy")
+			path := filepath.Join(dir, "config.yaml")
+			if _, err := config.Load(path); !os.IsNotExist(err) {
+				t.Fatalf("Load on a missing file: %v, want not-exist", err)
+			}
+			if err := run(path); err != nil {
+				t.Fatal(err)
+			}
+			st, err := os.Stat(dir)
+			if err != nil || !st.IsDir() {
+				t.Fatalf("config dir not created: %v", err)
+			}
+			if runtime.GOOS != "windows" && st.Mode().Perm() != 0o700 {
+				t.Fatalf("config dir mode %v, want 0700", st.Mode().Perm())
+			}
+			if _, err := config.Load(path); err != nil {
+				t.Fatalf("config.yaml does not parse: %v", err)
+			}
+			lock, err := os.Stat(filepath.Join(dir, "config.lock"))
+			if err != nil {
+				t.Fatalf("config.lock missing: %v", err)
+			}
+			if lock.Size() != 0 {
+				t.Fatalf("config.lock has %d bytes", lock.Size())
+			}
+		})
+	}
+}
+
+func TestUpdateSerialisesAndAppends(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, err := config.Update(path, func(c *config.Config) error {
+				c.Providers = append(c.Providers, config.Provider{ID: fmt.Sprintf("acct-%d", i), Adapter: "native", Tier: "paid"})
+				return nil
+			})
+			errs <- err
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Providers) != n+1 {
+		t.Fatalf("got %d providers, want %d (ollama-local + %d): %v", len(got.Providers), n+1, n, got.Providers)
+	}
+}
+
+func TestUpdateDoesNotApplyEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PEAPROXY_PORT", "9000")
+	t.Setenv("PEAPROXY_REQUEST_LOG", "1")
+	cfg, err := config.Update(path, func(c *config.Config) error {
+		c.Providers = append(c.Providers, config.Provider{ID: "a", Adapter: "native", Tier: "paid"})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Port != config.DefaultPort {
+		t.Fatalf("Update returned port %d, want %d", cfg.Port, config.DefaultPort)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "port: 8317") || strings.Contains(string(raw), "requestLog") {
+		t.Fatalf("env overlay persisted:\n%s", raw)
 	}
 }
 
