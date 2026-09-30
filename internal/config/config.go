@@ -242,10 +242,21 @@ func LoadOrDefault(path string) (Config, string, error) {
 }
 
 // EnsureFile writes Default() to path when the file does not exist, then
-// overlays PEAPROXY_* env on the returned config (never on the file).
+// overlays PEAPROXY_* env on the returned config (never on the file). An
+// existing file is read without config.lock, so a read-only config dir works.
 func EnsureFile(path string) (Config, string, bool, error) {
 	if path == "" {
 		path = DefaultPath()
+	}
+	if _, err := os.Stat(path); err == nil {
+		cfg, err := Load(path)
+		if err != nil {
+			return Config{}, path, false, err
+		}
+		ApplyEnv(&cfg)
+		return cfg, path, false, nil
+	} else if !os.IsNotExist(err) {
+		return Config{}, path, false, err
 	}
 	unlock, err := lockConfig(path)
 	if err != nil {

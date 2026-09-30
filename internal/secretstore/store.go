@@ -10,10 +10,12 @@ package secretstore
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -181,7 +183,8 @@ func (s *Store) Set(id string, kind Kind, value string) error {
 	return s.fileSet(itemKey(id, kind), value)
 }
 
-// Get reads a secret.
+// Get reads a secret. When secrets.lock cannot be created because the config
+// dir is read-only, it reads without the lock: nothing can write there either.
 func (s *Store) Get(id string, kind Kind) (string, error) {
 	if s == nil {
 		return "", ErrNotFound
@@ -189,10 +192,12 @@ func (s *Store) Get(id string, kind Kind) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
-	if err != nil {
+	switch {
+	case err == nil:
+		defer unlock()
+	case !errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EROFS):
 		return "", err
 	}
-	defer unlock()
 	if s.backend == BackendKeyring {
 		return s.keyringGet(itemKey(id, kind))
 	}
