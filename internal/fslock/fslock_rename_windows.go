@@ -9,25 +9,30 @@ import (
 )
 
 const (
-	renameAttempts = 10
-	renameBackoff  = 20 * time.Millisecond
+	renameBudget     = 2 * time.Second
+	renameFirstDelay = 10 * time.Millisecond
+	renameMaxDelay   = 200 * time.Millisecond
 )
 
 // Rename is os.Rename, retried while newpath is open elsewhere. Go's os.Open
 // does not request FILE_SHARE_DELETE, so an unlocked reader (an older
 // peaproxy, an AV scanner, the indexer) makes MoveFileEx fail with
 // ERROR_ACCESS_DENIED or ERROR_SHARING_VIOLATION until it closes the file.
+// Retries back off from 10 ms, doubling to 200 ms, for about 2 s in total;
+// scanners on a freshly written file routinely outlast a shorter budget. The
+// last error is returned.
 func Rename(oldpath, newpath string) error {
-	var err error
-	for i := 0; i < renameAttempts; i++ {
-		if i > 0 {
-			time.Sleep(renameBackoff)
-		}
-		if err = os.Rename(oldpath, newpath); err == nil || !retryableRename(err) {
+	delay := renameFirstDelay
+	var slept time.Duration
+	for {
+		err := os.Rename(oldpath, newpath)
+		if err == nil || !retryableRename(err) || slept >= renameBudget {
 			return err
 		}
+		time.Sleep(delay)
+		slept += delay
+		delay = min(2*delay, renameMaxDelay)
 	}
-	return err
 }
 
 func retryableRename(err error) bool {

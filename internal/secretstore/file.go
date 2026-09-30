@@ -175,6 +175,9 @@ func (s *Store) createKey() ([]byte, error) {
 		return nil, err
 	}
 	_, werr := f.Write(key)
+	if werr == nil {
+		werr = f.Sync()
+	}
 	if err := errors.Join(werr, f.Close()); err != nil {
 		_ = os.Remove(s.keyPath())
 		return nil, err

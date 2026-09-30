@@ -10,6 +10,15 @@ import (
 	"time"
 )
 
+// slack is the allowance for scheduler and process-start delay on the
+// generous side of a timing assertion; GitHub's windows runners need more.
+func slack() time.Duration {
+	if runtime.GOOS == "windows" {
+		return 5 * time.Second
+	}
+	return time.Second
+}
+
 func lockPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "test.lock")
@@ -43,7 +52,7 @@ func TestLockBlocksSecondCallerInProcess(t *testing.T) {
 		if err != nil {
 			t.Fatalf("B after A unlocked: %v", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(3 * slack()):
 		t.Fatal("B did not acquire after A unlocked")
 	}
 }
@@ -77,8 +86,8 @@ func TestLockBusyFromInProcessStage(t *testing.T) {
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("B err = %v, want ErrBusy", err)
 	}
-	if elapsed < timeout || elapsed > timeout+time.Second {
-		t.Fatalf("B elapsed = %v, want within [%v, %v]", elapsed, timeout, timeout+time.Second)
+	if elapsed < timeout || elapsed > timeout+slack() {
+		t.Fatalf("B elapsed = %v, want within [%v, %v]", elapsed, timeout, timeout+slack())
 	}
 	if n := tryLockCalls.Load(); n != 0 {
 		t.Fatalf("B reached the OS stage (%d tryLock calls); stage 1 should have rejected it", n)

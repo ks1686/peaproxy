@@ -50,15 +50,28 @@ func helperExit(err error) {
 	os.Exit(0)
 }
 
-type child struct {
-	cmd  *exec.Cmd
-	out  bytes.Buffer
-	done chan error
+// slack scales a generous-side deadline: GitHub's windows runners start
+// processes and scan fresh files far more slowly than unix ones.
+func slack(d time.Duration) time.Duration {
+	if runtime.GOOS == "windows" {
+		return 3 * d
+	}
+	return d
 }
 
+type child struct {
+	cmd    *exec.Cmd
+	out    bytes.Buffer
+	exited chan struct{} // closed once cmd.Wait returns; err is set by then
+	err    error
+}
+
+// startChild runs a helper child. Cleanup kills it and waits for it to exit,
+// so it holds no handle in the TempDir when that is removed; Windows refuses
+// to delete open files.
 func startChild(t *testing.T, test, dir, arg string, extraEnv ...string) *child {
 	t.Helper()
-	c := &child{done: make(chan error, 1)}
+	c := &child{exited: make(chan struct{})}
 	c.cmd = exec.Command(os.Args[0], "-test.run=^"+test+"$", "-test.count=1")
 	c.cmd.Env = append(os.Environ(), append([]string{helperEnv + "=" + arg, helperDirEnv + "=" + dir}, extraEnv...)...)
 	c.cmd.Stdout = &c.out
@@ -66,8 +79,14 @@ func startChild(t *testing.T, test, dir, arg string, extraEnv ...string) *child 
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	go func() { c.done <- c.cmd.Wait() }()
-	t.Cleanup(func() { _ = c.cmd.Process.Kill() })
+	go func() {
+		c.err = c.cmd.Wait()
+		close(c.exited)
+	}()
+	t.Cleanup(func() {
+		_ = c.cmd.Process.Kill()
+		<-c.exited
+	})
 	return c
 }
 
@@ -75,11 +94,11 @@ func startChild(t *testing.T, test, dir, arg string, extraEnv ...string) *child 
 func (c *child) wait(t *testing.T, deadline time.Time) error {
 	t.Helper()
 	select {
-	case err := <-c.done:
-		return err
+	case <-c.exited:
+		return c.err
 	case <-time.After(time.Until(deadline)):
 		_ = c.cmd.Process.Kill()
-		<-c.done
+		<-c.exited
 		return fmt.Errorf("killed at deadline; output %q", c.out.String())
 	}
 }
@@ -113,22 +132,21 @@ func TestIndexNotLostAcrossProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := startChild(t, "TestIndexNotLostAcrossProcesses", dir, "a", helperPauseEnv+"=1")
-	if err := waitForFile(filepath.Join(dir, "paused"), 30*time.Second); err != nil {
+	if err := waitForFile(filepath.Join(dir, "paused"), slack(30*time.Second)); err != nil {
 		t.Fatalf("child a never paused: %v; %v", err, a.wait(t, time.Now()))
 	}
 
 	// When: child B writes meanwhile, then A resumes.
 	b := startChild(t, "TestIndexNotLostAcrossProcesses", dir, "b")
 	select {
-	case err := <-b.done:
-		b.done <- err
-		t.Errorf("child b finished while child a held the store (err=%v)", err)
+	case <-b.exited:
+		t.Errorf("child b finished while child a held the store (err=%v)", b.err)
 	case <-time.After(1500 * time.Millisecond):
 	}
 	if err := os.WriteFile(filepath.Join(dir, "go"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	waitAll(t, []*child{a, b}, 60*time.Second)
+	waitAll(t, []*child{a, b}, slack(60*time.Second))
 
 	// Then
 	s := &Store{backend: BackendKeyring, dir: dir, kr: &dirKeyring{root: filepath.Join(dir, "kr")}}
@@ -190,7 +208,7 @@ func TestFileBlobNotLostAcrossProcesses(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "start"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	waitAll(t, kids, 60*time.Second)
+	waitAll(t, kids, slack(60*time.Second))
 
 	// Then
 	s := &Store{backend: BackendFile, dir: dir}
@@ -238,7 +256,7 @@ func TestKeyFileCreatedOnceAcrossProcesses(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "start"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	waitAll(t, kids, 60*time.Second)
+	waitAll(t, kids, slack(60*time.Second))
 	if t.Failed() {
 		return
 	}

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 // dirKeyring is a keychain shared between processes: one file per item under
@@ -42,7 +44,7 @@ func (k *dirKeyring) Set(service, user, password string) error {
 		_ = os.Remove(f.Name())
 		return err
 	}
-	return os.Rename(f.Name(), k.path(service, user))
+	return fslock.Rename(f.Name(), k.path(service, user))
 }
 
 func (k *dirKeyring) Get(service, user string) (string, error) {

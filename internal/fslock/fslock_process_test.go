@@ -83,7 +83,7 @@ func TestLockExcludesOtherProcess(t *testing.T) {
 	}
 
 	unlock()
-	out, code = runHelperCmd(t, helperCmd(t, "TestLockExcludesOtherProcess", path, 300*time.Millisecond))
+	out, code = runHelperCmd(t, helperCmd(t, "TestLockExcludesOtherProcess", path, slack()))
 	if code != 0 || !strings.Contains(out, "locked") {
 		t.Fatalf("child after parent unlocked: code=%d out=%q, want 0 and locked", code, out)
 	}
