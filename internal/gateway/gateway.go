@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -182,7 +183,11 @@ func (g *Gateway) rebuild() error {
 }
 
 // ConfigPath is the YAML file used for Save.
-func (g *Gateway) ConfigPath() string { return g.path }
+func (g *Gateway) ConfigPath() string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.path
+}
 
 // Config returns a copy of the current config.
 func (g *Gateway) Config() config.Config {
@@ -192,7 +197,11 @@ func (g *Gateway) Config() config.Config {
 }
 
 // SetConfigPath updates the save target.
-func (g *Gateway) SetConfigPath(path string) { g.path = path }
+func (g *Gateway) SetConfigPath(path string) {
+	g.mu.Lock()
+	g.path = path
+	g.mu.Unlock()
+}
 
 // SetConfig replaces the in-memory config and the merge base. It does not
 // write the YAML file.
@@ -1780,14 +1789,18 @@ func (g *Gateway) forgetAccountLocked(id string) {
 	}
 }
 
+// tempName matches the random part os.CreateTemp puts in a temp file name.
+var tempName = regexp.MustCompile(`\.[0-9]+\.tmp\b`)
+
 // notePersistErr logs a failed save once per distinct error; a successful
-// save (nil) clears it so the next failure is logged again.
+// save (nil) clears it so the next failure is logged again. Errors that
+// differ only in a temp file name count as the same error.
 func (g *Gateway) notePersistErr(path string, err error) {
-	g.mu.Lock()
 	msg := ""
 	if err != nil {
-		msg = err.Error()
+		msg = tempName.ReplaceAllString(err.Error(), ".*.tmp")
 	}
+	g.mu.Lock()
 	changed := msg != g.lastPersistErr
 	g.lastPersistErr = msg
 	g.mu.Unlock()
