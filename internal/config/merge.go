@@ -10,7 +10,8 @@ import "reflect"
 // an account mine left untouched takes disk's copy, so a re-login or token
 // refresh done elsewhere survives; an account removed on one side and untouched
 // on the other is removed; accounts only on disk and not in base were added
-// elsewhere and are appended in disk order.
+// elsewhere and are appended in disk order. Disk's copy of an untouched
+// account keeps mine's secret when disk has none (see keepSecrets).
 //
 // Every other field is mine's value if mine changed it from base, else disk's.
 func Merge(base, disk, mine Config) Config {
@@ -55,7 +56,7 @@ func mergeProviders(base, disk, mine []Provider) []Provider {
 		d, onDisk := inDisk[m.ID]
 		switch {
 		case onDisk && !changed:
-			out = append(out, d)
+			out = append(out, keepSecrets(d, m))
 		case onDisk || changed:
 			out = append(out, m)
 		}
@@ -71,4 +72,38 @@ func mergeProviders(base, disk, mine []Provider) []Provider {
 		out = append(out, d)
 	}
 	return out
+}
+
+// keepSecrets fills disk's missing secrets from mine. Loading disk treats an
+// unreadable stored secret as absent, and adopting that copy would drop a
+// live token until the next load. The secrets are APIKey and, as a set, the
+// OAuth AccessToken, RefreshToken, IDToken and secret Extra keys; disk's
+// public OAuth metadata is kept.
+func keepSecrets(disk, mine Provider) Provider {
+	if disk.APIKey == "" {
+		disk.APIKey = mine.APIKey
+	}
+	if oauthHasSecret(disk.OAuth) || !oauthHasSecret(mine.OAuth) {
+		return disk
+	}
+	var tok OAuthToken
+	if disk.OAuth != nil {
+		tok = *disk.OAuth
+	}
+	tok.AccessToken, tok.RefreshToken, tok.IDToken = mine.OAuth.AccessToken, mine.OAuth.RefreshToken, mine.OAuth.IDToken
+	extra := make(map[string]string, len(tok.Extra)+len(mine.OAuth.Extra))
+	for k, v := range tok.Extra {
+		extra[k] = v
+	}
+	for k, v := range mine.OAuth.Extra {
+		if extraKeyIsSecret(k) {
+			extra[k] = v
+		}
+	}
+	tok.Extra = nil
+	if len(extra) > 0 {
+		tok.Extra = extra
+	}
+	disk.OAuth = &tok
+	return disk
 }

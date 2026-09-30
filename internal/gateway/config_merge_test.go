@@ -361,3 +361,26 @@ func TestSaveOAuthPersistFailureDoesNotFailRefresh(t *testing.T) {
 		t.Fatalf("logged %d failures after a success cleared the last error, want 2:\n%s", n, logs.String())
 	}
 }
+
+func TestSaveOAuthKeepsLiveTokenWhenAnotherAccountSecretUnreadable(t *testing.T) {
+	gw, path, _ := newSavedGateway(t, nil, acct("a", "tok-a"), acct("b", "tok-b"))
+	store, err := config.OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("a", secretstore.KindOAuth, `{"accessToken":"trunc`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := gw.SaveOAuth("b", oauth.Token{AccessToken: "tok-b2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{"a": "tok-a", "b": "tok-b2"}
+	if got := tokens(gw.Config().Providers); !reflect.DeepEqual(got, want) {
+		t.Fatalf("gateway %v, want %v", got, want)
+	}
+	if got := tokens(loadDisk(t, path).Providers); !reflect.DeepEqual(got, want) {
+		t.Fatalf("disk %v, want %v", got, want)
+	}
+}

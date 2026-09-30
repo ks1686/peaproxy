@@ -250,3 +250,63 @@ func TestPublicEntryPointsLockOnce(t *testing.T) {
 		}
 	})
 }
+
+// An account's secret that could not be read back from disk during a merged
+// save must not replace the live secret of an account this writer left alone.
+func TestMergeKeepsSecretDiskCopyLacks(t *testing.T) {
+	withKey := Provider{ID: "k", Adapter: "native", Tier: "paid", APIKey: "sk-k"}
+	withTok := prov("o", "tok-o")
+	withTok.OAuth.RefreshToken = "ref-o"
+	withTok.OAuth.Extra = map[string]string{"dca_token": "dca", "project": "p1"}
+	base := Default()
+	base.Providers = []Provider{withKey, withTok}
+	mine := Clone(base)
+	disk := Clone(base)
+	disk.Providers[0].APIKey = ""
+	disk.Providers[1].OAuth = &OAuthToken{Email: "o@x", Extra: map[string]string{"project": "p2"}}
+
+	got := Merge(base, disk, mine).Providers
+	if got[0].APIKey != "sk-k" {
+		t.Fatalf("api key dropped: %#v", got[0])
+	}
+	want := &OAuthToken{AccessToken: "tok-o", RefreshToken: "ref-o", Email: "o@x", Extra: map[string]string{"dca_token": "dca", "project": "p2"}}
+	if !reflect.DeepEqual(got[1].OAuth, want) {
+		t.Fatalf("oauth %#v, want %#v", got[1].OAuth, want)
+	}
+}
+
+func TestSaveMergedKeepsTokenWhenDiskSecretUnreadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	base := Default()
+	base.Providers = []Provider{prov("a", "tok-a"), prov("b", "tok-b")}
+	if err := Save(path, base); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set("a", secretstore.KindOAuth, `{"accessToken":"trunc`); err != nil {
+		t.Fatal(err)
+	}
+	mine := Clone(base)
+	mine.Providers[1].OAuth.AccessToken = "tok-b2"
+
+	merged, err := SaveMerged(path, base, mine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(merged.Providers); !reflect.DeepEqual(got, []string{"a:tok-a", "b:tok-b2"}) {
+		t.Fatalf("merged providers %v", got)
+	}
+	if _, err := store.Get("a", secretstore.KindOAuth); err != nil {
+		t.Fatalf("a's secret was deleted: %v", err)
+	}
+	disk, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(disk.Providers); !reflect.DeepEqual(got, []string{"a:tok-a", "b:tok-b2"}) {
+		t.Fatalf("disk providers %v", got)
+	}
+}
