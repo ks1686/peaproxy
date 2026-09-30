@@ -288,9 +288,9 @@ func classifyEvent(name string) lineKind {
 	switch name {
 	case "message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop",
 		"response.created", "response.in_progress", "response.output_item.added", "response.output_text.delta",
-		"response.function_call_arguments.delta", "response.completed":
+		"response.function_call_arguments.delta", "response.completed", "response.incomplete":
 		return lineCommit
-	case "error":
+	case "error", "response.failed":
 		return lineError
 	default:
 		return lineOther

@@ -21,6 +21,45 @@ func TestPreludeErrorBeforeCommit(t *testing.T) {
 	}
 }
 
+func TestResponsesIncompleteCommits(t *testing.T) {
+	payload := `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`
+	for name, frame := range map[string]string{
+		"event line": "event: response.incomplete\ndata: " + payload + "\n\n",
+		"data only":  "data: " + payload + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var dst bytes.Buffer
+			g := New(&dst, 1024, time.Minute)
+			if _, err := g.Write([]byte(frame)); err != nil {
+				t.Fatal(err)
+			}
+			if !g.Committed() || dst.String() != frame {
+				t.Fatalf("committed=%v bytes=%q", g.Committed(), dst.String())
+			}
+		})
+	}
+}
+
+func TestResponsesFailedBeforeCommit(t *testing.T) {
+	payload := `{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"nope"}}}`
+	for name, frame := range map[string]string{
+		"event line": "event: response.failed\ndata: " + payload + "\n\n",
+		"data only":  "data: " + payload + "\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var dst bytes.Buffer
+			g := New(&dst, 1024, time.Minute)
+			_, err := g.Write([]byte(frame))
+			if !errors.Is(err, ErrPrelude) {
+				t.Fatalf("error = %v", err)
+			}
+			if g.Committed() || dst.Len() != 0 {
+				t.Fatalf("committed=%v bytes=%q", g.Committed(), dst.String())
+			}
+		})
+	}
+}
+
 func TestNoRetryAfterCommit(t *testing.T) {
 	var dst bytes.Buffer
 	g := New(&dst, 1024, time.Minute)
