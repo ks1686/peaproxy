@@ -254,6 +254,24 @@ func init() {
 	}
 }
 
+// DefaultOrigin is the gateway address baked into the presets.
+const DefaultOrigin = "http://127.0.0.1:8317"
+
+// WithOrigin returns a copy of p whose base URL and snippet point at origin
+// instead of DefaultOrigin, with a verify hint that passes --origin.
+func WithOrigin(p Preset, origin string) Preset {
+	origin = strings.TrimSuffix(strings.TrimRight(origin, "/"), "/v1")
+	if origin == DefaultOrigin || origin == "" {
+		return p
+	}
+	p.BaseURL = strings.ReplaceAll(p.BaseURL, DefaultOrigin, origin)
+	p.Snippet = strings.ReplaceAll(p.Snippet, DefaultOrigin, origin)
+	if p.Verify != "" {
+		p.Verify += " --origin " + origin
+	}
+	return p
+}
+
 // Format prints a preset for humans and agents.
 func Format(p Preset) string {
 	verify := p.Verify

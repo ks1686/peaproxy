@@ -410,7 +410,8 @@ func clientsCmd() *cobra.Command {
 			return nil
 		},
 	})
-	cmd.AddCommand(&cobra.Command{
+	var showOrigin string
+	show := &cobra.Command{
 		Use:   "show [name]",
 		Short: "Print a copy-ready preset",
 		Args:  cobra.ExactArgs(1),
@@ -419,10 +420,12 @@ func clientsCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("unknown client %q\n  peaproxy clients list", args[0])
 			}
-			_, _ = io.WriteString(cmd.OutOrStdout(), clients.Format(p))
+			_, _ = io.WriteString(cmd.OutOrStdout(), clients.Format(clients.WithOrigin(p, showOrigin)))
 			return nil
 		},
-	})
+	}
+	show.Flags().StringVar(&showOrigin, "origin", clients.DefaultOrigin, "Gateway origin to print")
+	cmd.AddCommand(show)
 	var doChat bool
 	var origin string
 	verify := &cobra.Command{

@@ -35,6 +35,25 @@ func TestClientsShowCursor(t *testing.T) {
 	}
 }
 
+func TestClientsShowOrigin(t *testing.T) {
+	// Given a gateway listening off the default address.
+	out := &bytes.Buffer{}
+	// When showing a preset with --origin.
+	if err := ExecuteWithArgs([]string{"clients", "show", "pi", "--origin", "http://127.0.0.1:9000"}, out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	// Then the snippet and verify hint point at that origin, not the default.
+	if strings.Contains(s, "8317") {
+		t.Fatalf("default origin leaked:\n%s", s)
+	}
+	for _, want := range []string{`"baseUrl": "http://127.0.0.1:9000"`, `"baseUrl": "http://127.0.0.1:9000/v1"`, "# verify: peaproxy clients verify pi --chat --origin http://127.0.0.1:9000"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing %q in:\n%s", want, s)
+		}
+	}
+}
+
 func TestAuthLoginWithoutProviderErrors(t *testing.T) {
 	out := &bytes.Buffer{}
 	err := ExecuteWithArgs([]string{"auth", "login"}, out)
