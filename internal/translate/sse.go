@@ -712,7 +712,35 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	}
 	if err := sc.Err(); err != nil {
 		// The upstream broke off mid-turn: response.completed would hand the
-		// client the truncated function_call arguments to run.
+		// client the truncated function_call arguments to run. Emit
+		// response.failed so a Responses client sees a terminal event instead
+		// of a bare EOF after response.created.
+		failed := struct {
+			Type     string `json:"type"`
+			Response struct {
+				ID     string `json:"id"`
+				Object string `json:"object"`
+				Status string `json:"status"`
+				Model  string `json:"model"`
+				Error  struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			} `json:"response"`
+		}{Type: "response.failed"}
+		failed.Response.ID = id
+		failed.Response.Object = "response"
+		failed.Response.Status = "failed"
+		failed.Response.Model = model
+		failed.Response.Error.Code = "server_error"
+		failed.Response.Error.Message = "upstream stream failed"
+		raw, merr := json.Marshal(failed)
+		if merr != nil {
+			return errors.Join(err, merr)
+		}
+		if werr := writeEvent("response.failed", string(raw)); werr != nil {
+			return errors.Join(err, werr)
+		}
 		return err
 	}
 	output := make([]responsesOutMsg, 0, len(carried)+len(order)+1)

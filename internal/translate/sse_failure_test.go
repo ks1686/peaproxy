@@ -85,3 +85,47 @@ func TestOpenAISSEToResponsesUpstreamFailureNeverCompletes(t *testing.T) {
 		t.Fatalf("failed upstream reached the client as a completed response:\n%s", out.String())
 	}
 }
+
+// Responses' response.failed event is how a Responses client learns a started
+// stream failed, rather than reading a bare EOF after response.created.
+func TestOpenAISSEToResponsesUpstreamFailureEndsWithFailed(t *testing.T) {
+	// Given an upstream that yields one valid chat chunk then fails.
+	chunk := `data: {"id":"c1","model":"m","choices":[{"delta":{"content":"hi"}}]}` + "\n\n"
+	in := io.MultiReader(strings.NewReader(chunk), iotest.ErrReader(errUpstreamCut))
+	var out strings.Builder
+
+	// When the stream is translated.
+	err := OpenAISSEToResponses(in, &out, "m")
+
+	// Then the upstream failure is returned, response.created was sent, and
+	// the last event is response.failed (never completed or incomplete).
+	if !errors.Is(err, errUpstreamCut) {
+		t.Fatalf("err = %v, want the upstream failure", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "event: response.created") {
+		t.Fatalf("missing response.created:\n%s", got)
+	}
+	for _, deny := range []string{"response.completed", "response.incomplete"} {
+		if strings.Contains(got, deny) {
+			t.Fatalf("failed upstream reached the client as %s:\n%s", deny, got)
+		}
+	}
+	events := strings.Split(strings.TrimSuffix(got, "\n\n"), "\n\n")
+	name, data, _ := strings.Cut(events[len(events)-1], "\n")
+	var body struct {
+		Type     string `json:"type"`
+		Response struct {
+			Status string `json:"status"`
+			Error  struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(data, "data: ")), &body); err != nil {
+		t.Fatalf("last event data: %v\n%s", err, got)
+	}
+	if name != "event: response.failed" || body.Type != "response.failed" || body.Response.Status != "failed" {
+		t.Fatalf("last event %q type=%q status=%q, want response.failed:\n%s", name, body.Type, body.Response.Status, got)
+	}
+}
