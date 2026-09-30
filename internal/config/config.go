@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -331,10 +332,10 @@ func lockConfig(path string) (func(), error) {
 		return nil, err
 	}
 	unlock, err := fslock.Lock(filepath.Join(dir, "config.lock"), lockTimeout)
-	if err != nil {
+	if errors.Is(err, fslock.ErrBusy) {
 		return nil, fmt.Errorf("config %s busy (another peaproxy process is saving): %w", dir, err)
 	}
-	return unlock, nil
+	return unlock, err
 }
 
 // ensureLocked loads path, or saves and returns Default() when it is missing.
