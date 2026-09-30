@@ -55,6 +55,7 @@ type Adapter struct {
 	mu           sync.Mutex
 	token        oauth.Token
 	generation   uint64
+	commitMu     sync.Mutex
 	pending      *pendingAuth
 	skipLoopback bool
 }
@@ -300,6 +301,8 @@ func (a *Adapter) completeDevice(ctx context.Context, pending *pendingAuth) erro
 }
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
+	a.commitMu.Lock()
+	defer a.commitMu.Unlock()
 	a.mu.Lock()
 	a.generation++
 	a.token = tok
@@ -362,7 +365,6 @@ func (a *Adapter) postForm(ctx context.Context, form url.Values) (oauth.Token, e
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
-	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -373,31 +375,21 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := oauth.DefaultRefresh.Do(ctx, "openai:"+a.id, func(ctx context.Context) (oauth.Token, error) {
-		return a.refresh(ctx, tok.RefreshToken)
-	})
-	if err != nil {
-		return err
-	}
-	if next.AccountID == "" {
-		next.AccountID = tok.AccountID
-	}
-	if next.Email == "" {
-		next.Email = tok.Email
-	}
-	a.mu.Lock()
-	kept, store, _ := oauth.KeepIfCurrent(seen, a.generation, a.token, next, nil)
-	if store && a.generation == seen {
-		a.token = kept
-	} else {
-		store = false
-	}
-	persist := a.persist
-	a.mu.Unlock()
-	if !store || persist == nil {
-		return nil
-	}
-	return persist(kept)
+	return oauth.Ensure(ctx, &oauth.DefaultRefresh, "openai:"+a.id, &a.commitMu, &a.mu, &a.token, &a.generation,
+		5*time.Minute,
+		func(ctx context.Context, tok oauth.Token) (oauth.Token, error) {
+			return a.refresh(ctx, tok.RefreshToken)
+		},
+		func(old, next oauth.Token) oauth.Token {
+			if next.AccountID == "" {
+				next.AccountID = old.AccountID
+			}
+			if next.Email == "" {
+				next.Email = old.Email
+			}
+			return next
+		},
+		a.persist)
 }
 
 func (a *Adapter) Validate(ctx context.Context) error {

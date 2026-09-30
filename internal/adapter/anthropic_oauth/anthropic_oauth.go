@@ -77,6 +77,7 @@ type Adapter struct {
 	mu           sync.Mutex
 	token        oauth.Token
 	generation   uint64
+	commitMu     sync.Mutex
 	pending      *pendingAuth
 	skipLoopback bool
 	deviceID     string
@@ -218,6 +219,8 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if err != nil {
 		return err
 	}
+	a.commitMu.Lock()
+	defer a.commitMu.Unlock()
 	a.mu.Lock()
 	a.generation++
 	a.token = tok
@@ -355,7 +358,6 @@ func tokenStatusError(resp *http.Response, raw []byte) error {
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
-	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -366,27 +368,13 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := oauth.DefaultRefresh.Do(ctx, "anthropic:"+a.id, func(ctx context.Context) (oauth.Token, error) {
-		return a.refresh(ctx, tok.RefreshToken)
-	})
-	if err != nil {
-		return err
-	}
-	a.mu.Lock()
-	latest := a.generation
-	current := a.token
-	kept, store, _ := oauth.KeepIfCurrent(seen, latest, current, next, nil)
-	if store && a.generation == seen {
-		a.token = kept
-	} else {
-		store = false
-	}
-	persist := a.persist
-	a.mu.Unlock()
-	if !store || persist == nil {
-		return nil
-	}
-	return persist(kept)
+	return oauth.Ensure(ctx, &oauth.DefaultRefresh, "anthropic:"+a.id, &a.commitMu, &a.mu, &a.token, &a.generation,
+		5*time.Minute,
+		func(ctx context.Context, tok oauth.Token) (oauth.Token, error) {
+			return a.refresh(ctx, tok.RefreshToken)
+		},
+		nil,
+		a.persist)
 }
 
 func (a *Adapter) Validate(ctx context.Context) error {

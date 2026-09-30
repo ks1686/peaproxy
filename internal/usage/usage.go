@@ -469,11 +469,11 @@ func (s *Store) Path() string {
 var (
 	bearerRE   = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._\-+/=]+`)
 	headerRE   = regexp.MustCompile(`(?i)((?:x-api-key|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?id)\s*[:=]\s*)(\S+)`)
-	jsonKeyRE  = regexp.MustCompile(`(?i)("(?:access_token|refresh_token|id_token|api_key|apiKey|authorization|password|secret|dca_token|session_id)"\s*:\s*")[^"]*(")`)
+	jsonKeyRE  = regexp.MustCompile(`(?i)("(?:access_token|refresh_token|id_token|api_key|apiKey|authorization|password|secret|dca_token|session_id|github_token)"\s*:\s*")[^"]*(")`)
 	skRE       = regexp.MustCompile(`(?i)\bsk-[A-Za-z0-9_-]{8,}`)
 	jwtRE      = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
 	pemRE      = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
-	secretKeys = []string{"bearer ", "sk-", "x-api-key", "api_key", "access_token", "refresh_token", "id_token", "private key"}
+	secretKeys = []string{"bearer ", "sk-", "x-api-key", "api_key", "access_token", "refresh_token", "id_token", "private key", "github_token"}
 )
 
 // Redact strips bearer tokens, API keys, JWTs, and other secrets in-place.

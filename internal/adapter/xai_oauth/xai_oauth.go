@@ -43,6 +43,7 @@ type Adapter struct {
 	mu           sync.Mutex
 	token        oauth.Token
 	generation   uint64
+	commitMu     sync.Mutex
 	pending      *oauth.DeviceCode
 }
 
@@ -146,6 +147,8 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 }
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
+	a.commitMu.Lock()
+	defer a.commitMu.Unlock()
 	a.mu.Lock()
 	a.generation++
 	a.token = tok
@@ -255,7 +258,6 @@ func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.
 func (a *Adapter) ensureToken(ctx context.Context) error {
 	a.mu.Lock()
 	tok := a.token
-	seen := a.generation
 	a.mu.Unlock()
 	if !tok.NeedsRefresh(5 * time.Minute) {
 		if !tok.Valid() {
@@ -266,14 +268,13 @@ func (a *Adapter) ensureToken(ctx context.Context) error {
 	if tok.RefreshToken == "" {
 		return adapter.ErrAuthRequired
 	}
-	next, err := oauth.DefaultRefresh.Do(ctx, "xai:"+a.id, func(ctx context.Context) (oauth.Token, error) {
-		return a.refresh(ctx, tok.RefreshToken)
-	})
-	if err != nil {
-		return err
-	}
-	next = next.KeepExtra(tok)
-	return oauth.CommitRefresh(&a.mu, &a.token, &a.generation, seen, next, a.persist)
+	return oauth.Ensure(ctx, &oauth.DefaultRefresh, "xai:"+a.id, &a.commitMu, &a.mu, &a.token, &a.generation,
+		5*time.Minute,
+		func(ctx context.Context, tok oauth.Token) (oauth.Token, error) {
+			return a.refresh(ctx, tok.RefreshToken)
+		},
+		func(old, next oauth.Token) oauth.Token { return next.KeepExtra(old) },
+		a.persist)
 }
 
 func (a *Adapter) compat() (*oauthcompat.Tagged, error) {
