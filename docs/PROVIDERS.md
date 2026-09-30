@@ -59,7 +59,7 @@ Antigravity details:
 - Gemini safety stops (`SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT`, `SPII`, `IMAGE_SAFETY`) and a blocked prompt (`promptFeedback.blockReason` with no candidates) finish as `content_filter`; `MAX_TOKENS` finishes as `length`.
 - `gemini-3.1-pro-high` and `gemini-3-pro-high` are listed by `fetchAvailableModels` but rejected by `v1internal`; both are sent upstream as `gemini-pro-agent`. The `gemini-3.1-pro-high` mapping was not live-verified on the v2.0.7 binary.
 - A 429, or a 503 "No capacity available", cools only that model on the account. Other Gemini models stay eligible.
-- The reset hint in the error body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "Resets in X") sets the cooldown length, clamped to 1s–1h.
+- The reset hint in the error body (`RetryInfo.retryDelay`, `quotaResetDelay`, or "Resets in X") sets the cooldown length, clamped to 1s–7 days so a weekly-quota reset ("Resets in 166h…") is honoured. A `Retry-After` header is still clamped to 1s–1h, as for other providers; see [CONFIG.md](CONFIG.md).
 
 ## Paid / subscription
 
