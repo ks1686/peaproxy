@@ -425,3 +425,32 @@ func TestConnectIsIdempotent(t *testing.T) {
 		t.Fatalf("connect was not idempotent: %s", got)
 	}
 }
+
+func TestQuoteEscapesBackslashAndNewline(t *testing.T) {
+	for in, want := range map[string]string{
+		`a\b`:  `"a\\b"`,
+		`a"b`:  `"a\"b"`,
+		"a\nb": `"a\nb"`,
+		"a\tb": `"a\tb"`,
+		"a<b":  `"a<b"`,
+	} {
+		if got := quote(in); got != want {
+			t.Errorf("quote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestCodexConnectRejectsInjectingModel(t *testing.T) {
+	root := t.TempDir()
+	layout := Layout{Root: root}
+	if err := layout.Connect("codex", "http://127.0.0.1:8317/v1", "x\"\nmodel = \"evil"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("connect = %v, want ErrInvalidInput", err)
+	}
+	if _, err := os.Stat(layout.path("codex")); !os.IsNotExist(err) {
+		t.Fatalf("rejected connect wrote config.toml: %v", err)
+	}
+	text := string(insertCodex(nil, "http://127.0.0.1:8317/v1", `m\"`+"\nmodel = \"evil"))
+	if n := strings.Count(text, "\nmodel = "); n != 1 {
+		t.Fatalf("model lines = %d, want 1:\n%s", n, text)
+	}
+}

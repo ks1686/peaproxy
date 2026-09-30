@@ -449,8 +449,14 @@ func removeContinue(text string) string {
 	return strings.Join(out, "\n")
 }
 
+// quote encodes s as a JSON string, which is also a valid TOML basic string
+// and YAML double-quoted scalar.
 func quote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 func writeAtomic(path string, raw []byte) error {
