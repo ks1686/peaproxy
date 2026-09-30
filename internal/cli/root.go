@@ -61,6 +61,10 @@ Examples:
 	root.AddCommand(statusCmd(&configPath))
 	root.AddCommand(configCmd(&configPath))
 	root.AddCommand(clientsCmd())
+	// Replace cobra's default completion command: the scripts are the same, but
+	// an unsupported shell becomes an error that names the supported ones.
+	root.CompletionOptions.DisableDefaultCmd = true
+	root.AddCommand(completionCmd())
 	return root
 }
 
@@ -196,7 +200,8 @@ Examples:
   peaproxy accounts add sambanova-key
   peaproxy accounts add workers-ai --account-id <cloudflare-account-id>
 `,
-		Args: cobra.ExactArgs(1),
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeAccountPresets,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prov, err := providerFromPreset(args[0], idFlag, baseURLFlag, accountIDFlag, apiKeyFlag, apiKeyEnvFlag, tierFlag)
 			if err != nil {
@@ -412,9 +417,10 @@ func clientsCmd() *cobra.Command {
 	})
 	var showOrigin string
 	show := &cobra.Command{
-		Use:   "show [name]",
-		Short: "Print a copy-ready preset",
-		Args:  cobra.ExactArgs(1),
+		Use:               "show [name]",
+		Short:             "Print a copy-ready preset",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeClientNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, ok := clients.Get(args[0])
 			if !ok {
@@ -429,9 +435,10 @@ func clientsCmd() *cobra.Command {
 	var doChat bool
 	var origin string
 	verify := &cobra.Command{
-		Use:   "verify [name]",
-		Short: "GET /v1/models (and optionally a tiny chat) on the local gateway",
-		Args:  cobra.ExactArgs(1),
+		Use:               "verify [name]",
+		Short:             "GET /v1/models (and optionally a tiny chat) on the local gateway",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeClientNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
@@ -473,9 +480,10 @@ func clientsCmd() *cobra.Command {
 		},
 	}
 	connect := &cobra.Command{
-		Use:   "connect [name]",
-		Short: "Add the PeaProxy block to a managed harness config",
-		Args:  cobra.ExactArgs(1),
+		Use:               "connect [name]",
+		Short:             "Add the PeaProxy block to a managed harness config",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeClientNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := layout().Connect(args[0], baseURL, model)
 			if errors.Is(err, clients.ErrGuidedSetup) {
@@ -488,9 +496,10 @@ func clientsCmd() *cobra.Command {
 		},
 	}
 	disconnect := &cobra.Command{
-		Use:   "disconnect [name]",
-		Short: "Remove only the PeaProxy block from a managed harness config",
-		Args:  cobra.ExactArgs(1),
+		Use:               "disconnect [name]",
+		Short:             "Remove only the PeaProxy block from a managed harness config",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeClientNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return layout().Disconnect(args[0])
 		},

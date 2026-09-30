@@ -27,9 +27,10 @@ Examples:
 
 	var pinOff bool
 	pin := &cobra.Command{
-		Use:   "pin [model-id]",
-		Short: "Pin a live model id to the top of /v1/models (listing only)",
-		Args:  cobra.ExactArgs(1),
+		Use:               "pin [model-id]",
+		Short:             "Pin a live model id to the top of /v1/models (listing only)",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: completeModelID(configPath),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			gw, _, _, err := openGateway(*configPath)
 			if err != nil {
@@ -54,6 +55,13 @@ Examples:
 		Use:   "rename [model-id] [display-name]",
 		Short: "Overlay a display name without changing the routing id",
 		Args:  cobra.RangeArgs(1, 2),
+		// The second argument is a free-form display name, not a model id.
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			if len(args) >= 1 {
+				return completeFreeform(cmd, args, toComplete)
+			}
+			return completeModelID(configPath)(cmd, args, toComplete)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := ""
 			if clearRename {
@@ -86,6 +94,8 @@ Examples:
 		Use:   "hide [id]",
 		Short: "Hide a model (default) or provider from /v1/models (listing only)",
 		Args:  cobra.ExactArgs(1),
+		// --kind decides which ids make sense here.
+		ValidArgsFunction: completeModelOrProviderID(configPath, func() string { return hideKind }),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			kind := hideKind
 			if kind == "" {
