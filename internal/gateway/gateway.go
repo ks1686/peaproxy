@@ -938,7 +938,8 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		oaReq.Stream = true
 	}
 	cw := &countWriter{w: w}
-	guard := streamguard.New(cw, 0, g.streamPrelude(model))
+	watch := newResponseIDWatcher(cw)
+	guard := streamguard.New(watch, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
 	var slowSkipped bool
@@ -955,6 +956,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 				return lastAccount, errAttemptBudgetExhausted
 			}
 			guard.Reset()
+			watch.reset()
 			if budgetAttempts.final(i, reachable) {
 				guard.Unbounded()
 			}
@@ -965,6 +967,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
 				g.rememberSuccess(session, client, lastAccount)
+				// The same binding the non-streaming path does, so a follow-up
+				// carrying previous_response_id returns to this account (#78).
+				g.bindContinuation(watch.lastID(), model, lastAccount)
 				return lastAccount, nil
 			}
 			last = err
@@ -991,6 +996,8 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			return lastAccount, errAttemptBudgetExhausted
 		}
 		guard.Reset()
+		watch.reset()
+		watch.reset()
 		if budgetAttempts.final(i, reachable) {
 			guard.Unbounded()
 		}
@@ -998,7 +1005,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- translate.OpenAISSEToResponses(pr, guard, model)
+			// Through dest, not guard: the rewriter is what puts the client's
+			// own model id back into the translated events (#79).
+			errCh <- translate.OpenAISSEToResponses(pr, dest, model)
 			_ = pr.Close()
 		}()
 		inst.recordAttempt(&lastAccount)
@@ -1011,6 +1020,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		if err == nil {
 			g.rememberSuccess(session, model, lastAccount)
 			g.rememberSuccess(session, client, lastAccount)
+			// The translator mints its own response id, so this binds whatever
+			// the client was just told to quote back in a follow-up (#78).
+			g.bindContinuation(watch.lastID(), model, lastAccount)
 			return lastAccount, convErr
 		}
 		last = err
@@ -1210,7 +1222,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		pr, pw := io.Pipe()
 		errCh := make(chan error, 1)
 		go func() {
-			errCh <- translate.OpenAISSEToClaude(pr, guard, model)
+			// Through dest, not guard: message_start carries a model id, and
+			// without the rewriter it is the upstream's (#79).
+			errCh <- translate.OpenAISSEToClaude(pr, dest, model)
 			_ = pr.Close()
 		}()
 		inst.recordAttempt(&lastAccount)
