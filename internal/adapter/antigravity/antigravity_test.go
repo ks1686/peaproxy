@@ -984,9 +984,34 @@ func TestSanitizeGeminiSchemaArrayParentGetsBranchItems(t *testing.T) {
 			`{"description":"p","anyOf":[{"type":"array","description":"b","items":{"type":"string"}}]}`,
 			`{"anyOf":[{"description":"b","items":{"type":"string"},"type":"array"}],"description":"p"}`,
 		},
+		{
+			"array branches with different items give a union",
+			`{"type":"array","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"array","items":{"type":"integer"}}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"items":{"type":"integer"},"type":"array"}],"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array"}`,
+		},
+		{
+			"array branches with equal items give that schema",
+			`{"type":"array","anyOf":[{"type":"array","minItems":1,"items":{"type":"string"}},{"type":"array","maxItems":3,"items":{"type":"string"}}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"minItems":1,"type":"array"},{"items":{"type":"string"},"maxItems":3,"type":"array"}],"items":{"type":"string"},"type":"array"}`,
+		},
+		{
+			"array branches and a null branch give nullable and a union",
+			`{"type":"array","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"array","items":{"type":"integer"}},{"type":"null"}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"items":{"type":"integer"},"type":"array"}],"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"nullable":true,"type":"array"}`,
+		},
+		{
+			"one array branch among others lends its items",
+			`{"type":"array","anyOf":[{"type":"array","items":{"type":"string"}},{"type":"string"}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"string"}],"items":{"type":"string"},"type":"array"}`,
+		},
+		{
+			"parent items are kept",
+			`{"type":"array","items":{"type":"boolean"},"anyOf":[{"type":"array","items":{"type":"string"}},{"type":"array","items":{"type":"integer"}}]}`,
+			`{"anyOf":[{"items":{"type":"string"},"type":"array"},{"items":{"type":"integer"},"type":"array"}],"items":{"type":"boolean"},"type":"array"}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Given a lone anyOf branch with items that conflicts with its parent.
+			// Given anyOf branches with items under a parent that may lack them.
 			// When reducing it to the Gemini Schema proto.
 			got := sanitizedSchema(t, tc.in)
 			// Then only an array parent gains the items Cloud Code requires of it.

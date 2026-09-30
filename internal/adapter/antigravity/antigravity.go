@@ -1144,9 +1144,18 @@ func geminiSchema(v any) any {
 // schema: the element schema when all agree, else an anyOf of the distinct
 // elements, folded like any other anyOf.
 func tupleItems(tuple []any) (any, bool) {
-	var distinct []any
+	schemas := make([]any, 0, len(tuple))
 	for _, el := range tuple {
-		schema := geminiSchema(el)
+		schemas = append(schemas, geminiSchema(el))
+	}
+	return distinctUnion(schemas)
+}
+
+// distinctUnion reduces already-sanitized schemas to one: the schema when all
+// agree, else an anyOf of the distinct ones in first-seen order.
+func distinctUnion(schemas []any) (any, bool) {
+	var distinct []any
+	for _, schema := range schemas {
 		if !slices.ContainsFunc(distinct, func(seen any) bool { return reflect.DeepEqual(seen, schema) }) {
 			distinct = append(distinct, schema)
 		}
@@ -1181,8 +1190,9 @@ func typeUnion(out map[string]any, types []any) []any {
 // branch is left and none of its keys conflict with the parent, it is merged
 // into the parent, because Gemini requires an array schema to carry its own
 // items (Optional[list] is anyOf[array, null]). A conflicting branch stays
-// whole but still lends its items to an items-less array parent, since every
-// value must match that branch too.
+// whole. An items-less array parent takes the items of every branch that has
+// them, as one schema or their union, since every value must match one of
+// those branches.
 func collapseNullable(out map[string]any, anyOf []any) map[string]any {
 	branches := anyOf[:0]
 	for _, b := range anyOf {
@@ -1193,18 +1203,24 @@ func collapseNullable(out map[string]any, anyOf []any) map[string]any {
 		branches = append(branches, b)
 	}
 	if len(branches) == 1 {
-		if only, ok := branches[0].(map[string]any); ok {
-			if mergesLosslessly(out, only) {
-				for k, v := range only {
-					out[k] = v
-				}
-				return out
+		if only, ok := branches[0].(map[string]any); ok && mergesLosslessly(out, only) {
+			for k, v := range only {
+				out[k] = v
 			}
-			if items, has := only["items"]; has && out["type"] == "array" {
-				if _, set := out["items"]; !set {
-					out["items"] = items
+			return out
+		}
+	}
+	if _, set := out["items"]; !set && out["type"] == "array" {
+		var items []any
+		for _, b := range branches {
+			if m, ok := b.(map[string]any); ok {
+				if it, has := m["items"]; has {
+					items = append(items, it)
 				}
 			}
+		}
+		if union, ok := distinctUnion(items); ok {
+			out["items"] = union
 		}
 	}
 	if len(branches) > 0 {
