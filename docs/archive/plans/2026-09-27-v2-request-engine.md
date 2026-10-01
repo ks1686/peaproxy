@@ -1,6 +1,7 @@
 # PeaProxy v2.0.0 — request-engine implementation plan
 
-Status: approved implementation sequence. Full plan is maintained with this branch.
+Status: **superseded** by [the final plan](2026-09-27-v2-request-engine-final.md), shipped in v2.0.10.
+Living document: [../../V2.md](../../V2.md).
 
 ## Goal
 

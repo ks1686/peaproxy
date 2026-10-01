@@ -1,6 +1,8 @@
 # PeaProxy v2.0.0 — request-engine implementation plan
 
-Status: proposed implementation sequence for the approved request-focused direction.
+Status: **implemented.** Shipped in v2.0.10; the living document is [../../V2.md](../../V2.md).
+Kept as the record of what was planned. The earlier approved draft is
+[2026-09-27-v2-request-engine.md](2026-09-27-v2-request-engine.md) — this file supersedes it.
 Baseline inspected: `2847896` (2026-09-27). Recheck the branch before implementation.
 
 ## 1. Goal and product boundary
