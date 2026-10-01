@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ type fileBlob struct {
 }
 
 func (s *Store) fileSet(key, value string) error {
-	blob, err := s.loadBlob()
+	blob, err := s.loadBlob(false)
 	if err != nil {
 		return err
 	}
@@ -29,8 +30,8 @@ func (s *Store) fileSet(key, value string) error {
 	return s.saveBlob(blob)
 }
 
-func (s *Store) fileGet(key string) (string, error) {
-	blob, err := s.loadBlob()
+func (s *Store) fileGet(key string, shared bool) (string, error) {
+	blob, err := s.loadBlob(shared)
 	if err != nil {
 		return "", err
 	}
@@ -42,7 +43,7 @@ func (s *Store) fileGet(key string) (string, error) {
 }
 
 func (s *Store) fileDelete(key string) error {
-	blob, err := s.loadBlob()
+	blob, err := s.loadBlob(false)
 	if err != nil {
 		return err
 	}
@@ -54,7 +55,7 @@ func (s *Store) fileDelete(key string) error {
 }
 
 func (s *Store) filePrune(keep map[string]struct{}) error {
-	blob, err := s.loadBlob()
+	blob, err := s.loadBlob(false)
 	if err != nil {
 		return err
 	}
@@ -72,7 +73,10 @@ func (s *Store) filePrune(keep map[string]struct{}) error {
 	return s.saveBlob(blob)
 }
 
-func (s *Store) loadBlob() (fileBlob, error) {
+// loadBlob reads and decrypts the blob. shared asks for the retrying key read,
+// which only the unlocked Get fallback may do; every other caller holds the
+// lock (#64).
+func (s *Store) loadBlob(shared bool) (fileBlob, error) {
 	empty := fileBlob{V: 1, Items: map[string]string{}}
 	raw, err := os.ReadFile(s.encPath())
 	if err != nil {
@@ -81,7 +85,7 @@ func (s *Store) loadBlob() (fileBlob, error) {
 		}
 		return fileBlob{}, err
 	}
-	key, err := s.loadOrCreateKey()
+	key, err := s.keyFor(shared)
 	if err != nil {
 		return fileBlob{}, err
 	}
@@ -138,42 +142,79 @@ func (s *Store) saveBlob(blob fileBlob) error {
 	return nil
 }
 
-// keyReadAttempts bounds how long a reader waits for a key file another
-// process has just created to receive its 32 bytes.
-const keyReadAttempts = 50
-
 // keySettleTime is how long a wrong-sized key file is treated as "another
-// process is still writing it". Past it, the file is simply broken, and waiting
-// longer only holds config.lock and secrets.lock for nothing (#59).
+// process is still writing it". Past it, the file is simply broken. It only
+// applies to loadOrCreateKeyShared, and only on the unlocked fallback path (#64).
 const keySettleTime = time.Second
 
-// loadOrCreateKey creates secret.key with O_EXCL, so processes racing on a
-// first run agree on one key: the loser re-reads the winner's file.
+// loadOrCreateKey reads secret.key, creating it if absent. It assumes
+// secrets.lock is held, so no other process is writing the file and a
+// wrong-sized one is simply broken. It reports that immediately rather than
+// retrying: the retry this replaces held two locks for half a second to reach
+// the same error (#64).
 func (s *Store) loadOrCreateKey() ([]byte, error) {
+	b, err := os.ReadFile(s.keyPath())
+	switch {
+	case err == nil && len(b) == 32:
+		return b, nil
+	case err == nil:
+		return nil, badKeyError(s.keyPath(), len(b))
+	case !os.IsNotExist(err):
+		return nil, err
+	}
+	key, err := s.createKey()
+	if errors.Is(err, fs.ErrExist) {
+		// Somebody created it without taking the lock. One re-read settles it.
+		b, rerr := os.ReadFile(s.keyPath())
+		if rerr != nil {
+			return nil, rerr
+		}
+		if len(b) != 32 {
+			return nil, badKeyError(s.keyPath(), len(b))
+		}
+		return b, nil
+	}
+	return key, err
+}
+
+// loadOrCreateKeyShared is loadOrCreateKey for the one path that cannot rely on
+// the lock: Get's fallback to an unlocked read when secrets.lock will not open
+// for writing (permission, read-only filesystem).
+//
+// That fallback exists because this process is not necessarily the only writer
+// here, so a key file caught mid-creation is real and worth waiting for. It is
+// the surviving reason for this retry -- not a pre-v2.0.10 binary, which no
+// longer exists (#64).
+func (s *Store) loadOrCreateKeyShared() ([]byte, error) {
+	const attempts = 50
 	for attempt := 1; ; attempt++ {
 		b, err := os.ReadFile(s.keyPath())
 		switch {
 		case err == nil && len(b) == 32:
 			return b, nil
-		case err == nil && attempt < keyReadAttempts && !settled(s.keyPath()):
+		case err == nil && attempt < attempts && !settled(s.keyPath()):
 			time.Sleep(10 * time.Millisecond)
 			continue
 		case err == nil:
-			return nil, fmt.Errorf("secretstore: %s is %d bytes, not 32; it is the key every stored secret is encrypted with, so delete it only if you are willing to re-enter them -- PeaProxy generates a new one on the next run", s.keyPath(), len(b))
+			return nil, badKeyError(s.keyPath(), len(b))
 		case !os.IsNotExist(err):
 			return nil, err
 		}
 		key, err := s.createKey()
-		if !os.IsExist(err) || attempt >= keyReadAttempts {
+		if !errors.Is(err, fs.ErrExist) || attempt >= attempts {
 			return key, err
 		}
 	}
 }
 
+func badKeyError(path string, n int) error {
+	return fmt.Errorf("secretstore: %s is %d bytes, not 32; it is the key every stored secret is encrypted with, so delete it only if you are willing to re-enter them -- PeaProxy generates a new one on the next run", path, n)
+}
+
 // settled reports whether a wrong-sized key file has been sitting there long
-// enough that it is not about to become correct. An mtime we cannot read is
-// treated as settled: the fallback is an error with a clear message, which beats
-// holding two locks for half a second to repeat it.
+// enough that it is not about to become correct. Only loadOrCreateKeyShared
+// asks. An mtime we cannot read counts as settled: the fallback is an error
+// with a clear message, which beats holding two locks to repeat it.
 func settled(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -241,4 +282,12 @@ func decrypt(key, raw []byte) ([]byte, error) {
 	}
 	nonce, ciphertext := raw[:ns], raw[ns:]
 	return gcm.Open(nil, nonce, ciphertext, []byte(Magic))
+}
+
+// keyFor picks the key read that matches the caller's locking.
+func (s *Store) keyFor(shared bool) ([]byte, error) {
+	if shared {
+		return s.loadOrCreateKeyShared()
+	}
+	return s.loadOrCreateKey()
 }

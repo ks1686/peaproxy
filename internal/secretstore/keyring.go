@@ -149,13 +149,19 @@ func (s *Store) keyringSet(key, value string) error {
 	return s.settle(idx, mine, fresh)
 }
 
+// keyringGet reads a secret, re-reading the header if the generation it is
+// following is replaced underneath it.
+//
+// This retry is not legacy cruft. secrets.lock lives in the config directory
+// but the keychain is per-user, so two PeaProxy instances with different configs
+// share every item under Service and share no lock at all. One of them can
+// publish a new generation and delete the old chunks while this read is mid-way
+// through them. (#64 assumed only a pre-v2.0.10 binary could do this; any two
+// current instances can.)
 func (s *Store) keyringGet(key string) (string, error) {
 	if s.kr == nil {
 		return "", ErrNotFound
 	}
-	// A pre-v2.0.10 binary does not take secrets.lock, so it can publish a
-	// new generation and delete the one this read is following; a vanished
-	// chunk under a changed header is retried.
 	var last string
 	for attempt := 0; attempt < 3; attempt++ {
 		v, err := s.kr.Get(Service, key)

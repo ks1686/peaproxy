@@ -189,8 +189,8 @@ func (s *Store) Set(id string, kind Kind, value string) error {
 }
 
 // Get reads a secret. When secrets.lock cannot be opened for writing (a
-// permission error or a read-only filesystem), it falls back to the unlocked
-// read of releases before v2.0.10. Writers still require the lock.
+// permission error or a read-only filesystem), it falls back to an unlocked
+// read. Writers still require the lock.
 func (s *Store) Get(id string, kind Kind) (string, error) {
 	if s == nil {
 		return "", ErrNotFound
@@ -198,8 +198,9 @@ func (s *Store) Get(id string, kind Kind) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
+	locked := err == nil
 	switch {
-	case err == nil:
+	case locked:
 		defer unlock()
 	case !errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EROFS):
 		return "", err
@@ -207,7 +208,9 @@ func (s *Store) Get(id string, kind Kind) (string, error) {
 	if s.backend == BackendKeyring {
 		return s.keyringGet(itemKey(id, kind))
 	}
-	return s.fileGet(itemKey(id, kind))
+	// shared: on this path a key file may be caught mid-creation by a writer
+	// holding the lock, so the key read has to tolerate one (#64).
+	return s.fileGet(itemKey(id, kind), !locked)
 }
 
 // Delete removes one secret.

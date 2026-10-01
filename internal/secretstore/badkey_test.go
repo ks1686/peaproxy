@@ -49,7 +49,8 @@ func TestWrongSizedKeyFileFailsWithAnActionableError(t *testing.T) {
 }
 
 // A key file that is young and the wrong size is a file another process is
-// still writing, so it keeps its grace period rather than failing.
+// still writing, so the shared read keeps its grace period rather than failing.
+// The locked read is the mirror image: see grace_test.go (#64).
 func TestYoungWrongSizedKeyFileStillWaits(t *testing.T) {
 	dir := t.TempDir()
 	s := &Store{backend: BackendFile, dir: dir}
@@ -61,7 +62,7 @@ func TestYoungWrongSizedKeyFileStillWaits(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 		_ = os.WriteFile(keyPath, make([]byte, 32), 0o600)
 	}()
-	key, err := s.loadOrCreateKey()
+	key, err := s.loadOrCreateKeyShared()
 	if err != nil {
 		t.Fatalf("a key being written should have been waited for: %v", err)
 	}
