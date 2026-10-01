@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -976,7 +977,7 @@ func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 				got = strings.TrimSpace(a[7:])
 			}
 		}
-		if token == "" || got != token {
+		if token == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "admin token required (X-Admin-Token)"})
 			return
 		}

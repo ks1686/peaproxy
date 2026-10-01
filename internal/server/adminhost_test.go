@@ -1,6 +1,10 @@
 package server
 
 import (
+	"encoding/json"
+	"github.com/ks1686/peaproxy/internal/adapters"
+	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/gateway"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -96,5 +100,45 @@ func TestNonLoopbackPeerIsNotSubjectToTheLoopbackHostRule(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code == http.StatusForbidden && strings.Contains(rec.Body.String(), "loopback host") {
 		t.Errorf("a LAN peer was asked for a loopback Host: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// #80: the admin token comparison must not leak its length or a prefix through
+// timing. Behaviourally the token is still required.
+func TestAdminTokenIsComparedConstantTime(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": []any{}})
+	}))
+	t.Cleanup(up.Close)
+	const tok = "lan-secret"
+	gw, err := gateway.New(config.Config{
+		SchemaVersion:    1,
+		Bind:             "0.0.0.0",
+		Port:             8317,
+		AllowNonLoopback: true,
+		AdminToken:       tok,
+		Providers: []config.Provider{{
+			ID: "local", Adapter: "openai_compat", Tier: "local", BaseURL: up.URL + "/v1",
+		}},
+	}, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Options{Gateway: gw})
+	for _, wrong := range []string{"", "x", tok[:len(tok)-1], tok + "x", "admin"} {
+		req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+		req.Header.Set("X-Admin-Token", wrong)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized && rec.Code == http.StatusOK {
+			t.Errorf("token %q was accepted", wrong)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+	req.Header.Set("X-Admin-Token", tok)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusUnauthorized {
+		t.Error("the correct token was rejected")
 	}
 }
