@@ -4,7 +4,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // crash runs a Set that the fake keyring kills mid-flight. A killed process
@@ -38,37 +37,6 @@ func chunkItems(kr *faultKeyring, key string) int {
 	return n
 }
 
-func dayLater() time.Time { return time.Now().Add(24 * time.Hour) }
-
-func TestInterruptedSaveOrphansAreSweptOnNextWrite(t *testing.T) {
-	// Given: v2's chunks are written but the process dies before its header.
-	kr := newFault()
-	s := &Store{backend: BackendKeyring, dir: t.TempDir(), kr: kr}
-	v1 := strings.Repeat("1", 5000)
-	if err := s.Set("acct", KindOAuth, v1); err != nil {
-		t.Fatal(err)
-	}
-	killOnSet(kr, "acct/oauth")
-	crash(t, func() error { return s.Set("acct", KindOAuth, strings.Repeat("2", 5000)) })
-	if n := chunkItems(kr, "acct/oauth"); n != 6 {
-		t.Fatalf("want 3 live + 3 orphaned chunks after the crash, got %d", n)
-	}
-
-	// When: a later write lands in the same dir.
-	s.now = dayLater
-	if err := s.Set("other", KindAPIKey, "sk"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Then: the orphaned generation is gone and v1 still reads back.
-	if n := chunkItems(kr, "acct/oauth"); n != 3 {
-		t.Fatalf("%d orphaned chunks survived the next write", n-3)
-	}
-	if got, err := s.Get("acct", KindOAuth); err != nil || got != v1 {
-		t.Fatalf("live value lost: len=%d err=%v", len(got), err)
-	}
-}
-
 func TestReplacedGenerationOrphansAreSweptOnNextPrune(t *testing.T) {
 	// Given: v2's header is published but the process dies before deleting v1's chunks.
 	kr := newFault()
@@ -88,8 +56,7 @@ func TestReplacedGenerationOrphansAreSweptOnNextPrune(t *testing.T) {
 		t.Fatalf("want 3 new + 3 replaced chunks after the crash, got %d", n)
 	}
 
-	// When
-	s.now = dayLater
+	// When: no clock jump needed any more -- the next prune reclaims at once.
 	if err := s.Prune([]string{"acct"}); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +72,11 @@ func TestReplacedGenerationOrphansAreSweptOnNextPrune(t *testing.T) {
 
 // A pre-v2.0.10 binary does not take secrets.lock: a fresh pending generation
 // may belong to one that is still writing it, so it must not be swept yet.
-func TestSweepSparesGenerationsYoungEnoughToBeInFlight(t *testing.T) {
+// An interrupted save used to hold its chunks for 30 minutes on the theory that
+// a pre-v2.0.10 binary might still be writing them. No binary does that any
+// more, and every writer holds secrets.lock, so the chunks are garbage the
+// moment the process dies and the next write reclaims them (#64).
+func TestInterruptedSaveIsReclaimedByTheNextWrite(t *testing.T) {
 	// Given
 	kr := newFault()
 	s := &Store{backend: BackendKeyring, dir: t.TempDir(), kr: kr}
@@ -121,8 +92,17 @@ func TestSweepSparesGenerationsYoungEnoughToBeInFlight(t *testing.T) {
 	}
 
 	// Then
-	if n := chunkItems(kr, "acct/oauth"); n != 6 {
-		t.Fatalf("an in-flight generation was swept: %d chunk items left, want 6", n)
+	if n := chunkItems(kr, "acct/oauth"); n != 3 {
+		t.Fatalf("the orphaned generation was not reclaimed: %d chunk items left, want 3", n)
+	}
+	// And the value still reads back: reclaiming the orphan must not touch the
+	// generation that is live.
+	got, err := s.Get("acct", KindOAuth)
+	if err != nil {
+		t.Fatalf("read back after a sweep: %v", err)
+	}
+	if got != strings.Repeat("1", 5000) {
+		t.Fatalf("sweeping the orphan changed the value: %d bytes", len(got))
 	}
 }
 

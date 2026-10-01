@@ -20,14 +20,11 @@ import (
 // index files written before this change load unchanged.
 const pendingPrefix = "pending:"
 
-// pendingGrace keeps a sweep from deleting a generation that a pre-v2.0.10
-// binary, which does not take secrets.lock, may still be writing.
-const pendingGrace = 30 * time.Minute
-
 type pending struct {
 	key string
 	ref chunkRef
-	at  int64 // unix seconds when recorded
+	at  int64 // unix seconds when recorded; no longer consulted, kept so an
+	// index written before #64 still loads
 }
 
 func (p pending) String() string {
@@ -98,15 +95,17 @@ func (s *Store) settle(idx index, mine []pending, live chunkRef) error {
 	return errors.Join(append(errs, s.saveIndex(idx))...)
 }
 
-// sweep deletes pending generations that no header points to. Entries younger
-// than pendingGrace, or whose header or chunks cannot be read or deleted right
-// now, are kept for a later sweep.
+// sweep deletes pending generations that no header points to. An entry whose
+// header or chunks cannot be read or deleted right now is kept for a later
+// sweep.
+//
+// There is deliberately no grace period. Every writer takes secrets.lock and so
+// does every sweeper, so a pending entry seen here is orphaned by definition: a
+// writer that was still alive would be holding the lock this process just
+// acquired. Age says nothing, which is why a crashed save now reclaims its
+// chunks on the next write instead of half an hour later (#64).
 func (s *Store) sweep(idx index) {
-	cutoff := s.clock().Add(-pendingGrace).Unix()
 	for p := range idx.pending {
-		if p.at > cutoff {
-			continue
-		}
 		live, err := s.replaceableChunks(p.key)
 		if err != nil {
 			continue

@@ -212,7 +212,8 @@ func TestFileBlobNotLostAcrossProcesses(t *testing.T) {
 
 	// Then
 	s := &Store{backend: BackendFile, dir: dir}
-	blob, err := s.loadBlob()
+	// shared: this parent takes no lock, exactly like Get's unlocked fallback.
+	blob, err := s.loadBlob(true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +234,10 @@ func TestKeyFileCreatedOnceAcrossProcesses(t *testing.T) {
 		}
 		for r := 0; r < rounds; r++ {
 			s := &Store{backend: BackendFile, dir: filepath.Join(dir, strconv.Itoa(r))}
-			k, err := s.loadOrCreateKey()
+			// Deliberately without the lock: these children race to create the
+			// same key file, which is the one caller loadOrCreateKey cannot make
+			// safe on its own (#64).
+			k, err := s.loadOrCreateKeyShared()
 			if err != nil {
 				helperExit(err)
 			}
