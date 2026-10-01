@@ -47,6 +47,20 @@ function errText(data, fallback) {
   return fallback;
 }
 
+// contextWindowText renders a provider-published context window. A dash means
+// the provider published none, which is most of them -- OpenAI and Anthropic
+// send nothing through /v1/models. PeaProxy does not guess one, because a
+// harness would take the number at face value.
+function contextWindowText(n) {
+  if (!n || n <= 0) return "—";
+  if (n >= 1e6) return `${+(n / 1e6).toFixed(2)}M`;
+  if (n >= 1000) {
+    const k = Math.round(n / 1000);
+    return k >= 1000 ? "1M" : `${k}K`;
+  }
+  return String(n);
+}
+
 async function getJSON(url) {
   const res = await fetch(url, { headers: adminHeaders() });
   const text = await res.text();
@@ -580,6 +594,7 @@ function catalogPage(root) {
           <td>${escapeHtml(m.provider)}</td>
           <td>${escapeHtml(m.accountId || "")}</td>
           <td>${escapeHtml((m.modalities || []).join(", "))}</td>
+          <td>${escapeHtml(contextWindowText(m.contextWindow))}</td>
           <td>${m.exposed ? "listed" : "hidden"} / ${m.routable ? "routable" : "blocked"}</td>
           <td>${m.privacyNote ? `<span class="warn">${escapeHtml(m.privacyNote)}</span>` : ""}</td>
           <td>
@@ -590,7 +605,7 @@ function catalogPage(root) {
         })
         .join("");
       host.innerHTML = `<table>
-      <thead><tr><th>Model</th><th>Tier</th><th>Provider</th><th>Account</th><th>Modalities</th><th>List / route</th><th>Privacy</th><th></th></tr></thead>
+      <thead><tr><th>Model</th><th>Tier</th><th>Provider</th><th>Account</th><th>Modalities</th><th>Context</th><th>List / route</th><th>Privacy</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table>`;
       document.querySelectorAll("[data-hide]").forEach((btn) => {
         btn.addEventListener("click", async () => {

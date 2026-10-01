@@ -58,6 +58,12 @@ type Model struct {
 	AliasOf string `json:"aliasOf,omitempty"`
 	// Price is present only when a live payload or an explicit override verified it.
 	Price Price `json:"price,omitempty"`
+	// ContextWindow is the provider's published context length in tokens, and
+	// is omitted from JSON when the provider publishes none. Zero means
+	// unknown, never "small": /v1/models on OpenAI, Anthropic and most others
+	// carries no context length at all, and inferring one from the model name
+	// would hand a harness a number it would believe (#81).
+	ContextWindow int `json:"contextWindow,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.

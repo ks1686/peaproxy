@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -117,6 +118,14 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 				Prompt     string `json:"prompt"`
 				Completion string `json:"completion"`
 			} `json:"pricing"`
+			// ContextLength is OpenRouter's spelling. Providers that do not
+			// publish it omit the field, and the row stays unknown (#81).
+			//
+			// RawMessage rather than json.Number: a provider that sends a
+			// value we cannot read must cost that one row its context window,
+			// not the whole listing. Decoding straight into json.Number makes
+			// one malformed field fail every unmarshal below it.
+			ContextLength json.RawMessage `json:"context_length"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &list); err != nil {
@@ -142,6 +151,11 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		if a.provider == "openrouter" {
 			row.Price = openRouterPrice(m.Pricing)
 		}
+		// Ungated, unlike pricing: context_length is not OpenRouter-specific,
+		// and a provider publishing it is opting in by doing so. Gating on the
+		// provider name would hide it from every self-hosted gateway that
+		// reports it, which is exactly where a user most wants to see it (#81).
+		row.ContextWindow = contextWindow(m.ContextLength)
 		out = append(out, row)
 	}
 	return out, nil
@@ -597,4 +611,39 @@ func truncate(b []byte) string {
 		return string(b)
 	}
 	return string(b[:n]) + "…"
+}
+
+// contextWindow reads a published context length. Anything that is not a
+// positive integer means the provider did not publish one, which stays zero
+// (unknown) rather than becoming a number a harness would trust. A string or a
+// float here is a provider doing something unexpected, not a value to guess at.
+func contextWindow(raw json.RawMessage) int {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0
+	}
+	// A quoted integer is not a guess, it is the same exact number, and
+	// providers that serialise it that way are common enough to be worth
+	// reading. Anything else -- a float, a word, an object -- is unknown.
+	s := string(raw)
+	if unquoted, ok := unquoteJSONString(s); ok {
+		s = unquoted
+	}
+	i, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || i <= 0 || i > math.MaxInt32 {
+		return 0
+	}
+	return int(i)
+}
+
+// unquoteJSONString returns the contents of a JSON string literal, and false
+// for anything else.
+func unquoteJSONString(s string) (string, bool) {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return "", false
+	}
+	var out string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return "", false
+	}
+	return out, true
 }
