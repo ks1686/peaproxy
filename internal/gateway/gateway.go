@@ -598,6 +598,11 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 // EditImage proxies POST /v1/images/edits for the same image_out accounts
 // that serve generations. Multipart bodies are forwarded with their content type.
 func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string) (adapter.ImageResponse, string, error) {
+	// Same deadline and attempt budget as Chat. These paths used to have
+	// neither, so a hung provider held the request open indefinitely and the
+	// attempt budget did not apply (#67).
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model := ImageEditModel(raw, contentType)
 	body := raw
 	client := model
@@ -626,7 +631,11 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	var lastAccount string
 	var admissionSkipped bool
 	tried := false
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		if err := budgetAttempts.take(); err != nil {
+			return adapter.ImageResponse{}, lastAccount, errAttemptBudgetExhausted
+		}
 		if !strings.Contains(strings.ToLower(contentType), "multipart/") {
 			model, body = inst.applyModel(model, body)
 		}
@@ -656,7 +665,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 			admissionSkipped = true
 			continue
 		}
-		if retryable(callErr) || router.Transient(callErr) {
+		if replayableAfter(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
@@ -692,6 +701,11 @@ func (g *Gateway) routeTarget(name string) (string, bool) {
 // Upstream is only called when the model is tagged image_out and the adapter
 // implements ImageGenerator with Capabilities.ImageOut.
 func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageResponse, string, error) {
+	// Same deadline and attempt budget as Chat. These paths used to have
+	// neither, so a hung provider held the request open indefinitely and the
+	// attempt budget did not apply (#67).
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	_ = budget
 	if err != nil {
@@ -711,7 +725,11 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	var lastAccount string
 	var admissionSkipped bool
 	tried := false
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		if err := budgetAttempts.take(); err != nil {
+			return adapter.ImageResponse{}, lastAccount, errAttemptBudgetExhausted
+		}
 		model, raw := inst.applyModel(model, raw)
 		gen, ok := inst.Adapter.(adapter.ImageGenerator)
 		if !ok || !inst.Adapter.Capabilities().ImageOut {
@@ -737,7 +755,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 			admissionSkipped = true
 			continue
 		}
-		if retryable(callErr) || router.Transient(callErr) {
+		if replayableAfter(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
@@ -769,6 +787,11 @@ func (g *Gateway) supportsImageOut(id string) bool {
 // Upstream is only called when the model is tagged embeddings and the adapter
 // implements Embedder with Capabilities.Embeddings.
 func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.EmbeddingResponse, string, error) {
+	// Same deadline and attempt budget as Chat. These paths used to have
+	// neither, so a hung provider held the request open indefinitely and the
+	// attempt budget did not apply (#67).
+	ctx, cancel := g.requestContext(ctx)
+	defer cancel()
 	model, client, raw, budget, err := g.prepare(raw)
 	_ = budget
 	if err != nil {
@@ -795,7 +818,11 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	var lastAccount string
 	var admissionSkipped bool
 	tried := false
+	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
+		if err := budgetAttempts.take(); err != nil {
+			return adapter.EmbeddingResponse{}, lastAccount, errAttemptBudgetExhausted
+		}
 		model, raw := inst.applyModel(model, raw)
 		emb, ok := inst.Adapter.(adapter.Embedder)
 		if !ok || !inst.Adapter.Capabilities().Embeddings {
@@ -1438,6 +1465,25 @@ func (c *countWriter) Write(p []byte) (int, error) {
 
 func retryable(err error) bool {
 	return router.Retryable(err)
+}
+
+// replayableAfter reports whether a side-effecting call may be sent to a
+// different account after this error.
+//
+// 502 and 504 are excluded, and this is the whole point of the helper. Both come
+// from a proxy in front of the provider that stopped waiting -- which is
+// precisely *after* the provider may have generated and billed an image.
+// Replaying buys a duplicate bill and returns whichever finished first. A 500 is
+// not replayed either (router.Retryable has never claimed it), and a 429 is:
+// the provider refused, so nothing was generated and moving on is free (#67).
+//
+// Embeddings are idempotent and deliberately do not use this.
+func replayableAfter(err error) bool {
+	var he adapter.HTTPError
+	if errors.As(err, &he) && (he.Status == http.StatusBadGateway || he.Status == http.StatusGatewayTimeout) {
+		return false
+	}
+	return retryable(err) || router.Transient(err)
 }
 
 func cooldownErr(last error) error {
