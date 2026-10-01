@@ -1,6 +1,6 @@
 # PeaProxy — approved plan (2026-09-26)
 
-Status: **2.0.x on main**. Latest GitHub Release is **v2.0.10** (request engine: [V2.md](V2.md)). Phases 0–4 are done. This is a shipped 2.x product, not a 0.2.8 scaffold. **v1.0.0** is an honesty/marketing declaration from current `main` after this docs cut ([V1.md](V1.md)) — not a new 1.6 patch, and not tagged from a feature branch.
+Status: **2.1.x on main**. Latest GitHub Release is **v2.1.0** (request engine: [V2.md](V2.md)). Phases 0–4 are done. This is a shipped 2.x product, not a 0.2.8 scaffold. **v1.0.0** is an honesty/marketing declaration from current `main` after this docs cut ([V1.md](V1.md)) — not a new 1.6 patch, and not tagged from a feature branch.
 
 Residuals (documented, not unmarked phase work):
 
@@ -107,7 +107,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 2. Core P0 key adapters; multi-account failover; CLI; harness presets (Cursor + Claude Code + OpenCode + Pi, later Codex/Continue/Cline/Amp) ✅
 3. Catalog polish (hide/filter/pin/rename); showcase; request inspector; health; Settings / first-run onboarding ✅ (v0.2.4–v0.2.6)
 4. OAuth maximize + remaining free/local hosted presets ✅ (v0.2.0 OAuth; v0.2.2–v0.2.5 presets). **Qwen consumer OAuth still stubbed.**
-5. Releases — **v0.2.0 through v0.2.8, then 1.1.0 through v1.6.9, then v2.0.0 through v2.0.10 tagged** (GoReleaser linux/darwin/windows amd64+arm64; macOS Developer ID + notarization; Homebrew cask `ks1686/tap`; Scoop manifest in `ks1686/scoop-bucket`; AUR package `peaproxy-bin`). Historic GitHub `v1.0.0` (0.2.8-era docs) predates 1.6.x. **Formal v1.0.0** is the honesty declaration from current `main` after this docs PR ([V1.md](V1.md)); this PR does not cut 1.6.10. Site/marketing is not this repo.
+5. Releases — **v0.2.0 through v0.2.8, then 1.1.0 through v1.6.9, then v2.0.0 through v2.0.10, then v2.1.0 tagged** (GoReleaser linux/darwin/windows amd64+arm64; macOS Developer ID + notarization; Homebrew cask `ks1686/tap`; Scoop manifest in `ks1686/scoop-bucket`; AUR package `peaproxy-bin`). Historic GitHub `v1.0.0` (0.2.8-era docs) predates 1.6.x. **Formal v1.0.0** is the honesty declaration from current `main` after this docs PR ([V1.md](V1.md)); this PR does not cut 1.6.10. Site/marketing is not this repo.
 
 **Shipped in this tree (2.0.x):** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, **image-out proxy** (`POST /v1/images/generations`), **embeddings proxy** (`POST /v1/embeddings`), **quota remaining** (documented headers + OpenRouter `GET /key`), failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add`, subscription OAuth including Copilot (ToS documented), OpenCode Go API key, OS keychain / encrypted-file secrets, Homebrew cask + signed/notarized macOS binaries, `anthropic_oauth` Claude Code fingerprint + system cloak on Messages, `openai_oauth` `store: false` + omit `max_output_tokens`, chat SSE `finish_reason` before `[DONE]`.
 

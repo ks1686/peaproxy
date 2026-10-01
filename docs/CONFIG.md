@@ -66,6 +66,8 @@ Rules (`peaproxy config validate`):
 - Hide/expose lists must not contain empty ids or duplicates.
 - Pin/rename never become routing aliases — clients must use the live provider id, or a name from `routes`.
 - Hidden pinned models stay off `/v1/models` and remain routable by id unless `hide.blockRouting` is true.
+- `/admin/catalog` reports a `contextWindow` for models whose provider publishes one. PeaProxy does not guess a value from a name table — a number it invented would be wrong for every model released after the table was written — so a model whose provider stays silent shows a dash. A context window is never set by hand.
+- A model the provider refuses to serve on the chat wire (`ModelProtocolUnsupported`, "Model does not support this protocol") is dropped from `/v1/models` once an account has actually answered that way, and is kept in `/admin/catalog` with its reason. An earlier refusal is short-circuited locally, so the model stops being offered without a second upstream call. Un-hide does not force it back into the client list.
 
 ## Stable route names
 
@@ -126,6 +128,10 @@ automaticRoutes:
 `preludeTimeout` (default 30s; 5s before v2.0.7) is how long a stream may wait for its first event. When it expires, the request moves to the next matching account only when another one can take the request. It never retries the same account and never starts a cooldown. The last account a request can reach is never cut off by it; only `deadline` bounds that attempt.
 
 `promptCache: optimize` adds one Anthropic `cache_control` breakpoint only for a known profile and only when the caller is under that profile's limit. `off` does not strip caller breakpoints. Response caching is exact, in-memory, and skips tools, images, and continuation ids. `pea/auto`, `pea/economy`, `pea/local`, and `pea/free` are rejected as `routes` names. They select a live model only when `automaticRoutes.enabled` is true. Unknown prices are not free and do not win economy. An exact local model does not fail over to a cloud account that happens to advertise the same id.
+
+`maxInFlight: 0` is unlimited. A non-zero value caps the requests in flight **per account across every path** — chat, the native Responses and Messages wires, both stream and non-stream, and image, edit and embedding calls. A request that finds its account at the cap is treated the way a cooled account is treated, with one difference: it moves to the next candidate and is **not** left as a failure when another account can take the request, and it never starts a cooldown. The cap is a load guard, not a health signal, so a busy account is never marked broken because of it. If every candidate is busy, the client gets a busy error rather than a `cooldown` error.
+
+Image and edit calls are **not** failed over on a **502** or **504**, unlike every other path. A gateway that stopped waiting says nothing about whether the provider already generated (and billed) the image, so replaying risks paying twice; the client is told what happened instead. Embeddings stay idempotent and still fail over. A **500** was never replayed on any path.
 
 ## Request log
 
