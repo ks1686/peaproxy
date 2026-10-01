@@ -337,6 +337,60 @@ func (g *Gateway) Models() []catalog.Model {
 }
 
 // Listed applies hide/expose for /v1/models, then adds stable route names.
+// protocolRefused reports whether the provider said this model cannot serve
+// this protocol, as opposed to the request being wrong.
+//
+// The marker is narrow on purpose: a plain 400 is a malformed request and must
+// never remove a model from the catalog.
+// errModelRefusesChat is what a client gets once the provider has refused this
+// model on the chat protocol. It names the cause, because "400" from a gateway
+// that worked a moment ago is not a useful answer.
+var errModelRefusesChat = errors.New("this provider does not serve that model on the chat protocol; it has been removed from /v1/models")
+
+func protocolRefused(err error) bool {
+	var he adapter.HTTPError
+	if !errors.As(err, &he) || he.Status != http.StatusBadRequest {
+		return false
+	}
+	b := strings.ToLower(string(he.Body))
+	return strings.Contains(b, "modelprotocolunsupported") ||
+		strings.Contains(b, "does not support this protocol")
+}
+
+// markModelNotChat records that this provider refused to serve the model on the
+// chat wire. The model stays in the catalog for the admin, carrying the reason;
+// it stops being advertised to clients and stops being a routing candidate.
+//
+// Believing the provider is the point. Guessing from the model name would need a
+// table, and would be wrong for every model released after it was written.
+func (g *Gateway) markModelNotChat(provider, model string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i := range g.models {
+		if g.models[i].ID != model {
+			continue
+		}
+		// Provider on a row is the adapter family (openai_compat), not the
+		// account; the account is AccountID.
+		if provider != "" && g.models[i].AccountID != provider {
+			continue
+		}
+		g.models[i].Status = "not_chat: provider refuses this model on the chat protocol"
+	}
+}
+
+// notChatModel reports whether model has already been refused for this provider.
+func (g *Gateway) notChatModel(provider, model string) bool {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for i := range g.models {
+		if g.models[i].ID == model && g.models[i].AccountID == provider {
+			return strings.HasPrefix(g.models[i].Status, "not_chat")
+		}
+	}
+	return false
+}
+
 func (g *Gateway) Listed(filter catalog.Filter) []catalog.Model {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -430,10 +484,15 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	}
 	var last error
 	var lastAccount string
-	var admissionSkipped bool
+	var admissionSkipped, refused bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
+		if g.notChatModel(inst.Provider.ID, model) {
+			// Already refused once. Do not spend an upstream call rediscovering it.
+			last = errModelRefusesChat
+			continue
+		}
 		model, raw := inst.applyModel(model, raw)
 		var resp adapter.ChatResponse
 		var callErr error
@@ -484,6 +543,14 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			return resp, lastAccount, nil
 		}
 		last = callErr
+		if protocolRefused(callErr) {
+			// The model cannot serve this protocol. That is not the account's
+			// fault, so no cooldown, and every other account offering the same
+			// id is skipped too once they refuse (#83).
+			g.markModelNotChat(inst.Provider.ID, model)
+			refused = true
+			continue
+		}
 		if admissionRejection(callErr) {
 			// Busy is not broken. Skip without cooling, or one burst takes a
 			// healthy account out of rotation (#74).
@@ -495,6 +562,9 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			continue
 		}
 		return adapter.ChatResponse{}, lastAccount, callErr
+	}
+	if refused {
+		return adapter.ChatResponse{}, lastAccount, errModelRefusesChat
 	}
 	if admissionSkipped {
 		return adapter.ChatResponse{}, lastAccount, last

@@ -164,6 +164,20 @@ func annotate(m Model, q Query) Model {
 		m.Routable = false
 		return m
 	}
+	// The provider refused this model on the chat protocol. Clients are not
+	// offered it again -- every harness would offer it and every call would fail
+	// -- but the admin catalog keeps the row, with the reason on its status, so
+	// the model can be found rather than silently vanished (#83).
+	if strings.HasPrefix(m.Status, "not_chat") {
+		m.Hidden = true
+		m.Exposed = false
+		m.Routable = false
+		if q.ForClients {
+			return m
+		}
+		m.Hidden = false
+		return m
+	}
 	hidden := slices.Contains(q.HideProviders, m.Provider) || slices.Contains(q.HideModels, m.ID)
 	exposed := !hidden
 	if q.ForClients && len(q.ExposeModels) > 0 && !slices.Contains(q.ExposeModels, m.ID) {
