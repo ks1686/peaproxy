@@ -14,6 +14,10 @@ var ErrAdmissionQueue = errors.New("account admission queue is full")
 var ErrAdmissionWait = errors.New("account admission wait exceeded")
 
 // Gate limits in-flight work per account. A zero max is unlimited.
+//
+// MaxInFlight, MaxQueue and Wait are read under mu by Acquire, so they must be
+// written with SetLimits rather than assigned directly. They used to be
+// assigned by the gateway on every request, which raced every reader (#74).
 type Gate struct {
 	MaxInFlight int
 	MaxQueue    int
@@ -23,18 +27,51 @@ type Gate struct {
 	inflight map[string]int
 	queued   map[string]int
 	probe    map[string]time.Time
+	// wake is closed and replaced whenever a slot is released, so waiters
+	// re-check immediately instead of polling on a timer (#80).
+	wake chan struct{}
+}
+
+// SetLimits publishes the configured limits. Called when the gateway is built
+// or rebuilt, never per request.
+func (g *Gate) SetLimits(maxInFlight, maxQueue int, wait time.Duration) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.MaxInFlight = maxInFlight
+	g.MaxQueue = maxQueue
+	g.Wait = wait
+	g.mu.Unlock()
+}
+
+// limits returns the configured limits under the lock.
+func (g *Gate) limits() (maxInFlight, maxQueue int, wait time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.MaxInFlight, g.MaxQueue, g.Wait
+}
+
+// wakeWaiters closes the broadcast channel. Callers hold mu.
+func (g *Gate) wakeWaiters() {
+	if g.wake != nil {
+		close(g.wake)
+	}
+	g.wake = make(chan struct{})
 }
 
 // Acquire reserves a slot. The returned function releases it once.
 func (g *Gate) Acquire(ctx context.Context, account string) (func(), error) {
-	if g == nil || g.MaxInFlight <= 0 {
+	if g == nil {
 		return func() {}, nil
 	}
-	maxQueue := g.MaxQueue
+	max, maxQueue, wait := g.limits()
+	if max <= 0 {
+		return func() {}, nil
+	}
 	if maxQueue <= 0 {
 		maxQueue = 32
 	}
-	wait := g.Wait
 	if wait <= 0 {
 		wait = 2 * time.Second
 	}
@@ -46,7 +83,7 @@ func (g *Gate) Acquire(ctx context.Context, account string) (func(), error) {
 			g.inflight = map[string]int{}
 			g.queued = map[string]int{}
 		}
-		if g.inflight[account] < g.MaxInFlight {
+		if g.inflight[account] < max {
 			g.inflight[account]++
 			g.mu.Unlock()
 			var once sync.Once
@@ -59,6 +96,10 @@ func (g *Gate) Acquire(ctx context.Context, account string) (func(), error) {
 			return nil, ErrAdmissionQueue
 		}
 		g.queued[account]++
+		// One long wait, woken by release, instead of a 5ms poll that allocated
+		// a timer per waiter per spin and woke every waiter every 5ms whether or
+		// not anything had changed (#80).
+		wake := g.wake
 		g.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -67,7 +108,7 @@ func (g *Gate) Acquire(ctx context.Context, account string) (func(), error) {
 		case <-timer.C:
 			g.leaveQueue(account)
 			return nil, ErrAdmissionWait
-		case <-time.After(5 * time.Millisecond):
+		case <-wake:
 			g.leaveQueue(account)
 		}
 	}
@@ -87,6 +128,8 @@ func (g *Gate) release(account string) {
 		g.inflight[account]--
 	}
 	delete(g.probe, account)
+	// A released slot is the only thing a blocked waiter is waiting for.
+	g.wakeWaiters()
 	g.mu.Unlock()
 }
 

@@ -120,6 +120,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 		reg = adapters.DefaultRegistry()
 	}
 	g := &Gateway{cfg: cfg, saved: config.Clone(cfg), path: path, reg: reg, cool: map[string]cooldownSlots{}, sticky: map[string]string{}, affinity: map[string]affinityBind{}, continuations: map[string]continuationBind{}, accountStats: map[string]router.AccountStat{}, admission: &router.Gate{}, flight: &responsecache.Flight{}, quota: quota.NewStore()}
+	g.publishAdmissionLimits(cfg)
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
@@ -193,10 +194,15 @@ func (g *Gateway) ConfigPath() string {
 }
 
 // Config returns a copy of the current config.
+// Config returns a copy whose slices do not share the gateway's backing arrays.
+// RemoveProvider used to filter with g.cfg.Providers[:0], so a caller that held
+// the returned config across a save could marshal a shifted provider list.
 func (g *Gateway) Config() config.Config {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.cfg
+	cfg := g.cfg
+	cfg.Providers = append([]config.Provider(nil), g.cfg.Providers...)
+	return cfg
 }
 
 // SetConfigPath updates the save target.
@@ -215,6 +221,7 @@ func (g *Gateway) SetConfig(cfg config.Config) {
 	g.cfg = cfg
 	g.saved = config.Clone(cfg)
 	g.mu.Unlock()
+	g.publishAdmissionLimits(cfg)
 }
 
 // Query is the current listing query.
@@ -423,6 +430,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	}
 	var last error
 	var lastAccount string
+	var admissionSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
@@ -437,13 +445,10 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 				if err := budgetAttempts.take(); err != nil {
 					return adapter.ChatResponse{}, errAttemptBudgetExhausted
 				}
-				release, aerr := g.admit(runCtx, inst.Provider.ID)
-				if aerr != nil {
-					return adapter.ChatResponse{}, aerr
-				}
 				attempted.Store(true)
-				once, onceErr = inst.Adapter.Chat(runCtx, chatReq(inst, model, g.promptBody(raw, inst.Provider.Adapter), false, budget))
-				release()
+				once, onceErr = admitted(g, runCtx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
+					return inst.Adapter.Chat(c, chatReq(inst, model, g.promptBody(raw, inst.Provider.Adapter), false, budget))
+				})
 				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
 					break
 				}
@@ -479,11 +484,20 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			return resp, lastAccount, nil
 		}
 		last = callErr
+		if admissionRejection(callErr) {
+			// Busy is not broken. Skip without cooling, or one burst takes a
+			// healthy account out of rotation (#74).
+			admissionSkipped = true
+			continue
+		}
 		if retryable(callErr) || router.Transient(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
 		}
 		return adapter.ChatResponse{}, lastAccount, callErr
+	}
+	if admissionSkipped {
+		return adapter.ChatResponse{}, lastAccount, last
 	}
 	return adapter.ChatResponse{}, lastAccount, cooldownErr(last)
 }
@@ -523,7 +537,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var slowSkipped bool
+	var slowSkipped, admissionSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -540,7 +554,9 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			before := cw.n
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
-			callErr = noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, model, raw, true, budget), dest))
+			_, callErr = admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+				return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, model, raw, true, budget), dest))
+			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
 				break
@@ -552,6 +568,12 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			return lastAccount, nil
 		}
 		last = callErr
+		if admissionRejection(callErr) {
+			// Busy is not broken. Skip without cooling, or one burst takes a
+			// healthy account out of rotation (#74).
+			admissionSkipped = true
+			continue
+		}
 		if cw.n > 0 {
 			return lastAccount, callErr
 		}
@@ -565,8 +587,9 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 		}
 		return lastAccount, callErr
 	}
-	// A slow account was skipped without a cooldown, so not every account is cooling.
-	if slowSkipped {
+	// An account skipped for being slow or busy was not cooled down, so saying
+	// "every account is cooling" would be a lie.
+	if slowSkipped || admissionSkipped {
 		return lastAccount, last
 	}
 	return lastAccount, cooldownErr(last)
@@ -601,6 +624,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	}
 	var last error
 	var lastAccount string
+	var admissionSkipped bool
 	tried := false
 	for _, inst := range cands {
 		if !strings.Contains(strings.ToLower(contentType), "multipart/") {
@@ -626,6 +650,12 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 			return resp, lastAccount, nil
 		}
 		last = callErr
+		if admissionRejection(callErr) {
+			// Busy is not broken. Skip without cooling, or one burst takes a
+			// healthy account out of rotation (#74).
+			admissionSkipped = true
+			continue
+		}
 		if retryable(callErr) || router.Transient(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
@@ -636,6 +666,9 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 		return adapter.ImageResponse{}, lastAccount, adapter.ErrImageOutUnsupported
 	}
 	if retryable(last) || router.Transient(last) {
+		if admissionSkipped {
+			return adapter.ImageResponse{}, lastAccount, last
+		}
 		return adapter.ImageResponse{}, lastAccount, cooldownErr(last)
 	}
 	return adapter.ImageResponse{}, lastAccount, last
@@ -676,6 +709,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	}
 	var last error
 	var lastAccount string
+	var admissionSkipped bool
 	tried := false
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -697,6 +731,12 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 			return resp, lastAccount, nil
 		}
 		last = callErr
+		if admissionRejection(callErr) {
+			// Busy is not broken. Skip without cooling, or one burst takes a
+			// healthy account out of rotation (#74).
+			admissionSkipped = true
+			continue
+		}
 		if retryable(callErr) || router.Transient(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
@@ -705,6 +745,9 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	}
 	if !tried {
 		return adapter.ImageResponse{}, lastAccount, adapter.ErrImageOutUnsupported
+	}
+	if admissionSkipped {
+		return adapter.ImageResponse{}, lastAccount, last
 	}
 	if retryable(last) {
 		return adapter.ImageResponse{}, lastAccount, cooldownErr(last)
@@ -750,6 +793,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	}
 	var last error
 	var lastAccount string
+	var admissionSkipped bool
 	tried := false
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -796,6 +840,12 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 			return resp, lastAccount, nil
 		}
 		last = callErr
+		if admissionRejection(callErr) {
+			// Busy is not broken. Skip without cooling, or one burst takes a
+			// healthy account out of rotation (#74).
+			admissionSkipped = true
+			continue
+		}
 		if retryable(callErr) || router.Transient(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
@@ -804,6 +854,9 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	}
 	if !tried {
 		return adapter.EmbeddingResponse{}, lastAccount, adapter.ErrEmbeddingsUnsupported
+	}
+	if admissionSkipped {
+		return adapter.EmbeddingResponse{}, lastAccount, last
 	}
 	if retryable(last) {
 		return adapter.EmbeddingResponse{}, lastAccount, cooldownErr(last)
@@ -844,6 +897,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 	}
 	var last error
 	var lastAccount string
+	var admissionSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -855,7 +909,9 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
 			inst.recordAttempt(&lastAccount)
-			out, err := nr.Responses(ctx, jsonx.SetStream(raw, false))
+			out, err := admitted(g, ctx, inst.Provider.ID, func(c context.Context) ([]byte, error) {
+				return nr.Responses(c, jsonx.SetStream(raw, false))
+			})
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
 				g.rememberSuccess(session, client, lastAccount)
@@ -880,13 +936,20 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
 			inst.recordAttempt(&lastAccount)
-			resp, callErr = inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
+			resp, callErr = admitted(g, ctx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
+				return inst.Adapter.Chat(c, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
+			})
 			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
 				break
 			}
 		}
 		if callErr != nil {
 			last = callErr
+			if admissionRejection(callErr) {
+				// Busy is not broken. Skip without cooling (#74).
+				admissionSkipped = true
+				continue
+			}
 			if retryable(callErr) || router.Transient(callErr) {
 				g.markCooldown(inst.Provider.ID, model, callErr)
 				continue
@@ -913,6 +976,9 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 	}
 	if last == nil {
 		last = router.ErrNoAccount
+	}
+	if admissionSkipped {
+		return nil, lastAccount, last
 	}
 	if retryable(last) {
 		return nil, lastAccount, cooldownErr(last)
@@ -942,7 +1008,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	guard := streamguard.New(watch, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var slowSkipped bool
+	var slowSkipped, admissionSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeResponses](cands, xerr == nil)
 	for i, inst := range cands {
@@ -1011,7 +1077,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			_ = pr.Close()
 		}()
 		inst.recordAttempt(&lastAccount)
-		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
+		_, err := admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+			return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
+		})
 		stop()
 		// A failed call reaches the translator as a read error, not a clean EOF
 		// (nil closes normally), so it never completes the partial turn.
@@ -1057,7 +1125,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if last == nil {
 		last = router.ErrNoAccount
 	}
-	if retryable(last) && !slowSkipped {
+	if retryable(last) && !slowSkipped && !admissionSkipped {
 		return lastAccount, cooldownErr(last)
 	}
 	return lastAccount, last
@@ -1082,6 +1150,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	}
 	var last error
 	var lastAccount string
+	var admissionSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -1093,7 +1162,9 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
 			inst.recordAttempt(&lastAccount)
-			out, err := nm.Messages(ctx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), false))
+			out, err := admitted(g, ctx, inst.Provider.ID, func(c context.Context) ([]byte, error) {
+				return nm.Messages(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), false))
+			})
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
 				g.rememberSuccess(session, client, lastAccount)
@@ -1114,7 +1185,9 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 			return nil, lastAccount, errAttemptBudgetExhausted
 		}
 		inst.recordAttempt(&lastAccount)
-		resp, err := inst.Adapter.Chat(ctx, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
+		resp, err := admitted(g, ctx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
+			return inst.Adapter.Chat(c, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
+		})
 		if err != nil {
 			last = err
 			if retryable(err) {
@@ -1150,6 +1223,9 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 	if last == nil {
 		last = router.ErrNoAccount
 	}
+	if admissionSkipped {
+		return nil, lastAccount, last
+	}
 	if retryable(last) {
 		return nil, lastAccount, cooldownErr(last)
 	}
@@ -1177,7 +1253,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var slowSkipped bool
+	var slowSkipped, admissionSkipped bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeMessages](cands, xerr == nil)
 	for i, inst := range cands {
@@ -1196,7 +1272,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			}
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
-			err := noteStream(guard, nm.MessagesStream(attemptCtx, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest))
+			_, err := admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+				return struct{}{}, noteStream(guard, nm.MessagesStream(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest))
+			})
 			stop()
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
@@ -1240,7 +1318,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			_ = pr.Close()
 		}()
 		inst.recordAttempt(&lastAccount)
-		err := noteStream(guard, inst.Adapter.ChatStream(attemptCtx, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
+		_, err := admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+			return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
+		})
 		stop()
 		// A failed call reaches the translator as a read error, not a clean EOF
 		// (nil closes normally), so it never completes the partial turn.
@@ -1285,7 +1365,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	if last == nil {
 		last = router.ErrNoAccount
 	}
-	if retryable(last) && !slowSkipped {
+	if retryable(last) && !slowSkipped && !admissionSkipped {
 		return lastAccount, cooldownErr(last)
 	}
 	return lastAccount, last
@@ -1393,12 +1473,48 @@ func (g *Gateway) rememberSuccess(session, model, account string) {
 	g.bindAffinity(session, model, account)
 }
 
+// admit reserves a capacity slot on an account. The limit itself is published
+// when the gateway is built or rebuilt, not here: writing it per request raced
+// every reader inside Acquire (#74).
 func (g *Gateway) admit(ctx context.Context, account string) (func(), error) {
-	if g.admission == nil || g.cfg.RequestEngine.MaxInFlight <= 0 {
+	if g == nil || g.admission == nil {
 		return func() {}, nil
 	}
-	g.admission.MaxInFlight = g.cfg.RequestEngine.MaxInFlight
 	return g.admission.Acquire(ctx, account)
+}
+
+// publishAdmissionLimits hands the configured limits to the gate. Called from
+// New and from SetConfig, so every rebuild takes effect and nothing writes the
+// gate while it is running.
+func (g *Gateway) publishAdmissionLimits(cfg config.Config) {
+	if g.admission == nil {
+		return
+	}
+	// Queue depth and wait stay the gate's own defaults; only maxInFlight is
+	// configured.
+	g.admission.SetLimits(cfg.RequestEngine.MaxInFlight, 0, 0)
+}
+
+// admitted runs f with a capacity slot held for the account, releasing it when f
+// returns. Every upstream attempt goes through here, so a path that forgets to
+// take a slot is one edit rather than nine -- which is how streams, Claude,
+// Responses, images and embeddings came to run unbounded while maxInFlight
+// looked like it was working (#74).
+func admitted[T any](g *Gateway, ctx context.Context, account string, f func(context.Context) (T, error)) (T, error) {
+	var zero T
+	release, err := g.admit(ctx, account)
+	if err != nil {
+		return zero, err
+	}
+	defer release()
+	return f(ctx)
+}
+
+// admissionRejection reports whether err means the account had no capacity
+// rather than something being wrong with it. Such an account is skipped, never
+// cooled down: one burst must not take an account out of rotation (#74).
+func admissionRejection(err error) bool {
+	return errors.Is(err, router.ErrAdmissionQueue) || errors.Is(err, router.ErrAdmissionWait)
 }
 
 func (g *Gateway) bindAffinity(session, model, account string) {
