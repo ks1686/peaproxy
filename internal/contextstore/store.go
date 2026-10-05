@@ -241,3 +241,26 @@ func (s *Store) DropSession(sessID string) {
 	}
 	delete(s.sessions, sessID)
 }
+
+// List returns a session's artifacts, newest touch first then by key, so
+// iteration order is stable. Callers get copies.
+func (s *Store) List(session string) []Artifact {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.sessions[session]
+	if sess == nil {
+		return nil
+	}
+	out := make([]Artifact, 0, len(sess.items))
+	for _, a := range sess.items {
+		a.Body = append([]byte(nil), a.Body...)
+		out = append(out, a)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].touched.Equal(out[j].touched) {
+			return out[i].touched.After(out[j].touched)
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
