@@ -157,3 +157,33 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// A model that publishes cache pricing gets all four components; one that does
+// not leaves them unknown rather than free.
+func TestOpenRouterCachePricingParsed(t *testing.T) {
+	withCache := openRouterPrice(&struct {
+		Prompt     string `json:"prompt"`
+		Completion string `json:"completion"`
+		CacheRead  string `json:"input_cache_read"`
+		CacheWrite string `json:"input_cache_write"`
+	}{Prompt: "0.000003", Completion: "0.000015", CacheRead: "0.0000003", CacheWrite: "0.00000375"})
+	if withCache.CacheRead == nil || *withCache.CacheRead != 0.3 {
+		t.Fatalf("cache read = %v, want 0.3 per million", withCache.CacheRead)
+	}
+	if withCache.CacheWrite == nil || *withCache.CacheWrite != 3.75 {
+		t.Fatalf("cache write = %v, want 3.75 per million", withCache.CacheWrite)
+	}
+	if withCache.Source != "openrouter" || withCache.ObservedAt.IsZero() {
+		t.Fatalf("quote provenance missing: %#v", withCache)
+	}
+
+	withoutCache := openRouterPrice(&struct {
+		Prompt     string `json:"prompt"`
+		Completion string `json:"completion"`
+		CacheRead  string `json:"input_cache_read"`
+		CacheWrite string `json:"input_cache_write"`
+	}{Prompt: "0.000003", Completion: "0.000015"})
+	if withoutCache.CacheRead != nil || withoutCache.CacheWrite != nil {
+		t.Fatalf("unpublished cache rates became known: %#v", withoutCache)
+	}
+}
