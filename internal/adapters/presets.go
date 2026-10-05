@@ -1,6 +1,8 @@
 package adapters
 
 import (
+	"sort"
+
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic"
 	"github.com/ks1686/peaproxy/internal/adapter/hosted"
 	"github.com/ks1686/peaproxy/internal/adapter/ollama"
@@ -28,6 +30,28 @@ type AccountPreset struct {
 	// Unverified means PeaProxy has not called this endpoint live. It is
 	// carried to the UI so a preset is not presented as tested when it is not.
 	Unverified bool `json:"unverified,omitempty"`
+	// Group is the dropdown section this preset belongs to. Accounts grew
+	// past what a flat list can carry (#113), so the UI renders optgroups.
+	Group string `json:"group,omitempty"`
+}
+
+// Group names, in the order the dropdown shows them. What is free and local
+// comes first, then what costs money, then the subscription flows that carry a
+// terms-of-service warning, and last the entries that do not work yet.
+const (
+	GroupLocal  = "Local models"
+	GroupAPIKey = "Official API keys"
+	GroupOther  = "Other"
+	GroupOAuth  = "Subscription OAuth"
+)
+
+// PresetIDs lists the offered preset ids in dropdown order, for CLI help.
+func PresetIDs() []string {
+	out := make([]string, 0, 32)
+	for _, p := range AccountPresets() {
+		out = append(out, p.ID)
+	}
+	return out
 }
 
 func hostedPreset(id, label string, spec hosted.Spec) AccountPreset {
@@ -42,6 +66,7 @@ func hostedPreset(id, label string, spec hosted.Spec) AccountPreset {
 		URLPlaceholder: spec.URLPlaceholder,
 		Note:           spec.Notes,
 		Unverified:     spec.Unverified,
+		Group:          spec.Group,
 	}
 }
 
@@ -50,30 +75,27 @@ func hostedPreset(id, label string, spec hosted.Spec) AccountPreset {
 // in this process. Values are never included.
 func AccountPresets() []AccountPreset {
 	out := []AccountPreset{
-		{ID: "ollama-local", Adapter: ollama.Name, Label: "Ollama (local)", BaseURL: ollama.DefaultBaseURL, Tier: string(catalog.TierLocal)},
+		{ID: "ollama-local", Adapter: ollama.Name, Label: "Ollama (local)", BaseURL: ollama.DefaultBaseURL, Tier: string(catalog.TierLocal), Group: GroupLocal},
 		hostedPreset("lmstudio-local", "LM Studio (local)", hosted.LMStudio),
 		hostedPreset("llamacpp-local", "llama.cpp (local)", hosted.LlamaCpp),
 		hostedPreset("vllm-local", "vLLM (local)", hosted.VLLM),
 		hostedPreset("jan-local", "Jan (local)", hosted.Jan),
 		hostedPreset("gpt4all-local", "GPT4All (local)", hosted.GPT4All),
-		hostedPreset("ollama-cloud", "Ollama Cloud", hosted.OllamaCloud),
-		{ID: "anthropic-key", Adapter: anthropic.Name, Label: "Anthropic API key (official)", BaseURL: anthropic.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "ANTHROPIC_API_KEY", Note: "Official Messages API. Safer than subscription OAuth."},
-		{ID: "openai-key", Adapter: openai.Name, Label: "OpenAI API key (official)", BaseURL: openai.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENAI_API_KEY", Note: "Official Platform API. Safer than ChatGPT/Codex subscription OAuth."},
-		{ID: "anthropic-oauth", Adapter: "anthropic_oauth", Label: "Claude Pro/Max (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Anthropic ToS and can ban the account. PeaProxy authors are not liable. Prefer the Anthropic API key preset. Run: peaproxy auth login --provider anthropic"},
-		{ID: "openai-oauth", Adapter: "openai_oauth", Label: "ChatGPT / Codex (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate OpenAI ToS and can ban the account. PeaProxy authors are not liable. Prefer the OpenAI API key preset. Run: peaproxy auth login --provider openai"},
+		{ID: "anthropic-key", Adapter: anthropic.Name, Label: "Anthropic API key (official)", BaseURL: anthropic.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "ANTHROPIC_API_KEY", Note: "Official Messages API. Safer than subscription OAuth.", Group: GroupAPIKey},
+		{ID: "openai-key", Adapter: openai.Name, Label: "OpenAI API key (official)", BaseURL: openai.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENAI_API_KEY", Note: "Official Platform API. Safer than ChatGPT/Codex subscription OAuth.", Group: GroupAPIKey},
+		{ID: "anthropic-oauth", Adapter: "anthropic_oauth", Label: "Claude Pro/Max (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Anthropic ToS and can ban the account. PeaProxy authors are not liable. Prefer the Anthropic API key preset. Run: peaproxy auth login --provider anthropic", Group: GroupOAuth},
+		{ID: "openai-oauth", Adapter: "openai_oauth", Label: "ChatGPT / Codex (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate OpenAI ToS and can ban the account. PeaProxy authors are not liable. Prefer the OpenAI API key preset. Run: peaproxy auth login --provider openai", Group: GroupOAuth},
 		hostedPreset("google-key", "Google AI Studio (Gemini OpenAI-compat)", hosted.Google),
-		{ID: "antigravity", Adapter: "antigravity", Label: "Gemini / Antigravity (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Google ToS and can ban the account. PeaProxy authors are not liable. Prefer the Google AI Studio API key preset. Distinct from AI Studio keys — this is Cloud Code / Antigravity consumer OAuth. Run: peaproxy auth login --provider gemini"},
+		{ID: "antigravity", Adapter: "antigravity", Label: "Gemini / Antigravity (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Google ToS and can ban the account. PeaProxy authors are not liable. Prefer the Google AI Studio API key preset. Distinct from AI Studio keys — this is Cloud Code / Antigravity consumer OAuth. Run: peaproxy auth login --provider gemini", Group: GroupOAuth},
 		hostedPreset("groq-key", "Groq", hosted.Groq),
 		hostedPreset("cerebras-key", "Cerebras", hosted.Cerebras),
 		hostedPreset("xai-key", "xAI Grok (API key, official)", hosted.XAI),
-		{ID: "xai-oauth", Adapter: "xai_oauth", Label: "xAI Grok (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate xAI ToS and can ban the account. PeaProxy authors are not liable. Prefer the xAI API key preset. Run: peaproxy auth login --provider xai"},
-		{ID: "kimi-oauth", Adapter: "kimi_oauth", Label: "Kimi / Moonshot (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Moonshot ToS and can ban the account. PeaProxy authors are not liable. Prefer an official Kimi API key via custom OpenAI-compat. Run: peaproxy auth login --provider kimi"},
-		{ID: "kimi-ai-oauth", Adapter: "kimi_ai_oauth", Label: "Kimi.ai (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Moonshot ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider kimi-ai"},
-		{ID: "meta-oauth", Adapter: "meta_oauth", Label: "Meta Muse (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Meta ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider meta"},
-		{ID: "qwen-oauth", Adapter: "qwen_oauth", Label: "Qwen consumer OAuth (not yet)", Tier: string(catalog.TierPaid), Warn: "Not yet: CLIProxyAPI has no working Qwen consumer OAuth flow. Use a Qwen API key with the custom OpenAI-compat preset. PeaProxy authors are not liable for any future Qwen OAuth path either."},
-		{ID: "copilot-oauth", Adapter: "copilot_oauth", Label: "GitHub Copilot (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate GitHub Copilot ToS and can ban the account. PeaProxy authors are not liable. This is Copilot chat (api.githubcopilot.com), not retired GitHub Models. Run: peaproxy auth login --provider copilot"},
-		{ID: "factory-oauth", Adapter: "factory_oauth", Label: "Factory / Droid (not yet)", Tier: string(catalog.TierPaid), Warn: "Not yet: Factory has no public consumer chat OAuth. Point Droid at PeaProxy instead (peaproxy clients show droid). Official Factory API keys are for sessions/CI at api.factory.ai, not OpenAI-compat chat. PeaProxy authors are not liable."},
-		{ID: "opencode-go", Adapter: opencodego.Name, Label: "OpenCode Go", BaseURL: opencodego.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENCODE_API_KEY", Note: "Distinct from OpenCode Zen. Subscribe at opencode.ai/auth and paste the Go API key. Muse Spark contributor models may train on prompts. No public OAuth — peaproxy auth login --provider opencode-go explains this."},
+		{ID: "xai-oauth", Adapter: "xai_oauth", Label: "xAI Grok (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate xAI ToS and can ban the account. PeaProxy authors are not liable. Prefer the xAI API key preset. Run: peaproxy auth login --provider xai", Group: GroupOAuth},
+		{ID: "kimi-oauth", Adapter: "kimi_oauth", Label: "Kimi / Moonshot (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Moonshot ToS and can ban the account. PeaProxy authors are not liable. Prefer an official Kimi API key via custom OpenAI-compat. Run: peaproxy auth login --provider kimi", Group: GroupOAuth},
+		{ID: "kimi-ai-oauth", Adapter: "kimi_ai_oauth", Label: "Kimi.ai (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Moonshot ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider kimi-ai", Group: GroupOAuth},
+		{ID: "meta-oauth", Adapter: "meta_oauth", Label: "Meta Muse (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate Meta ToS and can ban the account. PeaProxy authors are not liable. Run: peaproxy auth login --provider meta", Group: GroupOAuth},
+		{ID: "copilot-oauth", Adapter: "copilot_oauth", Label: "GitHub Copilot (subscription OAuth)", Tier: string(catalog.TierPaid), Warn: "May violate GitHub Copilot ToS and can ban the account. PeaProxy authors are not liable. This is Copilot chat (api.githubcopilot.com), not retired GitHub Models. Run: peaproxy auth login --provider copilot", Group: GroupOAuth},
+		{ID: "opencode-go", Adapter: opencodego.Name, Label: "OpenCode Go", BaseURL: opencodego.DefaultBaseURL, Tier: string(catalog.TierPaid), EnvKey: "OPENCODE_API_KEY", Note: "Distinct from OpenCode Zen. Subscribe at opencode.ai/auth and paste the Go API key. Muse Spark contributor models may train on prompts. No public OAuth — peaproxy auth login --provider opencode-go explains this.", Group: GroupOther},
 		hostedPreset("huggingface", "Hugging Face router", hosted.HuggingFace),
 		hostedPreset("nim-key", "NVIDIA NIM (API catalog)", hosted.NIM),
 		hostedPreset("workers-ai", "Cloudflare Workers AI", hosted.WorkersAI),
@@ -86,10 +108,21 @@ func AccountPresets() []AccountPreset {
 		hostedPreset("together-key", "Together AI", hosted.Together),
 		hostedPreset("fireworks-key", "Fireworks AI", hosted.Fireworks),
 		hostedPreset("cohere-key", "Cohere", hosted.Cohere),
-		{ID: "openrouter", Adapter: openrouter.Name, Label: "OpenRouter", BaseURL: openrouter.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: "OPENROUTER_API_KEY", Note: "Model ids ending :free are tagged free automatically."},
-		{ID: "opencode-zen", Adapter: opencodezen.Name, Label: "OpenCode Zen", BaseURL: opencodezen.DefaultBaseURL, Tier: string(catalog.TierFree), EnvKey: "OPENCODE_API_KEY", Warn: "OpenCode Zen free models may train on prompts (Nemotron, Big Pickle, MiMo, Muse). Prefer an official API key from opencode.ai."},
-		{ID: "custom", Adapter: "openai_compat", Label: "Custom OpenAI-compat", BaseURL: "https://api.example.com/v1", Tier: string(catalog.TierPaid)},
+		hostedPreset("ollama-cloud", "Ollama Cloud", hosted.OllamaCloud),
+		{ID: "openrouter", Adapter: openrouter.Name, Label: "OpenRouter", BaseURL: openrouter.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: "OPENROUTER_API_KEY", Note: "Model ids ending :free are tagged free automatically.", Group: GroupOther},
+		{ID: "opencode-zen", Adapter: opencodezen.Name, Label: "OpenCode Zen", BaseURL: opencodezen.DefaultBaseURL, Tier: string(catalog.TierFree), EnvKey: "OPENCODE_API_KEY", Warn: "OpenCode Zen free models may train on prompts (Nemotron, Big Pickle, MiMo, Muse). Prefer an official API key from opencode.ai.", Group: GroupOther},
+		{ID: "custom", Adapter: "openai_compat", Label: "Custom OpenAI-compat", BaseURL: "https://api.example.com/v1", Tier: string(catalog.TierPaid), Group: GroupOther},
 	}
+	// The UI renders groups, and a group split across the list renders as two
+	// sections with the same heading. Sorting here rather than relying on the
+	// order of the literal keeps each section contiguous no matter how presets
+	// are added later.
+	order := map[string]int{
+		GroupLocal: 0, GroupAPIKey: 1, GroupOther: 2, GroupOAuth: 3,
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return order[out[i].Group] < order[out[j].Group]
+	})
 	for i := range out {
 		out[i].EnvKeySet = hosted.EnvPresent(out[i].EnvKey)
 		out[i].AccountIDEnvSet = hosted.EnvPresent(out[i].AccountIDEnv)

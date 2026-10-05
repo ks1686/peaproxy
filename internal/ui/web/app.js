@@ -318,6 +318,38 @@ async function refreshLanBanner() {
   }
 }
 
+// Presets arrive grouped from the server. Rendering optgroups keeps a list of
+// forty-odd providers navigable instead of a single undifferentiated column.
+// A preset with no group still renders, so a server that predates grouping
+// does not produce an empty dropdown.
+function presetOptions(presets) {
+  const order = [];
+  const byGroup = new Map();
+  for (const p of presets) {
+    const g = p.group || "";
+    if (!byGroup.has(g)) {
+      byGroup.set(g, []);
+      order.push(g);
+    }
+    byGroup.get(g).push(p);
+  }
+  return order
+    .map((g) => {
+      const opts = byGroup
+        .get(g)
+        .map((p) => {
+          const mark = p.unverified ? " (not verified)" : "";
+          const label = (p.label || p.id) + mark;
+          return `<option value="${escapeHtml(p.id)}">${escapeHtml(label)}</option>`;
+        })
+        .join("");
+      return g
+        ? `<optgroup label="${escapeHtml(g)}">${opts}</optgroup>`
+        : opts;
+    })
+    .join("");
+}
+
 function accountsPage(root) {
   root.innerHTML = `
     <section class="card">
@@ -529,9 +561,7 @@ function accountsPage(root) {
     try {
       const data = await getJSON("/admin/presets");
       presets = data.presets || [];
-      sel.innerHTML = presets
-        .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label || p.id)}</option>`)
-        .join("");
+      sel.innerHTML = presetOptions(presets);
       applyPreset();
     } catch (err) {
       sel.innerHTML = `<option>unavailable</option>`;
