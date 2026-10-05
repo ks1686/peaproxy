@@ -40,6 +40,7 @@ type Config struct {
 	Failover         FailoverPrefs       `yaml:"failover,omitempty"`
 	RequestEngine    RequestEnginePrefs  `yaml:"requestEngine,omitempty"`
 	AutomaticRoutes  AutomaticRoutePrefs `yaml:"automaticRoutes,omitempty"`
+	Optimization     OptimizationPrefs   `yaml:"optimization,omitempty"`
 	Routes           map[string]string   `yaml:"routes,omitempty"`
 	Providers        []Provider          `yaml:"providers"`
 }
@@ -490,6 +491,9 @@ func writeAtomic(path string, b []byte) error {
 
 // Validate enforces loopback-by-default security.
 func (c Config) Validate() error {
+	if err := c.validateOptimization(); err != nil {
+		return err
+	}
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported schemaVersion %d (want %d)", c.SchemaVersion, SchemaVersion)
 	}

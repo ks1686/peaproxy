@@ -47,6 +47,7 @@ func merge(base, disk, mine Config, unreadable unreadableSecrets) Config {
 	out.Failover = pick(base.Failover, disk.Failover, mine.Failover)
 	out.RequestEngine = pick(base.RequestEngine, disk.RequestEngine, mine.RequestEngine)
 	out.AutomaticRoutes = pick(base.AutomaticRoutes, disk.AutomaticRoutes, mine.AutomaticRoutes)
+	out.Optimization = pick(base.Optimization, disk.Optimization, mine.Optimization)
 	out.Routes = pick(base.Routes, disk.Routes, mine.Routes)
 	out.Providers = mergeProviders(base.Providers, disk.Providers, mine.Providers, unreadable)
 	return Clone(out)

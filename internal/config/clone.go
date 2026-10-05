@@ -29,7 +29,22 @@ func Clone(c Config) Config {
 		}
 	}
 	out.Routes = maps.Clone(c.Routes)
+	out.Optimization = cloneOptimization(c.Optimization)
 	out.Providers = cloneProviders(c.Providers)
+	return out
+}
+
+// cloneOptimization deep-copies the nullable settings. Sharing a *bool between
+// a running config and its clone would let one process's reload change another
+// one's view of what the user asked for.
+func cloneOptimization(p OptimizationPrefs) OptimizationPrefs {
+	out := p
+	out.Automatic = clonePtr(p.Automatic)
+	out.PromptCache = clonePtr(p.PromptCache)
+	out.LocalAssistant = clonePtr(p.LocalAssistant)
+	out.PersistentContext = clonePtr(p.PersistentContext)
+	out.FreeOnly = clonePtr(p.FreeOnly)
+	out.AllowAnonymousProviders = clonePtr(p.AllowAnonymousProviders)
 	return out
 }
 
