@@ -6,13 +6,26 @@ import "time"
 type AllowanceKind string
 
 const (
-	AllowanceRecurring    AllowanceKind = "recurring"    // resets on a known schedule
-	AllowanceTrial        AllowanceKind = "trial"        // promotional, expires
-	AllowanceSubscription AllowanceKind = "subscription" // a paid plan's included usage
-	AllowanceNone         AllowanceKind = "none"
+	AllowanceRecurring AllowanceKind = "recurring" // resets on a known schedule
+	AllowanceTrial     AllowanceKind = "trial"     // promotional, expires
+	// AllowancePromotional is a one-off balance that does not reset: a signup
+	// grant, a top-up, a limited-time allowance. Once it is gone the account
+	// keeps working and the next call is billed.
+	AllowancePromotional AllowanceKind = "promotional"
+	// AllowanceOneTimeCredit is money handed over once, usually against a
+	// card already on file. It has no reset at all, so "exhausted" is not a
+	// state that ends.
+	AllowanceOneTimeCredit AllowanceKind = "one_time_credit"
+	AllowanceSubscription  AllowanceKind = "subscription" // a paid plan's included usage
+	AllowanceNone          AllowanceKind = "none"
 	// AllowanceUnknown means nobody has observed this account's capacity.
 	AllowanceUnknown AllowanceKind = "unknown"
 )
+
+// Recurs reports whether this kind of capacity comes back on its own.
+func (k AllowanceKind) Recurs() bool {
+	return k == AllowanceRecurring || k == AllowanceSubscription
+}
 
 // Overage says what the provider does once capacity runs out.
 type Overage string
@@ -117,6 +130,27 @@ func (a Allowance) GuaranteesFree() bool {
 		// it lasts, but its end is either unknown or not a reprieve.
 		return true
 	}
+}
+
+// Capacity reports what is left and whether that amount is a fact.
+//
+// The distinction is not cosmetic. A recurring allowance the provider blocks
+// past its limit has genuinely reached zero: the next call is refused, not
+// billed. A one-time credit or a promotional balance that reads zero is a
+// different situation -- the balance is gone, the account still works, and the
+// next call costs money. Reporting that as a known zero would let a free-only
+// route treat a depleted credit as a harmless exhausted allowance, which is how
+// a promotional credit turns into a bill. It is reported as unknown instead.
+func (a Allowance) Capacity() (*float64, bool) {
+	if a.Remaining == nil {
+		return nil, false
+	}
+	if *a.Remaining <= 0 && !a.Kind.Recurs() && a.Overage != OverageBlocked {
+		// Gone, and nothing stops the provider charging for what follows.
+		return nil, false
+	}
+	v := *a.Remaining
+	return &v, true
 }
 
 // AllowedRequests reports the observed remaining amount, or nil when the unit

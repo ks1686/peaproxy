@@ -103,6 +103,46 @@ func (q Quote) sumKnown(u Usage) (cost float64, ok bool) {
 // cache-write price may still charge for writing one, so a quote that cannot
 // cover the call cannot prove the call was free. This is what keeps a
 // free-only route from quietly spending money.
+// PriceSourceConfig marks a price that came from user configuration rather than
+// from a provider's published pricing. A user asserting a price is believed for
+// ordinary routing, but a free-only guarantee is a promise about money, and a
+// promise needs a measurement behind it.
+const PriceSourceConfig = "config"
+
+// Measured reports whether a provider published this price.
+//
+// An empty source is not measured. It means nobody recorded where the number
+// came from, and treating that as trustworthy would let an unlabelled price
+// satisfy a free-only guarantee on the strength of nothing.
+func (q Quote) Measured() bool {
+	return q.Verified && q.Source != "" && q.Source != PriceSourceConfig
+}
+
+// GuaranteesFreeTo reports whether a free-only route may rely on this quote.
+//
+// It is stricter than FreeFor on purpose. FreeFor answers "is this call priced
+// at zero", which a user may reasonably state from their own account -- the
+// catalog has no opinion about a promotional credit. GuaranteesFreeTo answers
+// "can PeaProxy promise the user's money is safe", and a promise made from
+// someone's recollection is worth less than one made from a published price.
+func (q Quote) GuaranteesFreeTo(u Usage) bool {
+	return q.Measured() && q.FreeFor(u)
+}
+
+// FreeForTrustedUse reports free-ness for a caller that has been told whether an
+// asserted price counts.
+//
+// trustAsserted is the opt-in and is never implied. A user who knows their
+// account is free may ask PeaProxy to believe them, and then it should; but the
+// asking has to be visible at the call site, because this is the difference
+// between a measured guarantee and a remembered one.
+func (q Quote) FreeForTrustedUse(u Usage, trustAsserted bool) bool {
+	if !q.FreeFor(u) {
+		return false
+	}
+	return trustAsserted || q.Measured()
+}
+
 func (q Quote) FreeFor(u Usage) bool {
 	if !q.Verified || q.Currency != LedgerCurrency {
 		return false
