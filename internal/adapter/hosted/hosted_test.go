@@ -28,6 +28,17 @@ func TestKnownSpecsHaveBaseURLAndTier(t *testing.T) {
 		"jan":          {url: "http://127.0.0.1:1337/v1", tier: catalog.TierLocal},
 		"gpt4all":      {url: "http://127.0.0.1:4891/v1", tier: catalog.TierLocal},
 		"sambanova":    {url: "https://api.sambanova.ai/v1", tier: catalog.TierFreemium},
+		// Issue #114. All metered: PeaProxy's research found no recurring
+		// free tier for any of them, so claiming one would be the error the
+		// catalog exists to prevent.
+		"alibabacoding": {url: "https://coding-intl.dashscope.aliyuncs.com/v1", tier: catalog.TierPaid},
+		"deepseek":      {url: "https://api.deepseek.com/v1", tier: catalog.TierPaid},
+		"mistral":       {url: "https://api.mistral.ai/v1", tier: catalog.TierPaid},
+		"zai":           {url: "https://api.z.ai/api/paas/v4", tier: catalog.TierPaid},
+		"minimax":       {url: "https://api.minimax.io/v1", tier: catalog.TierPaid},
+		"together":      {url: "https://api.together.xyz/v1", tier: catalog.TierPaid},
+		"fireworks":     {url: "https://api.fireworks.ai/inference/v1", tier: catalog.TierPaid},
+		"cohere":        {url: "https://api.cohere.ai/compatibility/v1", tier: catalog.TierPaid},
 	}
 	for _, spec := range All() {
 		got, ok := want[spec.Name]
