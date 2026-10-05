@@ -62,3 +62,30 @@ Input: #112/#116/#117. Output: evidence-backed decisions on authentication legit
 
 Kiro: bounded source/documentation review only. Acceptance for recommending a later adapter requires reproducible authorized auth/refresh, streaming and tool semantics, safe secret handling and explicit product approval. No adapter commitment is hidden in this plan. Devin stays deferred and Cursor session scraping stays excluded unless the user explicitly changes those decisions. No account scraping or paid probing.
 Proof: `git diff --check`; checklist maps every issue to a decision and cited evidence. Remote updates require separate publication approval.
+
+### T8 delivered — local assistant
+
+`internal/localassistant` exists, is opt-in, and is reachable from the gateway
+via `Gateway.LocalAssistant()`. What it deliberately does **not** do yet is
+call a model: the readiness probe is built and tested, and no helper inference
+is wired to it.
+
+The safety envelope is the deliverable, and it is enforced at three layers:
+
+- **Construction.** A non-loopback endpoint is refused with `ErrNotLoopback`,
+  not warned about. A helper described as local that can be pointed at a remote
+  host is not one.
+- **Config load.** `optimization.localAssistantEndpoint` is validated when the
+  file is read, so a typo or a remote address is reported at startup rather than
+  the first time a prompt is sent. An endpoint without `localAssistant: true`
+  is an error, not a silently ignored block.
+- **Availability.** A disabled or unusable assistant is `nil`, and callers
+  carry on. Nothing is downloaded, nothing is started, and there is no remote
+  fallback: if the local endpoint is not running, the feature is simply absent.
+
+Readiness requires a JSON model list, not merely a 200. Something else listening
+on the port must not receive prompts.
+
+Still open: the first real helper inference (routing classification and
+retrieval ranking) is T10 work and is not started. `Assistant.Model()` is also
+unimplemented beyond the configured value, which the first caller will need.

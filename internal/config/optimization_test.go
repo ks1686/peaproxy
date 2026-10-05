@@ -101,3 +101,70 @@ func TestOptimizationDefaultsRefuseUnconsentedProviders(t *testing.T) {
 		t.Fatal("an explicit opt-in must allow anonymous providers")
 	}
 }
+
+// An endpoint without the opt-in is a configuration error, not a silently
+// ignored block. The user asked for something specific and did not get it.
+func TestLocalEndpointWithoutOptInIsRejected(t *testing.T) {
+	c := Config{SchemaVersion: SchemaVersion, Bind: "127.0.0.1", Port: 8317,
+		Optimization: OptimizationPrefs{
+			LocalEndpoint: LocalAssistantPrefs{Endpoint: "http://127.0.0.1:11234/v1"},
+		}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("an endpoint without the opt-in was accepted")
+	}
+}
+
+// The loopback rule is enforced at load, so a typo or a remote host is reported
+// when the config is read rather than the first time a prompt is sent.
+func TestLocalEndpointMustBeLoopback(t *testing.T) {
+	yes := true
+	for _, endpoint := range []string{
+		"http://192.168.1.5:11234/v1",
+		"https://api.openai.com/v1",
+		"http://0.0.0.0:11234/v1",
+	} {
+		c := Config{SchemaVersion: SchemaVersion, Bind: "127.0.0.1", Port: 8317,
+			Optimization: OptimizationPrefs{
+				LocalAssistant: &yes,
+				LocalEndpoint:  LocalAssistantPrefs{Endpoint: endpoint},
+			}}
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s was accepted as a local endpoint", endpoint)
+		}
+	}
+
+	good := Config{SchemaVersion: SchemaVersion, Bind: "127.0.0.1", Port: 8317,
+		Optimization: OptimizationPrefs{
+			LocalAssistant: &yes,
+			LocalEndpoint:  LocalAssistantPrefs{Endpoint: "http://127.0.0.1:11234/v1"},
+		}}
+	if err := good.Validate(); err != nil {
+		t.Fatalf("a loopback endpoint was refused: %v", err)
+	}
+	cfg, ok := good.LocalAssistantConfig()
+	if !ok || cfg.Endpoint != "http://127.0.0.1:11234/v1" {
+		t.Fatalf("LocalAssistantConfig = %#v, %v", cfg, ok)
+	}
+}
+
+// With no endpoint there is nothing to talk to, and guessing a port the user
+// never mentioned would mean probing their machine uninvited.
+func TestLocalAssistantNeedsBothOptInAndEndpoint(t *testing.T) {
+	yes := true
+	no := false
+	cases := map[string]struct {
+		prefs OptimizationPrefs
+		want  bool
+	}{
+		"neither":       {OptimizationPrefs{}, false},
+		"opt in only":   {OptimizationPrefs{LocalAssistant: &yes}, false},
+		"endpoint only": {OptimizationPrefs{LocalEndpoint: LocalAssistantPrefs{Endpoint: "http://127.0.0.1:11234/v1"}}, false},
+		"opted out":     {OptimizationPrefs{LocalAssistant: &no, LocalEndpoint: LocalAssistantPrefs{Endpoint: "http://127.0.0.1:11234/v1"}}, false},
+		"both":          {OptimizationPrefs{LocalAssistant: &yes, LocalEndpoint: LocalAssistantPrefs{Endpoint: "http://127.0.0.1:11234/v1"}}, true},
+	}
+	for name, tc := range cases {
+		if _, ok := (Config{Optimization: tc.prefs}).LocalAssistantConfig(); ok != tc.want {
+			t.Errorf("%s: available = %v, want %v", name, ok, tc.want)
+		}
+	}
+}

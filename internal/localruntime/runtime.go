@@ -124,3 +124,15 @@ func ParseTagsReady(body []byte) bool {
 	}
 	return len(doc.Models) > 0
 }
+
+// LoopbackURL reports whether a URL points at this machine.
+//
+// It is the single check behind every promise that something stays local. The
+// assistant package refuses anything else, because a feature described as
+// local that can be pointed at a remote host is not local under any name.
+func LoopbackURL(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	return loopback(raw)
+}

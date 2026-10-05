@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -50,6 +51,10 @@ type OptimizationPrefs struct {
 	// rolling window. Zero means no ceiling is configured; it never means
 	// unlimited spending is permitted by default.
 	SpendCeilingUSD float64 `yaml:"spendCeilingUSD,omitempty" json:"spendCeilingUSD,omitempty"`
+
+	// LocalEndpoint configures the local helper used for PeaProxy's own small
+	// decisions. It is only consulted when LocalAssistant is true.
+	LocalEndpoint LocalAssistantPrefs `yaml:"localAssistantEndpoint,omitempty" json:"-"`
 }
 
 // OptimizationEnabled reports whether PeaProxy may apply its own safe
@@ -65,6 +70,22 @@ func (c Config) OptimizationEnabled() bool {
 // PeaProxy's own small decisions. Always off unless asked for.
 func (c Config) LocalAssistantEnabled() bool {
 	return boolOrFalse(c.Optimization.LocalAssistant)
+}
+
+// LocalAssistantConfig returns the local helper configuration, or false when
+// the user has not opted in or has not named an endpoint.
+//
+// Both conditions matter. The opt-in alone is not enough -- with no endpoint
+// there is nothing to talk to, and guessing one would mean probing ports the
+// user never mentioned.
+func (c Config) LocalAssistantConfig() (LocalAssistantPrefs, bool) {
+	if !c.LocalAssistantEnabled() {
+		return LocalAssistantPrefs{}, false
+	}
+	if strings.TrimSpace(c.Optimization.LocalEndpoint.Endpoint) == "" {
+		return LocalAssistantPrefs{}, false
+	}
+	return c.Optimization.LocalEndpoint, true
 }
 
 // PersistentContextEnabled reports whether stored artifacts survive a restart.
@@ -118,6 +139,17 @@ func (c Config) validateOptimization() error {
 	if c.Optimization.SpendCeilingUSD < 0 {
 		return fmt.Errorf("optimization.spendCeilingUSD must not be negative")
 	}
+	if ep := strings.TrimSpace(c.Optimization.LocalEndpoint.Endpoint); ep != "" {
+		if !c.LocalAssistantEnabled() {
+			return fmt.Errorf("optimization.localAssistantEndpoint is set but optimization.localAssistant is false")
+		}
+		if !loopbackish(ep) {
+			return fmt.Errorf("optimization.localAssistantEndpoint must be on the loopback interface")
+		}
+	}
+	if t := c.Optimization.LocalEndpoint.TimeoutSeconds; t < 0 || t > 600 {
+		return fmt.Errorf("optimization.localAssistantEndpoint.timeoutSeconds must be between 0 and 600")
+	}
 	if p := c.Optimization.PromptCache; p != nil {
 		switch strings.TrimSpace(*p) {
 		case "", "preserve", "optimize", "off":
@@ -126,4 +158,43 @@ func (c Config) validateOptimization() error {
 		}
 	}
 	return nil
+}
+
+// LocalAssistantPrefs configures PeaProxy's own small local inferences.
+//
+// Absent, or present with an empty endpoint, means the feature is off -- which
+// is also the answer when localAssistant is false. The endpoint must be on the
+// loopback interface; there is no setting that allows anything else, because a
+// helper described as local that can be pointed at a remote host is not one.
+type LocalAssistantPrefs struct {
+	// Endpoint is an OpenAI-compatible base URL, such as MLX Serve on
+	// http://127.0.0.1:11234/v1.
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	// Model is the model id to use. Empty means the endpoint's first model.
+	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	// TimeoutSeconds bounds one helper call. Helper work must never become the
+	// slowest part of a request.
+	TimeoutSeconds int `yaml:"timeoutSeconds,omitempty" json:"timeoutSeconds,omitempty"`
+}
+
+// loopbackish reports whether a base URL names this machine. It is duplicated
+// from localruntime rather than imported, because config is loaded before any
+// provider or runtime package and must not depend on them.
+func loopbackish(raw string) bool {
+	host := raw
+	if i := strings.Index(raw, "://"); i >= 0 {
+		host = raw[i+3:]
+	}
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	switch strings.Trim(host, "[]") {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }

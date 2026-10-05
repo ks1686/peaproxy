@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/economics"
+	"github.com/ks1686/peaproxy/internal/localassistant"
 )
 
 // cacheWarmWindow is how recent a cache read has to be to speak about the next
@@ -57,4 +58,26 @@ func (g *Gateway) warmSet() map[string]bool {
 		return nil
 	}
 	return g.Usage.CacheWarmSince(time.Now().Add(-cacheWarmWindow))
+}
+
+// LocalAssistant returns PeaProxy's own local helper, or nil when the feature
+// is off, not opted in, or points somewhere that is not this machine.
+//
+// A nil result is ordinary and callers must carry on without it. This is the
+// only place the configuration reaches the assistant, so an unusable setting
+// degrades to "no helper" rather than to a request being sent somewhere.
+func (g *Gateway) LocalAssistant() *localassistant.Assistant {
+	prefs, ok := g.cfg.LocalAssistantConfig()
+	if !ok {
+		return nil
+	}
+	a, err := localassistant.New(localassistant.Config{
+		Endpoint: prefs.Endpoint,
+		Enabled:  true,
+		Model:    prefs.Model,
+	})
+	if err != nil {
+		return nil
+	}
+	return a
 }
