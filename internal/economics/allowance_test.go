@@ -103,3 +103,35 @@ func TestAllowanceStaleness(t *testing.T) {
 		t.Fatal("an allowance that was never observed is stale")
 	}
 }
+
+// A guarantee that ignores staleness is not a guarantee: the balance may have
+// been consumed, or the plan changed, since the observation.
+func TestGuaranteesFreeRefusesAStaleObservation(t *testing.T) {
+	fifty := 50.0
+	stale := Allowance{Kind: AllowanceRecurring, Remaining: &fifty, Unit: "requests",
+		Overage: OverageBlocked, Verified: true, ResetsAt: time.Now().Add(time.Hour),
+		ObservedAt: time.Now().Add(-30 * 24 * time.Hour)}
+	if !stale.Stale(24 * time.Hour) {
+		t.Fatal("fixture must be stale")
+	}
+	if stale.GuaranteesFree() {
+		t.Fatal("a 30-day-old observation cannot guarantee a call stays free")
+	}
+	fresh := stale
+	fresh.ObservedAt = time.Now()
+	if !fresh.GuaranteesFree() {
+		t.Fatal("a current observation on the same terms still guarantees free")
+	}
+}
+
+// A free-only route also needs the reset to be in the future; a reset that has
+// already passed means the observation describes a period that is over.
+func TestGuaranteesFreeRefusesAPastReset(t *testing.T) {
+	fifty := 50.0
+	a := Allowance{Kind: AllowanceRecurring, Remaining: &fifty, Unit: "requests",
+		Overage: OverageBlocked, Verified: true, ResetsAt: time.Now().Add(-time.Minute),
+		ObservedAt: time.Now()}
+	if a.GuaranteesFree() {
+		t.Fatal("an allowance whose reset has passed cannot guarantee remaining capacity")
+	}
+}

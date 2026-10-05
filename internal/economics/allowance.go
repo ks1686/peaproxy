@@ -76,16 +76,24 @@ func (a Allowance) Spendable(now time.Time) bool {
 	return true
 }
 
+// StaleHorizon is how old an observation may be before a free guarantee stops
+// being one. A balance read days ago may since have been spent, or the plan
+// behind it may have changed.
+const StaleHorizon = 24 * time.Hour
+
 // GuaranteesFree reports whether a call on this account cannot cost money.
 //
 // This is the predicate a free-only route depends on, and it is deliberately
 // strict. Every condition that could turn into a charge must be known and
-// enforced by the provider: a verified observation, a known remaining amount, a
-// known reset, and a ceiling the provider itself refuses to cross. A balance
-// PeaProxy tracks locally cannot promise this, because the same account may be
-// used by another tool at the same time.
+// enforced by the provider: a verified, current observation; a known remaining
+// amount; a reset that has not passed; and a ceiling the provider itself
+// refuses to cross. A balance PeaProxy tracks locally cannot promise this,
+// because the same account may be used by another tool at the same time.
 func (a Allowance) GuaranteesFree() bool {
 	if !a.Verified || a.Remaining == nil {
+		return false
+	}
+	if a.Stale(StaleHorizon) {
 		return false
 	}
 	if *a.Remaining <= 0 {
@@ -95,6 +103,9 @@ func (a Allowance) GuaranteesFree() bool {
 		return false
 	}
 	if a.ExpiresAt.IsZero() && a.ResetsAt.IsZero() {
+		return false
+	}
+	if !a.ResetsAt.IsZero() && !a.ResetsAt.After(time.Now()) {
 		return false
 	}
 	switch a.Kind {

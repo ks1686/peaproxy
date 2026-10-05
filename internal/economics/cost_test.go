@@ -95,3 +95,27 @@ func TestQuoteStaleness(t *testing.T) {
 		t.Fatal("a quote with no observation time cannot be treated as current")
 	}
 }
+
+// The output length cannot be known when a route is chosen, only after the
+// model has answered. Reporting a complete cost from an estimate that omits it
+// understates the bill, which is the one outcome this package exists to prevent.
+func TestExpectedCostRefusesWhenUsageIsNotFullyKnown(t *testing.T) {
+	q := Quote{Currency: "USD", Input: ptr(3), Output: ptr(15), Verified: true, ObservedAt: time.Now()}
+	cost, ok := q.ExpectedCost(Usage{Input: 1000, Unknown: true})
+	if ok {
+		t.Fatalf("an unknown usage estimate must not produce a complete cost (got %v)", cost)
+	}
+	// The known part is still available as a floor, clearly labelled as one.
+	floor, floorOK := q.ExpectedCostFloor(Usage{Input: 1000, Unknown: true})
+	if !floorOK || floor != 0.003 {
+		t.Fatalf("floor = %v ok=%v, want 0.003 from the known component", floor, floorOK)
+	}
+}
+
+// A fully known usage estimate is still costable.
+func TestExpectedCostAcceptsFullyKnownUsage(t *testing.T) {
+	q := Quote{Currency: "USD", Input: ptr(3), Output: ptr(15), Verified: true, ObservedAt: time.Now()}
+	if _, ok := q.ExpectedCost(Usage{Input: 1000, Output: 500}); !ok {
+		t.Fatal("a fully known estimate must be costable")
+	}
+}

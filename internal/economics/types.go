@@ -43,17 +43,37 @@ type Usage struct {
 	CacheWrite int
 
 	// Unknown marks usage counts PeaProxy cannot predict, such as output
-	// length before the model has answered. A quote that cannot cover an
-	// unknown component still produces a floor, not a complete answer.
+	// length before the model has answered. A quote cannot produce a complete
+	// total from an unknown estimate, because the missing part is real spend
+	// that the total would leave out.
 	Unknown bool
 }
 
 // ExpectedCost prices a usage estimate against a quote.
 //
-// ok is false when the total cannot be stated: an unverified quote, another
-// currency, or a component that was used and not quoted. In that case the
-// returned cost is a partial sum and must not be presented as the whole.
+// ok is false when a complete total cannot be stated: an unverified quote,
+// another currency, a component that was used and not quoted, or a usage
+// estimate that is not fully known. In that case the returned cost is a partial
+// sum and must not be presented as the whole -- ExpectedCostFloor names that
+// partial sum for callers that can label it.
 func (q Quote) ExpectedCost(u Usage) (cost float64, ok bool) {
+	cost, ok = q.sumKnown(u)
+	if !ok || u.Unknown {
+		return cost, false
+	}
+	return cost, true
+}
+
+// ExpectedCostFloor returns the cost of the parts that are known, for callers
+// that can present it as a floor rather than a total. ok is false when even the
+// known parts cannot be priced, which happens when the quote itself is unusable.
+func (q Quote) ExpectedCostFloor(u Usage) (cost float64, ok bool) {
+	return q.sumKnown(u)
+}
+
+// sumKnown adds up the priced components and reports whether all of the ones
+// this usage actually touches had a published rate.
+func (q Quote) sumKnown(u Usage) (cost float64, ok bool) {
 	if !q.Verified || q.Currency != LedgerCurrency {
 		return 0, false
 	}
