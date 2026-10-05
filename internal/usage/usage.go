@@ -514,3 +514,38 @@ func clip(s string, n int) string {
 	}
 	return string(rs[:n]) + "…"
 }
+
+// SpentInLastDays reports recorded spend over the last n calendar days,
+// counting today.
+//
+// It reads the persisted day rollups rather than the event ring. The ring is
+// bounded and would reset a ceiling on every restart, and the window is
+// day-granular because a true 24-hour rolling window cannot be answered from
+// daily rollups without either counting a boundary day it should not or
+// falling back to the ring and undercounting when the ring does not reach back
+// far enough. Undercounting a ceiling fails open, which spends the user's money.
+//
+// priced counts only the calls whose cost was known, and total counts every
+// call. A caller can compare the two to tell "nothing spent" from "spent, but
+// some of it could not be measured". A call with no published
+// price is real spend that cannot be measured here, and is deliberately absent
+// from the total rather than folded in as zero: a caller relying on this needs
+// to be able to tell "nothing spent" from "nothing could be measured".
+func (s *Store) SpentInLastDays(n int) (usd float64, priced, total int) {
+	if n <= 0 {
+		return 0, 0, 0
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -(n - 1)).Format("2006-01-02")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.days {
+		// Day strings are YYYY-MM-DD, so they order lexicographically.
+		if d.Day < cutoff || d.CostUSD == nil {
+			continue
+		}
+		usd += *d.CostUSD
+		priced += d.CostCalls
+		total += d.Calls
+	}
+	return usd, priced, total
+}

@@ -189,3 +189,14 @@ const (
 	ReasonCheapest        Reason = "cheapest-eligible"
 	ReasonFastestEligible Reason = "fastest-eligible"
 )
+
+// IsFree reports whether this usage provably costs nothing.
+//
+// It is the one question the spend ceiling may ask without a price: whether a
+// request will be charged at all. A zero-token usage is genuinely free. A
+// non-zero usage is not known to be free here, because whether it costs
+// anything depends on the quote, and this type does not carry one. Callers with
+// a quote in hand use Quote.FreeFor instead.
+func (u Usage) IsFree() bool {
+	return !u.Unknown && u.Input == 0 && u.Output == 0 && u.CacheRead == 0 && u.CacheWrite == 0
+}

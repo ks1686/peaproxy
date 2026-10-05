@@ -41,12 +41,19 @@ var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
-	mu            sync.RWMutex
-	cfg           config.Config
-	path          string
-	reg           *adapter.Registry
-	inst          []instance
-	models        []catalog.Model
+	mu     sync.RWMutex
+	cfg    config.Config
+	path   string
+	reg    *adapter.Registry
+	inst   []instance
+	models []catalog.Model
+
+	// spendWindow supplies recorded spend for the spend ceiling. It is a field
+	// so the ceiling can be exercised without a usage store.
+	spendWindow spendWindow
+	// allPriced reports whether every call in the window carried a price. A
+	// nil value means unknown, which the ceiling treats as untrustworthy.
+	allPriced     func() bool
 	Usage         *usage.Store
 	cool          map[string]cooldownSlots
 	rr            uint64
