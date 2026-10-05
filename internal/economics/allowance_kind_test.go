@@ -191,3 +191,46 @@ func TestFreeOnlyRefusesAnUnknownPriceSource(t *testing.T) {
 		t.Fatal("a zero price with no publisher satisfied a free-only guarantee")
 	}
 }
+
+// GuaranteesFree is the strict predicate, and it had a permissive default: any
+// kind it did not name fell through to "dependable while it lasts". That let an
+// allowance of kind unknown, or even kind none, promise a call was free as long
+// as the numbers around it looked right.
+//
+// A money guarantee needs a known kind of capacity behind it. "We did not
+// record what this is" is not capacity, and "there is none" is certainly not.
+func TestGuaranteesFreeRefusesUnknownAndAbsentKinds(t *testing.T) {
+	five := 5.0
+	base := func() Allowance {
+		return Allowance{
+			Remaining:  &five,
+			Unit:       "requests",
+			ObservedAt: time.Now(),
+			Verified:   true,
+			Overage:    OverageBlocked,
+			ExpiresAt:  time.Now().Add(24 * time.Hour),
+		}
+	}
+	for _, k := range []AllowanceKind{AllowanceUnknown, AllowanceNone, AllowanceKind("")} {
+		a := base()
+		a.Kind = k
+		if a.GuaranteesFree() {
+			t.Errorf("kind %q promised a free call from numbers it did not understand", k)
+		}
+	}
+
+	// The kinds that do describe real capacity keep working.
+	for _, k := range []AllowanceKind{
+		AllowanceRecurring, AllowanceTrial, AllowancePromotional,
+		AllowanceOneTimeCredit, AllowanceSubscription,
+	} {
+		a := base()
+		a.Kind = k
+		if k == AllowanceRecurring {
+			a.ResetsAt = time.Now().Add(time.Hour)
+		}
+		if !a.GuaranteesFree() {
+			t.Errorf("kind %q is real capacity and should be able to promise free", k)
+		}
+	}
+}

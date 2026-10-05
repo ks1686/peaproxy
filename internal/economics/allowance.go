@@ -125,10 +125,16 @@ func (a Allowance) GuaranteesFree() bool {
 	case AllowanceRecurring:
 		// A recurring allowance is only dependable when the next reset is known.
 		return !a.ResetsAt.IsZero()
-	default:
-		// A trial, subscription credit or unknown allowance is dependable while
-		// it lasts, but its end is either unknown or not a reprieve.
+	case AllowanceTrial, AllowancePromotional, AllowanceOneTimeCredit, AllowanceSubscription:
+		// Real capacity with an end. It holds while it lasts; nothing about it
+		// comes back, but the provider blocks past the limit, so a call made
+		// within it cannot become a charge.
 		return true
+	default:
+		// Unknown, none, or a kind nobody has defined. The numbers around it
+		// may look right, but PeaProxy does not know what kind of capacity it
+		// is looking at, and a money guarantee cannot be made from that.
+		return false
 	}
 }
 
