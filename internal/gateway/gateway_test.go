@@ -1463,3 +1463,5 @@ func TestAuthErrorSentinelIsNotListedOrRouted(t *testing.T) {
 		t.Fatalf("sentinel was routed, hits=%d", chatHits)
 	}
 }
+
+func boolp(v bool) *bool { return &v }

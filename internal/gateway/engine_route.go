@@ -8,6 +8,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/economics"
 	"github.com/ks1686/peaproxy/internal/promptcache"
 	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/responsecache"
@@ -79,6 +80,9 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	allowed := g.cfg.AutomaticRoutes.Models(routeName)
 	var ranked []instance
 	var rankedModel []string
+	// Tracked separately so a freeOnly refusal can say why rather than
+	// reporting the generic "no eligible model".
+	var freeBlocked, freeSeen bool
 	for _, m := range models {
 		if !m.Routable {
 			continue
@@ -91,6 +95,17 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		}
 		if !automaticKind(g, routeName, m) {
 			continue
+		}
+		// freeOnly is a refusal to spend, not a preference. It applies to every
+		// route: a deployment that cannot show a zero price is disqualified
+		// rather than treated as a fallback.
+		if g.cfg.FreeOnly() {
+			if freeOnlyAllows(g, m) {
+				freeSeen = true
+			} else {
+				freeBlocked = true
+				continue
+			}
 		}
 		// Judge this account against this model. Collapsing the slots into one
 		// entry first lost cooldowns: anyActive returns a single slot, so a
@@ -111,6 +126,11 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		rankedModel = append(rankedModel, m.ID)
 	}
 	if len(ranked) == 0 {
+		if freeBlocked && !freeSeen {
+			return "", nil, "", fmt.Errorf(
+				"automatic route %q has no free model: optimization.freeOnly is on and no deployment has a verified zero price",
+				routeName)
+		}
 		return "", nil, "", fmt.Errorf("automatic route %q has no eligible model", routeName)
 	}
 	pick := 0
@@ -196,6 +216,23 @@ func assertedPrice(q config.PriceQuote) catalog.Price {
 // PriceSourceConfig marks a price that came from user configuration rather than
 // from a provider's published pricing.
 const PriceSourceConfig = "config"
+
+// freeOnlyAllows reports whether a deployment may be used when the user has
+// forbidden spending.
+//
+// The bar is a verified zero price and nothing else. "Nobody has looked" is not
+// free, and a nonzero price is the opposite of free, so both fail here without
+// needing a judgement call.
+//
+// A price the user configured counts. They asserted it, and asserting that your
+// own account is free is exactly the knowledge the catalog lacks -- a promo
+// credit or a contracted rate appears nowhere in ListModels. The provenance
+// survives so a surface promising safety can still tell an assertion from a
+// published figure.
+func freeOnlyAllows(g *Gateway, m catalog.Model) bool {
+	p := priceForDeployment(g, m.AccountID, m.ID)
+	return p.Verified && p.Currency == economics.LedgerCurrency && p.Free()
+}
 
 // priceForDeployment returns the verified quote for one deployment. An explicit
 // user quote may be keyed by "account/model" and wins over the catalog row for
