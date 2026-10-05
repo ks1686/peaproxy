@@ -164,27 +164,20 @@ func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 		}
 		return g.cfg.AutomaticRoutes.CloudFallback
 	case router.RouteFree:
-		return g.priceForDeployment(m.AccountID, m.ID).Free()
+		return priceForDeployment(g, m.AccountID, m.ID).Free()
 	case router.RouteEconomy:
-		p := g.priceForDeployment(m.AccountID, m.ID)
+		p := priceForDeployment(g, m.AccountID, m.ID)
 		return p.Input != nil || p.Output != nil
 	default:
 		return true
 	}
 }
 
-// priceFor returns the price of the first verified row for a model id. It is
-// only correct where the caller has not established which deployment it means;
-// routing decisions must use priceForDeployment.
-func (g *Gateway) priceFor(model string) catalog.Price {
-	return g.priceForDeployment("", model)
-}
-
 // priceForDeployment returns the verified quote for one deployment. An explicit
 // user quote may be keyed by "account/model" and wins over the catalog row for
 // that same account; a quote keyed by bare model id stays available for configs
 // that predate deployment-scoped quotes.
-func (g *Gateway) priceForDeployment(account, model string) catalog.Price {
+func priceForDeployment(g *Gateway, account, model string) catalog.Price {
 	if account != "" {
 		if quote, ok := g.cfg.AutomaticRoutes.Prices[account+"/"+model]; ok {
 			return catalog.Price{Input: quote.Input, Output: quote.Output, Verified: quote.Verified}
@@ -213,11 +206,11 @@ func (g *Gateway) priceForDeployment(account, model string) catalog.Price {
 func cheapest(g *Gateway, ranked []instance) int {
 	best := -1
 	for i, inst := range ranked {
-		price := g.priceForDeployment(inst.Provider.ID, inst.upstreamModel)
+		price := priceForDeployment(g, inst.Provider.ID, inst.upstreamModel)
 		if price.Input == nil && price.Output == nil {
 			continue
 		}
-		if best < 0 || catalog.Cheaper(price, g.priceForDeployment(ranked[best].Provider.ID, ranked[best].upstreamModel)) {
+		if best < 0 || catalog.Cheaper(price, priceForDeployment(g, ranked[best].Provider.ID, ranked[best].upstreamModel)) {
 			best = i
 		}
 	}

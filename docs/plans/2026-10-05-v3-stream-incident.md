@@ -8,6 +8,15 @@ Parent: [v3 implementation plan](2026-10-05-v3.md).
 
 The client is reported to be using PeaProxy. The selected upstream, native wire, translated wire, request ID and installed proxy version have not yet been established. Do not attribute this to a specific adapter without tracing the request. Do not restart the proxy supporting the active session or enable raw prompt logging without permission.
 
+## New evidence found while adding diagnostics
+
+The request log now records `streamTerminal`, so the two wire families can be told apart:
+
+- **Native passthrough** forwards the provider's bytes unchanged. A provider that ends without a terminal event leaves the client with none, which is the reported error.
+- **Translated wires** (Claude and Responses produced by PeaProxy) treat a clean upstream EOF as a finished turn and emit `message_stop` or `response.completed`. This is deliberate and documented in `internal/translate/sse.go`, on the reasoning that a connection cut mid-body arrives as a read error rather than a clean EOF.
+
+The gap that reasoning leaves: an intermediary which closes a response cleanly part-way through a long turn is indistinguishable from a provider that finished, so on the translated wires a truncated answer is reported as complete, while on the passthrough wire the same upstream produces the reported missing terminal event. Both behaviours are pinned by tests so a change to either is deliberate. Which one produced the reported incident is still unknown; that needs an observed failing request.
+
 ## Investigation and acceptance
 
 1. Obtain the installed version, selected model/provider, client version, approximate failure timestamps and sanitized request identifiers. Collect existing redacted diagnostics; do not publish credentials or conversation bodies.

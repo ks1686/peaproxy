@@ -283,11 +283,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, account, err := s.gw.Chat(requestCtx(r, raw), raw)
 	if err != nil {
-		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireOpenAI, err)
 		return
 	}
-	s.recordCall(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit)
+	s.recordCall(account, peek.Model, "openai", "/v1/chat/completions", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit, "")
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -316,11 +316,11 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	out, account, err := s.gw.Responses(requestCtx(r, raw), raw)
 	if err != nil {
-		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, peek.Model, "responses", "/v1/responses", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireOpenAI, err)
 		return
 	}
-	s.record(account, peek.Model, "responses", "/v1/responses", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out)
+	s.record(account, peek.Model, "responses", "/v1/responses", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out, "")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -336,11 +336,11 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	peek := jsonx.PeekBody(raw)
 	resp, account, err := s.gw.GenerateImage(requestCtx(r, raw), raw)
 	if err != nil {
-		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, peek.Model, "images", "/v1/images/generations", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireOpenAI, err)
 		return
 	}
-	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
+	s.record(account, peek.Model, "images", "/v1/images/generations", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw, "")
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -370,11 +370,11 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	model := gateway.ImageEditModel(raw, ct)
 	resp, account, err := s.gw.EditImage(requestCtx(r, raw), raw, ct)
 	if err != nil {
-		s.record(account, model, "images", "/v1/images/edits", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, model, "images", "/v1/images/edits", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireOpenAI, err)
 		return
 	}
-	s.record(account, model, "images", "/v1/images/edits", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
+	s.record(account, model, "images", "/v1/images/edits", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw, "")
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -397,11 +397,11 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	peek := jsonx.PeekBody(raw)
 	resp, account, err := s.gw.CreateEmbeddings(requestCtx(r, raw), raw)
 	if err != nil {
-		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, peek.Model, "embeddings", "/v1/embeddings", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireOpenAI, err)
 		return
 	}
-	s.recordCall(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit)
+	s.recordCall(account, peek.Model, "embeddings", "/v1/embeddings", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit, "")
 	if len(resp.Raw) > 0 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -434,11 +434,11 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	out, account, err := s.gw.ClaudeChat(requestCtx(r, raw), raw)
 	if err != nil {
-		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, peek.Model, "claude", "/v1/messages", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireAnthropic, err)
 		return
 	}
-	s.record(account, peek.Model, "claude", "/v1/messages", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out)
+	s.record(account, peek.Model, "claude", "/v1/messages", false, http.StatusOK, nil, inspectorPreview(raw, ""), started, out, "")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -748,11 +748,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, account, err := s.gw.GenerateImage(requestCtx(r, raw), raw)
 		if err != nil {
-			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 			writeErr(w, wireAdmin, err)
 			return
 		}
-		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw)
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, imagePreview(resp)), started, resp.Raw, "")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"account":  account,
 			"model":    body.Model,
@@ -778,11 +778,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 		}
 		resp, account, err := s.gw.CreateEmbeddings(requestCtx(r, raw), raw)
 		if err != nil {
-			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+			s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 			writeErr(w, wireAdmin, err)
 			return
 		}
-		s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit)
+		s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, embeddingPreview(resp)), started, resp.Raw, resp.CacheHit, "")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"account":    account,
 			"model":      body.Model,
@@ -804,11 +804,11 @@ func (s *Server) handleShowcase(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, account, err := s.gw.Chat(requestCtx(r, raw), raw)
 	if err != nil {
-		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil)
+		s.record(account, body.Model, "showcase", "/admin/showcase", false, statusOf(err), err, inspectorPreview(raw, ""), started, nil, "")
 		writeErr(w, wireAdmin, err)
 		return
 	}
-	s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit)
+	s.recordCall(account, body.Model, "showcase", "/admin/showcase", false, http.StatusOK, nil, inspectorPreview(raw, resp.Content), started, resp.Raw, resp.CacheHit, "")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"account":  account,
 		"model":    body.Model,
@@ -1010,13 +1010,11 @@ func requestCtx(r *http.Request, raw []byte) context.Context {
 	})
 }
 
-// terminal is optional so a non-streaming call site does not have to say
-// anything; a streaming one passes the class its sseWriter observed.
-func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, terminal ...string) {
-	s.recordCall(account, model, proto, path, stream, status, err, preview, started, body, false, terminal...)
+func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, terminal string) {
+	s.recordCall(account, model, proto, path, stream, status, err, preview, started, body, false, terminal)
 }
 
-func (s *Server) recordCall(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, cacheHit bool, terminal ...string) {
+func (s *Server) recordCall(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, cacheHit bool, terminal string) {
 	if s.gw == nil || s.gw.Usage == nil {
 		return
 	}
@@ -1032,8 +1030,8 @@ func (s *Server) recordCall(account, model, proto, path string, stream bool, sta
 		DurationMS: time.Since(started).Milliseconds(),
 	}
 	usage.ApplyPublishedUsage(&e, body, cacheHit)
-	if len(terminal) > 0 && terminal[0] != "" {
-		e.StreamTerminal = terminal[0]
+	if terminal != "" {
+		e.StreamTerminal = terminal
 	}
 	if err != nil {
 		e.Error = usage.Redact(err.Error())
@@ -1284,12 +1282,14 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 	if bytes.Contains(p, []byte(`"usage"`)) {
 		s.usage = append([]byte(nil), p...)
 	}
+	// Keep only the tail, without reallocating on every write once the tail is
+	// full: append into the existing array and reslice from the front.
 	if len(p) >= terminalTailBytes {
-		s.tail = append([]byte(nil), p[len(p)-terminalTailBytes:]...)
+		s.tail = append(s.tail[:0], p[len(p)-terminalTailBytes:]...)
 	} else if len(p) > 0 {
 		s.tail = append(s.tail, p...)
 		if len(s.tail) > terminalTailBytes {
-			s.tail = append([]byte(nil), s.tail[len(s.tail)-terminalTailBytes:]...)
+			s.tail = s.tail[len(s.tail)-terminalTailBytes:]
 		}
 	}
 	n, err := s.ResponseWriter.Write(p)

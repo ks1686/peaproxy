@@ -25,8 +25,11 @@ func (c counters) empty() bool {
 // reports input tokens in message_start and running output tokens in
 // message_delta, and later frames often carry only what changed. Taking the
 // maximum keeps a real number from being erased by a later frame that omits it
-// or reports zero. Frames from different attempts are never merged together --
-// the caller sums attempts instead.
+// or reports zero. Cost is different: a provider quotes the running cost of the
+// turn, so the last value wins rather than the largest.
+//
+// The body handed to a single parse is one attempt. Summing separate attempts
+// into one event is a later step and is not done here.
 func (c *counters) merge(o counters) {
 	c.prompt = maxInt(c.prompt, o.prompt)
 	c.completion = maxInt(c.completion, o.completion)
@@ -77,7 +80,12 @@ func ApplyPublishedUsage(e *Event, body []byte, cacheHit bool) {
 	if c.cacheWrite != nil {
 		e.CacheWrite = *c.cacheWrite
 	}
-	e.TokensKnown = true
+	// Token counts are known only when the provider published them. Cache
+	// counters alone do not say how many tokens a call consumed, and recording
+	// that as a known zero-token call would invent a number.
+	if c.prompt != nil || c.completion != nil {
+		e.TokensKnown = true
+	}
 	e.CostUSD = c.cost
 }
 

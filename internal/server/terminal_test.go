@@ -16,7 +16,7 @@ func TestClassifyTerminal(t *testing.T) {
 		{"openai finish without done", "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n", TerminalChatFinish},
 		{"length", "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}\n\n", TerminalChatFinish},
 		{"null finish is not a finish", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n", TerminalNone},
-		{"pretty printed finish", "data: {\n  \"choices\": [{\"finish_reason\": \"stop\"}]\n}\n\n", TerminalChatFinish},
+		{"pretty printed finish", "data: {\ndata:   \"choices\": [{\"finish_reason\": \"stop\"}]\ndata: }\n\n", TerminalChatFinish},
 		{"responses completed", "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1}}}\n\n", TerminalResponsesDone},
 		{"responses incomplete", "event: response.incomplete\ndata: {\"type\":\"response.incomplete\"}\n\n", TerminalResponsesPartial},
 		{"responses failed", "data: {\"type\":\"response.failed\"}\n\n", TerminalResponsesPartial},

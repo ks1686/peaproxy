@@ -42,10 +42,10 @@ func TestExplicitQuotesAreScopedToAnAccount(t *testing.T) {
 		{ID: "m", AccountID: "acct-b", Price: catalog.Price{Input: &paid, Output: &paid, Verified: true}},
 	}
 
-	if got := gw.priceForDeployment("acct-a", "m"); !got.Free() {
+	if got := priceForDeployment(gw, "acct-a", "m"); !got.Free() {
 		t.Fatalf("acct-a/m price = %#v, want verified zero", got)
 	}
-	if got := gw.priceForDeployment("acct-b", "m"); got.Free() {
+	if got := priceForDeployment(gw, "acct-b", "m"); got.Free() {
 		t.Fatalf("acct-b/m price = %#v, want not free", got)
 	}
 }
