@@ -144,6 +144,13 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 				break
 			}
 		}
+	} else {
+		// With no pin, a warm prompt cache may win where price could not
+		// separate the candidates. It runs after the pinned check so an
+		// explicit provider choice is never overridden by a saving.
+		if move := g.preferWarm(ranked[pick:], g.warmSet()); move != 0 {
+			pick += move
+		}
 	}
 	if pick != 0 {
 		ranked = append(append([]instance{}, ranked[pick:]...), ranked[:pick]...)

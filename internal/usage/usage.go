@@ -549,3 +549,30 @@ func (s *Store) SpentInLastDays(n int) (usd float64, priced, total int) {
 	}
 	return usd, priced, total
 }
+
+// CacheWarmSince reports which account/model pairs showed a cache read within
+// the window, keyed by accountID and model joined by a NUL.
+//
+// It is evidence, not knowledge. No provider API reports whether its cache is
+// warm, so the only observable signal is a recent call that came back with
+// cache-read tokens. That says the deployment caches and that this prefix was
+// warm when it ran, which is a prior for the next turn rather than a fact about
+// it.
+//
+// A cache write is deliberately not warmth: the first turn of a session writes
+// a prefix and reads none, which is the opposite of what this asks.
+func (s *Store) CacheWarmSince(since time.Time) map[string]bool {
+	out := map[string]bool{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.events {
+		if e.CacheRead <= 0 || e.Time.Before(since) {
+			continue
+		}
+		if e.AccountID == "" || e.Model == "" {
+			continue
+		}
+		out[e.AccountID+"\x00"+e.Model] = true
+	}
+	return out
+}
