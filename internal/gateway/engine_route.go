@@ -56,12 +56,22 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	now := time.Now()
 	models := catalog.AllAnnotated(append([]catalog.Model(nil), g.models...), g.queryLocked())
 	pinned, _ := g.liveAffinityLocked(session, routeName, now)
-	cool := make(map[string]Cooldown, len(g.cool))
+	cool := make(map[string]cooldownSlots, len(g.cool))
 	for id, slots := range g.cool {
-		// Any active slot means the account is out; a route that needs a model
-		// this account happens to be cooling is still handled further down.
-		if c, ok := slots.anyActive(now); ok {
-			cool[id] = c
+		// Copy the slots that can still bite. Keeping the whole struct would
+		// share the models map with the live gateway, and the ranking below
+		// reads it after the lock is dropped.
+		active := cooldownSlots{wide: slots.wide}
+		for model, c := range slots.models {
+			if now.Before(c.Until) {
+				if active.models == nil {
+					active.models = map[string]Cooldown{}
+				}
+				active.models[model] = c
+			}
+		}
+		if _, busy := active.anyActive(now); busy {
+			cool[id] = active
 		}
 	}
 	g.mu.Unlock()
@@ -81,7 +91,11 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		if !automaticKind(g, routeName, m) {
 			continue
 		}
-		if c, ok := cool[m.AccountID]; ok && (c.Model == "" || c.Model == m.ID) {
+		// Judge this account against this model. Collapsing the slots into one
+		// entry first lost cooldowns: anyActive returns a single slot, so a
+		// model cooling for an hour ranked as available whenever an unrelated
+		// model on the same account was cooling with a sooner expiry.
+		if _, cooling := activeCooldown(cool[m.AccountID], m.ID, now); cooling {
 			continue
 		}
 		inst := g.instanceFor(m.AccountID)
