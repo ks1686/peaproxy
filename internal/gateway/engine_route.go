@@ -114,7 +114,7 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	}
 	pick := 0
 	if routeName == router.RouteEconomy {
-		pick = cheapest(g, rankedModel)
+		pick = cheapest(g, ranked)
 	}
 	if pinned != "" {
 		for i, inst := range ranked {
@@ -151,6 +151,11 @@ func (g *Gateway) instanceFor(account string) instance {
 	return instance{}
 }
 
+// automaticKind reports whether a deployment qualifies for a route. A price
+// belongs to a deployment -- an account, an endpoint and a model -- so the
+// lookup is scoped to the account. Looking a quote up by model id alone made
+// two accounts exposing the same model share one price, which let a free
+// deployment make a paid one qualify for pea/free (#D5).
 func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 	switch routeName {
 	case router.RouteLocal:
@@ -159,36 +164,60 @@ func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 		}
 		return g.cfg.AutomaticRoutes.CloudFallback
 	case router.RouteFree:
-		return g.priceFor(m.ID).Free()
+		return g.priceForDeployment(m.AccountID, m.ID).Free()
 	case router.RouteEconomy:
-		return g.priceFor(m.ID).Input != nil || g.priceFor(m.ID).Output != nil
+		p := g.priceForDeployment(m.AccountID, m.ID)
+		return p.Input != nil || p.Output != nil
 	default:
 		return true
 	}
 }
 
+// priceFor returns the price of the first verified row for a model id. It is
+// only correct where the caller has not established which deployment it means;
+// routing decisions must use priceForDeployment.
 func (g *Gateway) priceFor(model string) catalog.Price {
+	return g.priceForDeployment("", model)
+}
+
+// priceForDeployment returns the verified quote for one deployment. An explicit
+// user quote may be keyed by "account/model" and wins over the catalog row for
+// that same account; a quote keyed by bare model id stays available for configs
+// that predate deployment-scoped quotes.
+func (g *Gateway) priceForDeployment(account, model string) catalog.Price {
+	if account != "" {
+		if quote, ok := g.cfg.AutomaticRoutes.Prices[account+"/"+model]; ok {
+			return catalog.Price{Input: quote.Input, Output: quote.Output, Verified: quote.Verified}
+		}
+	}
 	if quote, ok := g.cfg.AutomaticRoutes.Prices[model]; ok {
 		return catalog.Price{Input: quote.Input, Output: quote.Output, Verified: quote.Verified}
 	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	for _, row := range g.models {
-		if row.ID == model && row.Price.Verified {
-			return row.Price
+		if row.ID != model || !row.Price.Verified {
+			continue
 		}
+		if account != "" && row.AccountID != account {
+			continue
+		}
+		return row.Price
 	}
 	return catalog.Price{}
 }
 
-func cheapest(g *Gateway, models []string) int {
+// cheapest returns the index of the least expensive deployment. It compares
+// deployments, not model ids: two accounts serving the same id can be quoted
+// differently, and comparing ids would rank them by whichever row came first.
+func cheapest(g *Gateway, ranked []instance) int {
 	best := -1
-	for i, id := range models {
-		price := g.priceFor(id)
+	for i, inst := range ranked {
+		price := g.priceForDeployment(inst.Provider.ID, inst.upstreamModel)
 		if price.Input == nil && price.Output == nil {
 			continue
 		}
-		if best < 0 || catalog.Cheaper(price, g.priceFor(models[best])) {
+		if best < 0 || catalog.Cheaper(price, g.priceForDeployment(ranked[best].Provider.ID, ranked[best].upstreamModel)) {
 			best = i
 		}
 	}
