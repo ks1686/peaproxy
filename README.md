@@ -214,7 +214,7 @@ The live catalog is not consulted — run `peaproxy models list` for that.
 | `GET /admin/health` | Bind, **adapter health**, **quota remaining** (null/omitted when unknown), **account cooldowns** with remaining time (token required off loopback) |
 | `GET /admin/quota` | Per-account quota remaining plus the provider honesty matrix |
 | `POST /admin/health/probe` | Re-run `Validate` on each adapter and documented quota probes |
-| `GET /admin/presets` | Account dropdown templates (env var **names** and whether they are set; never values) |
+| `GET /admin/presets` | Account dropdown templates, grouped (env var **names** and whether they are set; never values). Each entry also carries `group` and `unverified` |
 | `GET /admin/usage` | Persisted usage (`usage.json`): recent ring plus daily rollups |
 | `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |
 | `POST /admin/catalog/overlay` | Pin / rename a live model id (listing overlay only) |
