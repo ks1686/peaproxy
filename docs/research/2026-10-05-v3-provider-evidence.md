@@ -107,7 +107,11 @@ Stated plainly, because the release notes must not imply these are closed.
    question did not, and no tier was assigned from inference.
 3. **Cerebras and Hugging Face tags are unverified and probably wrong.** See
    D8 in [../plans/2026-10-05-v3-scope.md](../plans/2026-10-05-v3-scope.md).
-   Not corrected in this pass, deliberately.
+   Not corrected in this pass, deliberately. Worth being precise about the
+   impact: the router never reads the `freemium` tag, so this is a display
+   accuracy problem, not a routing one. The routing defect in D8 is the
+   price-based free proof, and it is reachable through a user-configured
+   `0/0` override rather than through these tags.
 4. **No conformance fixtures exist yet for any of the eight.** The tier exists
    on paper. Reaching it means capturing each provider's documented response
    and stream shape as fixtures under `internal/adapter/openai_compat`, and is

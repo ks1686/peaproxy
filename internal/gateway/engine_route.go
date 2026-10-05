@@ -7,6 +7,7 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
+	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/promptcache"
 	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/responsecache"
@@ -173,6 +174,29 @@ func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 	}
 }
 
+// assertedPrice marks a quote the user configured rather than one a provider
+// published.
+//
+// The quote is honoured exactly as before -- a user who states that a
+// deployment is free is believed, because they may know something the catalog
+// does not. What changes is that the origin is recorded, so economics can tell
+// a measured free price from an asserted one and apply a stricter rule to the
+// second. A price is marked Verified either way because it is the user's
+// explicit statement, not a guess; Source is what distinguishes them.
+func assertedPrice(q config.PriceQuote) catalog.Price {
+	return catalog.Price{
+		Input:    q.Input,
+		Output:   q.Output,
+		Currency: "USD",
+		Source:   PriceSourceConfig,
+		Verified: q.Verified,
+	}
+}
+
+// PriceSourceConfig marks a price that came from user configuration rather than
+// from a provider's published pricing.
+const PriceSourceConfig = "config"
+
 // priceForDeployment returns the verified quote for one deployment. An explicit
 // user quote may be keyed by "account/model" and wins over the catalog row for
 // that same account; a quote keyed by bare model id stays available for configs
@@ -180,11 +204,11 @@ func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 func priceForDeployment(g *Gateway, account, model string) catalog.Price {
 	if account != "" {
 		if quote, ok := g.cfg.AutomaticRoutes.Prices[account+"/"+model]; ok {
-			return catalog.Price{Input: quote.Input, Output: quote.Output, Verified: quote.Verified}
+			return assertedPrice(quote)
 		}
 	}
 	if quote, ok := g.cfg.AutomaticRoutes.Prices[model]; ok {
-		return catalog.Price{Input: quote.Input, Output: quote.Output, Verified: quote.Verified}
+		return assertedPrice(quote)
 	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
