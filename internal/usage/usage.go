@@ -63,6 +63,12 @@ type Event struct {
 	DurationMS       int64     `json:"durationMs,omitempty"`
 	QuotaHint        string    `json:"quotaHint,omitempty"`
 	CacheHit         bool      `json:"cacheHit,omitempty"`
+	// StreamTerminal names the terminal event a streamed response ended with
+	// ("done", "chat_finish", "responses_completed", "messages_stop") or "none"
+	// when the stream ended without one. A stream that ends with no terminal
+	// event is what makes a client report a missing finish_reason, so it is
+	// recorded rather than counted as an ordinary success. Empty on non-streams.
+	StreamTerminal string `json:"streamTerminal,omitempty"`
 }
 
 // AccountRollup is a per-account summary.

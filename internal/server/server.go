@@ -275,7 +275,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ChatStream(requestCtx(r, raw), raw, sw)
-		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireOpenAI, err)
 		}
@@ -308,7 +308,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ResponsesStream(requestCtx(r, raw), raw, sw)
-		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
+		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireOpenAI, err)
 		}
@@ -426,7 +426,7 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ClaudeChatStream(requestCtx(r, raw), raw, sw)
-		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage)
+		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireAnthropic, err)
 		}
@@ -1010,11 +1010,13 @@ func requestCtx(r *http.Request, raw []byte) context.Context {
 	})
 }
 
-func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte) {
-	s.recordCall(account, model, proto, path, stream, status, err, preview, started, body, false)
+// terminal is optional so a non-streaming call site does not have to say
+// anything; a streaming one passes the class its sseWriter observed.
+func (s *Server) record(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, terminal ...string) {
+	s.recordCall(account, model, proto, path, stream, status, err, preview, started, body, false, terminal...)
 }
 
-func (s *Server) recordCall(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, cacheHit bool) {
+func (s *Server) recordCall(account, model, proto, path string, stream bool, status int, err error, preview string, started time.Time, body []byte, cacheHit bool, terminal ...string) {
 	if s.gw == nil || s.gw.Usage == nil {
 		return
 	}
@@ -1030,6 +1032,9 @@ func (s *Server) recordCall(account, model, proto, path string, stream bool, sta
 		DurationMS: time.Since(started).Milliseconds(),
 	}
 	usage.ApplyPublishedUsage(&e, body, cacheHit)
+	if len(terminal) > 0 && terminal[0] != "" {
+		e.StreamTerminal = terminal[0]
+	}
 	if err != nil {
 		e.Error = usage.Redact(err.Error())
 		if e.Status == 0 {
@@ -1260,6 +1265,14 @@ type sseWriter struct {
 	http.ResponseWriter
 	started bool
 	usage   []byte
+	// tail is the last terminalTailBytes written to the client, used to say
+	// whether a turn actually ended with an event the client recognises.
+	tail []byte
+}
+
+// terminal reports which terminal event, if any, reached the client.
+func (s *sseWriter) terminal() string {
+	return classifyTerminal(s.tail)
 }
 
 func (s *sseWriter) Write(p []byte) (int, error) {
@@ -1270,6 +1283,14 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 	}
 	if bytes.Contains(p, []byte(`"usage"`)) {
 		s.usage = append([]byte(nil), p...)
+	}
+	if len(p) >= terminalTailBytes {
+		s.tail = append([]byte(nil), p[len(p)-terminalTailBytes:]...)
+	} else if len(p) > 0 {
+		s.tail = append(s.tail, p...)
+		if len(s.tail) > terminalTailBytes {
+			s.tail = append([]byte(nil), s.tail[len(s.tail)-terminalTailBytes:]...)
+		}
 	}
 	n, err := s.ResponseWriter.Write(p)
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
