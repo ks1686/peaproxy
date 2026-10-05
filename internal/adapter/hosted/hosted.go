@@ -19,6 +19,11 @@ type Spec struct {
 	AccountIDEnv   string
 	URLPlaceholder string
 	Notes          string
+
+	// Unverified marks a preset PeaProxy has not yet called against the live
+	// API. The base URL comes from the provider's documentation, but a
+	// documented endpoint is not a tested one, and the UI says which is which.
+	Unverified bool
 }
 
 // Known first-class presets. Google AI Studio uses the official OpenAI-compat
@@ -121,9 +126,81 @@ var (
 	}
 )
 
+// Named key providers from issue #114. All speak OpenAI chat completions, so
+// each is a thin spec over openai_compat rather than a new adapter. Base URLs
+// are from official documentation; none has been exercised live yet, which is
+// why every one of them is marked Unverified.
+var (
+	AlibabaCoding = Spec{
+		Name:           "alibabacoding",
+		DefaultBaseURL: "https://coding-intl.dashscope.aliyuncs.com/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "DASHSCOPE_API_KEY",
+		Notes:          "Alibaba Cloud Coding Plan. Chat completions only; not the general Model Studio endpoint. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	DeepSeek = Spec{
+		Name:           "deepseek",
+		DefaultBaseURL: "https://api.deepseek.com/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "DEEPSEEK_API_KEY",
+		Notes:          "DeepSeek OpenAI-compatible API. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	Mistral = Spec{
+		Name:           "mistral",
+		DefaultBaseURL: "https://api.mistral.ai/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "MISTRAL_API_KEY",
+		Notes:          "Mistral La Plateforme. Distinct from the Claude subscription OAuth adapter. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	ZAI = Spec{
+		Name:           "zai",
+		DefaultBaseURL: "https://api.z.ai/api/paas/v4",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "ZAI_API_KEY",
+		Notes:          "Z.AI GLM OpenAI-compatible endpoint. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	MiniMax = Spec{
+		Name:           "minimax",
+		DefaultBaseURL: "https://api.minimax.io/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "MINIMAX_API_KEY",
+		Notes:          "MiniMax OpenAI-compatible endpoint. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	Together = Spec{
+		Name:           "together",
+		DefaultBaseURL: "https://api.together.xyz/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "TOGETHER_API_KEY",
+		Notes:          "Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	Fireworks = Spec{
+		Name:           "fireworks",
+		DefaultBaseURL: "https://api.fireworks.ai/inference/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "FIREWORKS_API_KEY",
+		Notes:          "Fireworks AI inference. Pay per token. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+	Cohere = Spec{
+		Name:           "cohere",
+		DefaultBaseURL: "https://api.cohere.ai/compatibility/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "COHERE_API_KEY",
+		Notes:          "Cohere OpenAI compatibility layer. Trial keys are rate limited. Not live-verified by PeaProxy.",
+		Unverified:     true,
+	}
+)
+
 // All returns the hosted specs in UI order.
 func All() []Spec {
-	return []Spec{LMStudio, LlamaCpp, VLLM, Jan, GPT4All, Groq, Cerebras, Google, XAI, HuggingFace, NIM, WorkersAI, OllamaCloud, SambaNova}
+	return []Spec{LMStudio, LlamaCpp, VLLM, Jan, GPT4All, Groq, Cerebras, Google, XAI, HuggingFace, NIM, WorkersAI, OllamaCloud, SambaNova,
+		AlibabaCoding, DeepSeek, Mistral, ZAI, MiniMax, Together, Fireworks, Cohere}
 }
 
 // Lookup returns a named hosted spec.

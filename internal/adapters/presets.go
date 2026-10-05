@@ -25,6 +25,9 @@ type AccountPreset struct {
 	URLPlaceholder  string `json:"urlPlaceholder,omitempty"`
 	Warn            string `json:"warn,omitempty"`
 	Note            string `json:"note,omitempty"`
+	// Unverified means PeaProxy has not called this endpoint live. It is
+	// carried to the UI so a preset is not presented as tested when it is not.
+	Unverified bool `json:"unverified,omitempty"`
 }
 
 func hostedPreset(id, label string, spec hosted.Spec) AccountPreset {
@@ -38,6 +41,7 @@ func hostedPreset(id, label string, spec hosted.Spec) AccountPreset {
 		AccountIDEnv:   spec.AccountIDEnv,
 		URLPlaceholder: spec.URLPlaceholder,
 		Note:           spec.Notes,
+		Unverified:     spec.Unverified,
 	}
 }
 
@@ -74,6 +78,14 @@ func AccountPresets() []AccountPreset {
 		hostedPreset("nim-key", "NVIDIA NIM (API catalog)", hosted.NIM),
 		hostedPreset("workers-ai", "Cloudflare Workers AI", hosted.WorkersAI),
 		hostedPreset("sambanova-key", "SambaNova Cloud", hosted.SambaNova),
+		hostedPreset("alibaba-coding-plan", "Alibaba Coding Plan", hosted.AlibabaCoding),
+		hostedPreset("deepseek-key", "DeepSeek", hosted.DeepSeek),
+		hostedPreset("mistral-key", "Mistral (API key)", hosted.Mistral),
+		hostedPreset("zai-key", "Z.AI (GLM)", hosted.ZAI),
+		hostedPreset("minimax-key", "minimax", hosted.MiniMax),
+		hostedPreset("together-key", "Together AI", hosted.Together),
+		hostedPreset("fireworks-key", "Fireworks AI", hosted.Fireworks),
+		hostedPreset("cohere-key", "Cohere", hosted.Cohere),
 		{ID: "openrouter", Adapter: openrouter.Name, Label: "OpenRouter", BaseURL: openrouter.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: "OPENROUTER_API_KEY", Note: "Model ids ending :free are tagged free automatically."},
 		{ID: "opencode-zen", Adapter: opencodezen.Name, Label: "OpenCode Zen", BaseURL: opencodezen.DefaultBaseURL, Tier: string(catalog.TierFree), EnvKey: "OPENCODE_API_KEY", Warn: "OpenCode Zen free models may train on prompts (Nemotron, Big Pickle, MiMo, Muse). Prefer an official API key from opencode.ai."},
 		{ID: "custom", Adapter: "openai_compat", Label: "Custom OpenAI-compat", BaseURL: "https://api.example.com/v1", Tier: string(catalog.TierPaid)},
