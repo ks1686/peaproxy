@@ -647,32 +647,17 @@ func (s *Store) windowLocked(n int) SpendWindow {
 	return w
 }
 
-// Reserve holds an in-flight estimate against the ledger until the call it
-// covers finishes.
+// Settle releases a reservation taken by HoldSpend. An over-release cannot go
+// negative: a settled request that measured more than it reserved is recorded by
+// its event, and clamping here keeps a stale settlement from creating credit the
+// next request would happily spend.
 //
-// The window total is checked and the reservation taken in one locked step, so
-// concurrent requests cannot each read a total that none of them has yet
-// included. The held amount is spent from the moment the request goes upstream,
-// which is the direction that cannot be undone.
-//
-// Settle releases the reservation when the call completes. The event that
-// carries the real cost is added by the ordinary recording path, so a settled
-// call is counted exactly once: the reservation goes, the measurement arrives.
-// Settling less than was reserved is normal -- the reservation is an estimate
-// and the response is the reading.
-func (s *Store) Reserve(usd float64) {
-	if usd <= 0 {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reserved += usd
-}
-
-// Settle releases a reservation held by Reserve. An over-release cannot go
-// negative: a settled request that measured more than it reserved is recorded
-// by its event, and clamping here keeps a stale settlement from creating credit
-// the next request would happily spend.
+// There is deliberately no standalone Reserve. Holding spend without deciding
+// against the ceiling is the fail-open bug the hold exists to close -- a reserve
+// that skips the check can be called by anyone, from anywhere, and would look
+// like the real thing to a reader skimming its name. A reservation is taken by
+// HoldSpend, which reads the total and takes it in one critical section, and
+// released here.
 func (s *Store) Settle(usd float64) {
 	if usd <= 0 {
 		return
