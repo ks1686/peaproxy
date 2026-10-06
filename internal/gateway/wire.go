@@ -241,3 +241,31 @@ func prefixHold(buf, needle []byte) int {
 	}
 	return 0
 }
+
+// Flush drains bytes the rewriter was holding for a model name that may have
+// continued in the next write.
+//
+// Without this, a stream that stops mid-token loses its tail silently. The
+// bytes go straight through rather than being rewritten, because a partial
+// token is not a model name that can be substituted. Dropping them instead
+// would hide how far an upstream stream actually got, which is exactly what
+// makes a truncated stream hard to diagnose.
+func (m *routeRewriter) Flush() error {
+	if len(m.hold) == 0 {
+		return nil
+	}
+	hold := m.hold
+	m.hold = nil
+	_, err := m.w.Write(hold)
+	return err
+}
+
+// flushWriter drains a writer that buffers a trailing partial token. Writers
+// that do not buffer are left alone.
+func flushWriter(w io.Writer) error {
+	f, ok := w.(interface{ Flush() error })
+	if !ok {
+		return nil
+	}
+	return f.Flush()
+}

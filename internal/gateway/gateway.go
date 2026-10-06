@@ -684,7 +684,13 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
 			_, callErr = admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
-				return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest))
+				// Drain any held partial token before the guard finishes, so the
+				// bytes reach the client in the order they arrived.
+				err := inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest)
+				if flushErr := flushWriter(dest); err == nil {
+					err = flushErr
+				}
+				return struct{}{}, noteStream(guard, err)
 			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
