@@ -84,8 +84,8 @@ func TestMergeFieldsMineWinsOnlyWhenChanged(t *testing.T) {
 
 func TestMergeHandlesEveryConfigField(t *testing.T) {
 	typ := reflect.TypeOf(Config{})
-	if typ.NumField() != 14 {
-		t.Fatalf("Config has %d fields; Merge handles 14 — add the new field to Merge and this test", typ.NumField())
+	if typ.NumField() != 15 {
+		t.Fatalf("Config has %d fields; Merge handles 15 — add the new field to Merge and this test", typ.NumField())
 	}
 	var full Config
 	populate(reflect.ValueOf(&full).Elem())

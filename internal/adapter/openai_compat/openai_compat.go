@@ -64,7 +64,13 @@ func (a *Adapter) SetProviderName(name string) { a.provider = name }
 
 func (a *Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
-		Chat:       true,
+		Chat:  true,
+		Tools: true,
+		// Tools is declared because the adapter forwards the caller's `tools`
+		// array untouched to an OpenAI-compatible endpoint, exactly as it
+		// forwards VisionIn and ImageOut. Leaving this false was not a cautious
+		// default: it silently excluded the whole OpenAI-compatible roster
+		// from every tool-aware decision, including proxy-owned tools.
 		Stream:     true,
 		VisionIn:   true,
 		ImageOut:   true,
@@ -117,6 +123,11 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 			Pricing *struct {
 				Prompt     string `json:"prompt"`
 				Completion string `json:"completion"`
+				// OpenRouter publishes cache rates for models that have them.
+				// A model that does not omits them, and those components stay
+				// unknown rather than becoming zero.
+				CacheRead  string `json:"input_cache_read"`
+				CacheWrite string `json:"input_cache_write"`
 			} `json:"pricing"`
 			// ContextLength is OpenRouter's spelling. Providers that do not
 			// publish it omit the field, and the row stays unknown (#81).
@@ -562,6 +573,8 @@ func (a *Adapter) auth(req *http.Request) {
 func openRouterPrice(pricing *struct {
 	Prompt     string `json:"prompt"`
 	Completion string `json:"completion"`
+	CacheRead  string `json:"input_cache_read"`
+	CacheWrite string `json:"input_cache_write"`
 }) catalog.Price {
 	if pricing == nil {
 		return catalog.Price{}
@@ -571,7 +584,18 @@ func openRouterPrice(pricing *struct {
 	if !inOK || !outOK {
 		return catalog.Price{}
 	}
-	return catalog.Price{Input: &input, Output: &output, Currency: "USD", Verified: true}
+	p := catalog.Price{
+		Input: &input, Output: &output,
+		Currency: "USD", Source: "openrouter", ObservedAt: time.Now(), Verified: true,
+	}
+	// An absent or unparseable cache rate stays nil: unknown, not free.
+	if v, ok := parsePerToken(pricing.CacheRead); ok {
+		p.CacheRead = &v
+	}
+	if v, ok := parsePerToken(pricing.CacheWrite); ok {
+		p.CacheWrite = &v
+	}
+	return p
 }
 
 func parsePerToken(raw string) (float64, bool) {

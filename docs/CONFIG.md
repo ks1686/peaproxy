@@ -104,9 +104,50 @@ Session affinity is separate from `sticky`. It keeps one conversation on the acc
 
 Retryable failures are HTTP **429**, **401**, **503**, **529**, plus provider error bodies that look like rate-limit / quota, overloaded, or auth-expired. Cooldown reasons are those classes (`rate-limit`, `overloaded`, `auth-expired`) — not raw bodies (no secrets). Plain `400 invalid_request_error` does not fail over.
 
-A cooldown lasts 30s, or as long as the upstream's reset hint when it sends one: a `Retry-After` header, or for Antigravity / Cloud Code the error body (`quotaResetDelay`, `RetryInfo.retryDelay`, or "Resets in X"). Hints are clamped to 1s–1h, except Cloud Code body hints, which are honoured up to 7 days because its weekly quota says "Resets in 166h…" and the cooldown is per model. A transport failure (502, 504, or a 503 whose body is an edge proxy's connect error / reset before headers) is retried once on the same account and then skips it for only 5s, since it says nothing about the account. When every matching account is cooling, the 503 body reads `all matching accounts in cooldown: <account> after HTTP 429 (rate-limit), Ns left`. The `Retry-After` returned to clients is capped at 60s, because some clients (OpenCode) wait it out uncapped; the internal cooldown still keeps the full hint.
+An **entitlement** failure (HTTP 402, exhausted free tier, spent quota) is not transient and gets its own **15 minute** cooldown rather than 30s. It does not clear in half a minute, so the short cooldown meant re-testing an account already known to be unusable, repeatedly. A `Retry-After` still outranks this: the provider is telling us when to return.
+
+A cooldown otherwise lasts 30s, or as long as the upstream's reset hint when it sends one: a `Retry-After` header, or for Antigravity / Cloud Code the error body (`quotaResetDelay`, `RetryInfo.retryDelay`, or "Resets in X"). Hints are clamped to 1s–1h, except Cloud Code body hints, which are honoured up to 7 days because its weekly quota says "Resets in 166h…" and the cooldown is per model. A transport failure (502, 504, or a 503 whose body is an edge proxy's connect error / reset before headers) is retried once on the same account and then skips it for only 5s, since it says nothing about the account. When every matching account is cooling, the 503 body reads `all matching accounts in cooldown: <account> after HTTP 429 (rate-limit), Ns left`. The `Retry-After` returned to clients is capped at 60s, because some clients (OpenCode) wait it out uncapped; the internal cooldown still keeps the full hint.
 
 `peaproxy config validate` prints the effective `failover.policy`. Health UI and `peaproxy health` still list active cooldowns with remaining time, plus quota remaining when a provider reports it.
+
+## Optimization (v3)
+
+`optimization` is the v3 cost block. It is **additive**: a config without it keeps working, and every field defaults to the opinionated v3 behaviour. A field you set explicitly always wins over the default.
+
+```yaml
+optimization:
+  policyVersion: 1 # checked, not guessed at
+  automatic: true # unset means true
+  promptCache: optimize # preserve | optimize | off
+  contextOptimization: true
+  freeOnly: false
+  allowAnonymousProviders: false
+  spendCeilingUSD: 0 # 0 means no ceiling configured
+  localAssistant: false
+  persistentContext: false
+  localAssistantEndpoint:
+    endpoint: http://127.0.0.1:11234/v1
+    model: "" # empty uses the endpoint's first model
+    timeoutSeconds: 10
+```
+
+Booleans are nullable internally so that "you did not say" stays distinct from "you said no". That distinction is the difference between a default PeaProxy can improve on and one it must respect.
+
+`policyVersion` is validated. A file written by a newer PeaProxy is **refused** with a clear message rather than silently misread.
+
+`automatic: false` restores pre-v3 optimization behaviour in one setting and is the documented rollback.
+
+`requestEngine.promptCache` still wins over `optimization.promptCache`, because it is a decision made before the v3 block existed.
+
+### Money guards
+
+`freeOnly: true` refuses any deployment that cannot **prove** the call will not be billed. The refusal names the setting, because a silent refusal looks like an outage.
+
+`spendCeilingUSD` caps spend in a rolling window and **fails closed**. If recorded spend cannot be measured, PeaProxy refuses rather than proceeding — the accounts whose prices are least known are exactly where guessing wrong costs money. The policy panel at `GET /admin/policy` shows the resolved values; an unset ceiling reports `null`, never `0`, and says whether the recorded figure is a sum or a floor.
+
+### Local assistant
+
+Off unless both `localAssistant: true` and an endpoint are set. The endpoint **must** resolve to loopback; there is no setting that allows anything else, because a helper described as local that can be pointed at a remote host is not one. Setting an endpoint with `localAssistant: false` is a validation error rather than a silently ignored field.
 
 ## Request engine
 
@@ -141,7 +182,7 @@ Image and edit calls are **not** failed over on a **502** or **504**, unlike eve
 
 A running `peaproxy serve` watches `config.yaml` and adopts what it finds. An account added by `peaproxy auth login`, a `catalog`/`hide`/`routes` edit from the CLI, or a hand edit all take effect within about two seconds, with secrets hydrated from the secret store. A file that is invalid while you are mid-edit is logged once and left alone; the running config is not disturbed, and the next valid write is picked up.
 
-**Adopted without a restart:** `providers`, `hide`, `expose`, `catalog`, `routes`, `failover`, `automaticRoutes`, `requestEngine` — everything read per request.
+**Adopted without a restart:** `providers`, `hide`, `expose`, `catalog`, `routes`, `failover`, `automaticRoutes`, `requestEngine`, `optimization` — everything read per request.
 
 **Needs a restart:** `bind` and `port` (the listener is already bound), `allowNonLoopback` and `adminToken` (a security posture that should not change under live traffic by editing a file), `requestLog` (the log file handle is opened at start), and `schemaVersion`. The UI Settings page still applies these immediately, because that is an explicit action by someone looking at the screen.
 

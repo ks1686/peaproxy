@@ -96,10 +96,17 @@ First-run **Accounts** — local / API-key onboarding CTAs first. Subscription O
 
 Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/capture-readme-screenshots.mjs`). No API keys or OAuth tokens appear in the images.
 
-## Feature matrix (2.0.x)
+## Feature matrix (v3)
 
 | Capability | Status |
 |---|---|
+| **Automatic cost routing** | Shipped in v3. `pea/auto`, `pea/economy`, `pea/free`, `pea/local` choose a live model for cost and capability **on by default**. Exact model names are never substituted. Full behaviour and rollback: [docs/V3.md](docs/V3.md) |
+| **Spend ceiling** | Shipped in v3. `optimization.spendCeilingUSD` caps spend in a rolling window and **fails closed** when spend cannot be measured |
+| **Free-only routing** | Shipped in v3. `optimization.freeOnly` refuses any deployment that cannot prove a call stays free |
+| **Carried context (`pea_search`)** | Shipped in v3, bounded at 4 rounds. Only for tool-using, non-streaming requests — a streaming client would have to be buffered. Toolless clients get pre-retrieval instead |
+| **Local assistant** | Shipped in v3, **off by default**. Loopback only; no setting allows anything else |
+| **Routing promotion gates** | Shipped in v3. `internal/eval` runs eight routing promises in CI; cost *and* equivalence are asserted |
+| **Policy inspector** | Shipped in v3. `GET /admin/policy` plus a UI panel; unset ceiling reports `null`, never `0` |
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped. `routes:` are stable local names that rewrite to a live id; pin/rename stay listing-only |
 | `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is `reasoning_opaque` on the assistant message (stripped before OpenAI-compat upstreams) |
 | `POST /v1/messages` true Anthropic SSE | Shipped. Translated streams (non-Claude models) carry usage, stream tool calls as `tool_use` blocks, and report `max_tokens` on truncation |
@@ -110,6 +117,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Quota remaining | **Shipped** when the provider reports it (rate-limit headers; OpenRouter `GET /key`). Unknown remaining is omitted, never invented as 0 or unlimited |
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
+| Grouped accounts UI + 8 new paid presets (DeepSeek, Mistral, Z.AI, MiniMax, Together, Fireworks, Alibaba Coding Plan, Cohere) | Shipped in v3. Only **Cohere** is live-verified (2026-10-05); the rest show `(not verified)` and mean it |
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways |
 | Claude OAuth Messages cloak | **Shipped** — `anthropic_oauth` injects Claude Code billing header + CLI identity (caller system relocated, never deleted). Client-preset cloak defaults stay **off** |
 | Codex OAuth `store` / token limits | **Shipped** — `openai_oauth` forces `store: false` and omits `max_output_tokens` / `stream_options` |
@@ -117,7 +125,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
 | OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
 | OS keychain / `secrets.enc` | Shipped. Large OAuth tokens are stored as chunked keychain items |
-| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; the 503 names the account and cause; a slow first token never starts a cooldown |
+| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; **entitlement failures (402 / exhausted free tier) get 15 minutes, not 30s**; the 503 names the account and cause; a slow first token never starts a cooldown |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped |
 | CLI `catalog` / `health` / `requests` / `accounts add` | Shipped |
@@ -126,7 +134,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | macOS / Windows tray | **No, by design** (CLI + localhost UI) |
 | Claude OAuth through Cloudflare | Stock Go TLS; may **403**. Prefer API key. No uTLS. |
 
-Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PLAN.md](docs/PLAN.md).
+Adapters and URLs: [docs/PROVIDERS.md](docs/PROVIDERS.md). Plan phases: [docs/PLAN.md](docs/PLAN.md). v3 behaviour, upgrade and rollback: [docs/V3.md](docs/V3.md).
 
 ## Quick start
 
@@ -214,7 +222,8 @@ The live catalog is not consulted — run `peaproxy models list` for that.
 | `GET /admin/health` | Bind, **adapter health**, **quota remaining** (null/omitted when unknown), **account cooldowns** with remaining time (token required off loopback) |
 | `GET /admin/quota` | Per-account quota remaining plus the provider honesty matrix |
 | `POST /admin/health/probe` | Re-run `Validate` on each adapter and documented quota probes |
-| `GET /admin/presets` | Account dropdown templates (env var **names** and whether they are set; never values) |
+| `GET /admin/policy` | What v3 is currently doing: resolved optimization switches, spend against the ceiling, and whether spend could be measured |
+| `GET /admin/presets` | Account dropdown templates, grouped (env var **names** and whether they are set; never values). Each entry also carries `group` and `unverified` |
 | `GET /admin/usage` | Persisted usage (`usage.json`): recent ring plus daily rollups |
 | `GET /admin/requests` | Opt-in redacted request inspector (`requests.log`) |
 | `POST /admin/catalog/overlay` | Pin / rename a live model id (listing overlay only) |
@@ -237,7 +246,17 @@ VibeProxy and CLIProxyAPI spend a lot of issue tracker time on:
 8. **Free + custom providers** — including OpenCode Zen (CPA declined #6018).
 9. **Built-in usage / showcase** — CPA removed usage in v6.10+.
 
-What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md), [docs/V2.md](docs/V2.md), [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), [docs/RELEASING.md](docs/RELEASING.md).
+What PeaProxy actually ships vs still residual: [docs/COMPETITOR-WINS.md](docs/COMPETITOR-WINS.md). Also [docs/PLAN.md](docs/PLAN.md), [docs/PROVIDERS.md](docs/PROVIDERS.md), [docs/HARNESS.md](docs/HARNESS.md), [docs/CONFIG.md](docs/CONFIG.md), [docs/OAUTH.md](docs/OAUTH.md), [docs/V1.md](docs/V1.md), [docs/V2.md](docs/V2.md), [docs/V3.md](docs/V3.md), [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), [docs/RELEASING.md](docs/RELEASING.md).
+
+## v3
+
+v3 makes the cost behaviour automatic: it aggregates accounts, exploits free
+tiers, and routes for cost without you changing your client config or enabling
+anything. It will not substitute a cheaper model for one you named, reduce your
+limits, summarize tool output, or pretend a truncated response finished.
+
+What changes, how to upgrade or roll back, and the known limitations:
+**[docs/V3.md](docs/V3.md)**.
 
 ## Security
 

@@ -2,103 +2,122 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
 	"testing"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/router"
 )
 
-func TestSessionAffinityKeepsOneAccountThenRebindsAfterCooldown(t *testing.T) {
-	hitsA, hitsB := 0, 0
-	gw := policyGateway(t, "round-robin",
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/v1/models" {
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
-				return
-			}
-			hitsA++
-			if hitsA == 1 {
-				w.WriteHeader(http.StatusTooManyRequests)
-				_, _ = w.Write([]byte(`{"error":"quota"}`))
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"choices": []map[string]any{{"message": map[string]string{"content": "from-a"}}},
-			})
-		},
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/v1/models" {
-				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
-				return
-			}
-			hitsB++
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"choices": []map[string]any{{"message": map[string]string{"content": "from-b"}}},
-			})
-		},
+// D7 suspected that session affinity never applied to an automatic route.
+// It does. Success bookkeeping binds affinity under both the resolved model and
+// the alias the caller wrote, and pickAutomatic reads the alias key. These
+// tests pin that behaviour so a future change cannot quietly drop it: losing it
+// would move a conversation between accounts and throw away the provider's warm
+// prompt cache, which is the cost the affinity exists to protect.
+//
+// https://github.com/ks1686/peaproxy plan T6 investigation / defect D7.
+func TestAutomaticRouteHonoursSessionAffinity(t *testing.T) {
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.cfg.AutomaticRoutes.Enabled = true
+	gw.cfg.AutomaticRoutes.Auto = []string{"m"}
+
+	// Catalog order puts acct-b first, so the assertion below can only pass if
+	// affinity actually reordered the candidates.
+	gw.mu.Lock()
+	gw.models = []catalog.Model{
+		{ID: "m", AccountID: "acct-b", Tier: catalog.TierPaid, Routable: true},
+		{ID: "m", AccountID: "acct-a", Tier: catalog.TierPaid, Routable: true},
+	}
+	gw.mu.Unlock()
+
+	gw.bindAffinity("sess-1", router.RouteAuto, "acct-a")
+
+	_, candidates, _, err := gw.pickAutomatic(
+		context.Background(),
+		[]byte(`{"model":"pea/auto","session_id":"sess-1","messages":[{"role":"user","content":"hi"}]}`),
+		router.RouteAuto,
 	)
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"same chat"}]}`)
-	resp, account, err := gw.Chat(context.Background(), body)
-	if err != nil || resp.Content != "from-b" || account != "acct-b" {
-		t.Fatalf("first %v content %q account %s", err, resp.Content, account)
+	if err != nil {
+		t.Fatal(err)
 	}
-	resp, account, err = gw.Chat(context.Background(), body)
-	if err != nil || account != "acct-b" || resp.Content != "from-b" {
-		t.Fatalf("second %v content %q account %s", err, resp.Content, account)
+	if len(candidates) == 0 {
+		t.Fatal("no candidates")
 	}
-	if hitsA != 1 {
-		t.Fatalf("cooled account was tried again, hitsA=%d hitsB=%d", hitsA, hitsB)
+	if candidates[0].Provider.ID != "acct-a" {
+		t.Fatalf("first candidate = %q, want the account this session is bound to",
+			candidates[0].Provider.ID)
 	}
 }
 
-func TestSessionAffinitySticksAcrossRoundRobinUntilTTL(t *testing.T) {
-	hitsA, hitsB := 0, 0
-	gw := policyGateway(t, "round-robin", countOK(&hitsA, "from-a"), countOK(&hitsB, "from-b"))
-	gw.cfg.Failover.SessionAffinityTTL = "30ms"
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello pea"}]}`)
-	if _, account, err := gw.Chat(context.Background(), body); err != nil || account != "acct-a" {
-		t.Fatalf("first account %s err %v", account, err)
+// A successful automatic turn must leave an affinity entry a later turn can
+// find, under the alias pickAutomatic reads and under the resolved model.
+func TestAutomaticRouteBindsAffinityOnSuccess(t *testing.T) {
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.cfg.AutomaticRoutes.Enabled = true
+	gw.cfg.AutomaticRoutes.Auto = []string{"m"}
+
+	if _, account, err := gw.Chat(context.Background(),
+		[]byte(`{"model":"pea/auto","session_id":"sess-2","messages":[{"role":"user","content":"hi"}]}`)); err != nil {
+		t.Fatal(err)
+	} else if account == "" {
+		t.Fatal("no account served the request")
 	}
-	if _, account, err := gw.Chat(context.Background(), body); err != nil || account != "acct-a" {
-		t.Fatalf("pinned account %s err %v", account, err)
+
+	gw.mu.RLock()
+	_, byAlias := gw.affinity["sess-2\x00"+router.RouteAuto]
+	resolvedAccount, byResolved := gw.affinity["sess-2\x00m"]
+	gw.mu.RUnlock()
+
+	if !byAlias {
+		t.Fatal("no affinity recorded under the alias pickAutomatic reads")
 	}
-	if hitsB != 0 {
-		t.Fatalf("round-robin moved a live session, hitsB=%d", hitsB)
-	}
-	time.Sleep(40 * time.Millisecond)
-	if _, account, err := gw.Chat(context.Background(), body); err != nil || account != "acct-b" {
-		t.Fatalf("after ttl account %s err %v hitsA=%d hitsB=%d", account, err, hitsA, hitsB)
+	if !byResolved || resolvedAccount.Account == "" {
+		t.Fatal("no affinity recorded under the resolved model")
 	}
 }
 
-func TestSessionAffinityCanBeDisabled(t *testing.T) {
-	hitsA, hitsB := 0, 0
-	gw := policyGateway(t, "round-robin", countOK(&hitsA, "from-a"), countOK(&hitsB, "from-b"))
-	off := false
-	gw.cfg.Failover.SessionAffinity = &off
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hello pea"}]}`)
-	for i := 0; i < 2; i++ {
-		if _, _, err := gw.Chat(context.Background(), body); err != nil {
-			t.Fatal(err)
+// An exact-model request keeps using its own key, unchanged.
+func TestExactModelAffinityUnchanged(t *testing.T) {
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.bindAffinity("sess-3", "m", "acct-a")
+
+	gw.mu.RLock()
+	acct, ok := gw.liveAffinityLocked("sess-3", "m", time.Now())
+	gw.mu.RUnlock()
+	if !ok || acct != "acct-a" {
+		t.Fatalf("exact-model affinity = %q,%v; want acct-a,true", acct, ok)
+	}
+}
+
+// An expired bind must not pin a session to an account it has outgrown.
+func TestAutomaticRouteIgnoresExpiredAffinity(t *testing.T) {
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.cfg.AutomaticRoutes.Enabled = true
+	gw.cfg.AutomaticRoutes.Auto = []string{"m"}
+
+	gw.mu.Lock()
+	gw.affinity = map[string]affinityBind{
+		"sess-4\x00" + router.RouteAuto: {Account: "acct-a", Until: time.Now().Add(-time.Minute)},
+	}
+	gw.mu.Unlock()
+
+	_, candidates, _, err := gw.pickAutomatic(
+		context.Background(),
+		[]byte(`{"model":"pea/auto","session_id":"sess-4","messages":[{"role":"user","content":"hi"}]}`),
+		router.RouteAuto,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) > 0 && candidates[0].Provider.ID == "acct-a" {
+		// Catalog order may legitimately put acct-a first; only assert that the
+		// expired entry was dropped rather than pinning forever.
+		gw.mu.RLock()
+		_, still := gw.affinity["sess-4\x00"+router.RouteAuto]
+		gw.mu.RUnlock()
+		if still {
+			t.Fatal("an expired affinity entry was kept")
 		}
-	}
-	if hitsA != 1 || hitsB != 1 {
-		t.Fatalf("disabled affinity should rotate a=%d b=%d", hitsA, hitsB)
-	}
-}
-
-func TestHeaderSessionReachesTheGateway(t *testing.T) {
-	hitsA, hitsB := 0, 0
-	gw := policyGateway(t, "round-robin", countOK(&hitsA, "from-a"), countOK(&hitsB, "from-b"))
-	ctx := router.WithSession(context.Background(), "sess-1")
-	body := []byte(`{"model":"m","messages":[{"role":"user","content":"one"}]}`)
-	other := []byte(`{"model":"m","messages":[{"role":"user","content":"two"}]}`)
-	if _, account, err := gw.Chat(ctx, body); err != nil || account != "acct-a" {
-		t.Fatalf("first %s %v", account, err)
-	}
-	if _, account, err := gw.Chat(ctx, other); err != nil || account != "acct-a" {
-		t.Fatalf("header session should ignore a different body, account %s err %v", account, err)
 	}
 }

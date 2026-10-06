@@ -63,6 +63,12 @@ type Event struct {
 	DurationMS       int64     `json:"durationMs,omitempty"`
 	QuotaHint        string    `json:"quotaHint,omitempty"`
 	CacheHit         bool      `json:"cacheHit,omitempty"`
+	// StreamTerminal names the terminal event a streamed response ended with
+	// ("done", "chat_finish", "responses_completed", "messages_stop") or "none"
+	// when the stream ended without one. A stream that ends with no terminal
+	// event is what makes a client report a missing finish_reason, so it is
+	// recorded rather than counted as an ordinary success. Empty on non-streams.
+	StreamTerminal string `json:"streamTerminal,omitempty"`
 }
 
 // AccountRollup is a per-account summary.
@@ -507,4 +513,66 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(rs[:n]) + "…"
+}
+
+// SpentInLastDays reports recorded spend over the last n calendar days,
+// counting today.
+//
+// It reads the persisted day rollups rather than the event ring. The ring is
+// bounded and would reset a ceiling on every restart, and the window is
+// day-granular because a true 24-hour rolling window cannot be answered from
+// daily rollups without either counting a boundary day it should not or
+// falling back to the ring and undercounting when the ring does not reach back
+// far enough. Undercounting a ceiling fails open, which spends the user's money.
+//
+// priced counts only the calls whose cost was known, and total counts every
+// call. A caller can compare the two to tell "nothing spent" from "spent, but
+// some of it could not be measured". A call with no published
+// price is real spend that cannot be measured here, and is deliberately absent
+// from the total rather than folded in as zero: a caller relying on this needs
+// to be able to tell "nothing spent" from "nothing could be measured".
+func (s *Store) SpentInLastDays(n int) (usd float64, priced, total int) {
+	if n <= 0 {
+		return 0, 0, 0
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -(n - 1)).Format("2006-01-02")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range s.days {
+		// Day strings are YYYY-MM-DD, so they order lexicographically.
+		if d.Day < cutoff || d.CostUSD == nil {
+			continue
+		}
+		usd += *d.CostUSD
+		priced += d.CostCalls
+		total += d.Calls
+	}
+	return usd, priced, total
+}
+
+// CacheWarmSince reports which account/model pairs showed a cache read within
+// the window, keyed by accountID and model joined by a NUL.
+//
+// It is evidence, not knowledge. No provider API reports whether its cache is
+// warm, so the only observable signal is a recent call that came back with
+// cache-read tokens. That says the deployment caches and that this prefix was
+// warm when it ran, which is a prior for the next turn rather than a fact about
+// it.
+//
+// A cache write is deliberately not warmth: the first turn of a session writes
+// a prefix and reads none, which is the opposite of what this asks.
+func (s *Store) CacheWarmSince(since time.Time) map[string]bool {
+	out := map[string]bool{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.events {
+		if e.CacheRead <= 0 || e.Time.Before(since) {
+			continue
+		}
+		if e.AccountID == "" || e.Model == "" {
+			continue
+		}
+		out[e.AccountID+"\x00"+e.Model] = true
+	}
+	return out
 }

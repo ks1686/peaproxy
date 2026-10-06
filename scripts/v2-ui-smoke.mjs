@@ -124,6 +124,76 @@ try {
     throw new Error("catalog rendered the model id as markup");
   }
 
+  // The add-account dropdown is grouped (#113). A flat list is not a visual
+  // bug anyone reports, so this is the only place it gets checked.
+  await page.getByRole("button", { name: "Accounts" }).click();
+  const preset = page.locator("#preset");
+  await preset.waitFor();
+  // The dropdown is filled by an async fetch after the page renders, so the
+  // element existing proves nothing about it being populated.
+  await preset.locator("option").first().waitFor({ state: "attached", timeout: 10000 });
+  const groups = await preset.locator("optgroup").evaluateAll((els) =>
+    els.map((el) => el.label),
+  );
+  if (groups.length < 2) {
+    throw new Error("preset dropdown rendered no optgroups: " + JSON.stringify(groups));
+  }
+  if (groups[0] !== "Local models") {
+    throw new Error("first preset group is " + groups[0]);
+  }
+  // Groups must be contiguous: a name appearing twice means the sort let a
+  // section split, which renders as the same heading twice.
+  if (new Set(groups).size !== groups.length) {
+    throw new Error("preset groups repeat: " + JSON.stringify(groups));
+  }
+  const labels = await preset.locator("option").evaluateAll((els) =>
+    els.map((el) => el.textContent),
+  );
+  for (const hidden of ["qwen-oauth", "factory-oauth"]) {
+    if (await preset.locator(`option[value="${hidden}"]`).count()) {
+      throw new Error("unreleased preset offered for a new account: " + hidden);
+    }
+  }
+  if (await page.locator("#preset img, #preset script").count()) {
+    throw new Error("preset dropdown rendered a label as markup");
+  }
+  console.log(`accounts dropdown: ${groups.length} groups, ${labels.length} presets`);
+
+  // The cost policy panel exists so an opinionated default is visible. A user
+  // who cannot see that free-only or a spend ceiling is on has no way to turn
+  // it off.
+  await page.getByRole("button", { name: "Policy" }).click();
+  const policy = page.locator("#policy-body");
+  await policy.getByText("Automatic optimizations").waitFor({ timeout: 10000 });
+  const policyText = await policy.innerText();
+  for (const must of ["Free only", "Context optimization", "Local assistant", "Spent (30d)"]) {
+    if (!policyText.includes(must)) {
+      throw new Error(`policy panel is missing ${must}: ${policyText}`);
+    }
+  }
+  // An unset ceiling must read as unset, not as a zero budget.
+  if (!policyText.includes("none set")) {
+    throw new Error("an unconfigured spend ceiling is not reported as unset: " + policyText);
+  }
+  if (await page.locator("#policy-body img, #policy-body script").count()) {
+    throw new Error("policy panel rendered content as markup");
+  }
+  console.log("policy panel rendered");
+  if (!labels.some((l) => l.includes("(not verified)"))) {
+    throw new Error("no preset carries the unverified marker");
+  }
+  // Selecting an unverified preset must surface its note rather than looking
+  // like any other entry.
+  await preset.selectOption("deepseek-key").catch(() => {});
+  if (await preset.locator(`option[value="deepseek-key"]`).count()) {
+    await page.waitForFunction(() => {
+      const n = document.getElementById("preset-note");
+      return n && !n.hidden && /not live-verified/i.test(n.textContent || "");
+    }, undefined, { timeout: 3000 }).catch(() => {
+      throw new Error("selecting an unverified preset did not show its verification note");
+    });
+  }
+
   await page.getByRole("button", { name: "Clients" }).click();
   const guided = page.locator("[data-connect='opencode']");
   await guided.waitFor();

@@ -67,7 +67,26 @@ Antigravity details:
 
 **P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
 
-**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`, `opencode_zen`, **`opencode_go`**. Z.AI / others: `openai_compat` + their OpenAI-compat base URL (no first-class preset).
+**P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`, `opencode_zen`, **`opencode_go`**, plus the named v3 presets below.
+
+### Named key presets (v3)
+
+Eight first-class presets added in v3, grouped in the Accounts UI:
+
+| Preset | Base URL | Adapter | Env key |
+|---|---|---|---|
+| Alibaba Coding Plan | `coding-intl.dashscope.aliyuncs.com/v1` | `openai_compat` | `DASHSCOPE_API_KEY` |
+| DeepSeek | `api.deepseek.com/v1` | `openai_compat` | `DEEPSEEK_API_KEY` |
+| Mistral | `api.mistral.ai/v1` | `openai_compat` | `MISTRAL_API_KEY` |
+| Z.AI | `api.z.ai/api/paas/v4` | `openai_compat` | `ZAI_API_KEY` |
+| MiniMax | `api.minimax.io/v1` | `openai_compat` | `MINIMAX_API_KEY` |
+| Together | `api.together.xyz/v1` | `openai_compat` | `TOGETHER_API_KEY` |
+| Fireworks | `api.fireworks.ai/inference/v1` | `openai_compat` | `FIREWORKS_API_KEY` |
+| Cohere | `api.cohere.ai/compatibility/v1` | `openai_compat` | `COHERE_API_KEY` |
+
+**Verification status matters here.** Only **Cohere** is live-verified (2026-10-05): model listing, chat, streaming termination and streaming tool calls, exercised through PeaProxy's own adapter path. The other seven are **documented-only** and display `(not verified)`. The marker stays until a real account confirms the endpoint, because a preset marked as working that nobody has called is exactly the claim this catalog refuses to make.
+
+OpenAI-compatibility is a family resemblance, not a guarantee. Real per-provider divergences exist: DeepSeek `reasoning_content`, Z.AI `thinking`, Alibaba `enable_thinking`.
 
 Do **not** advertise Claude Free OAuth (CPA #6016).
 
@@ -106,7 +125,7 @@ Several **free** Zen models may use prompts for training (NVIDIA Nemotron free, 
 
 ## Failover
 
-Multiple accounts that list the same model id follow `failover.policy` (`round-robin` default, `fill-first`, or `sticky`). HTTP **429**, **401**, **503**, **529**, and provider bodies that look like rate-limit / quota, overloaded, or auth-expired cool that account down (30s, or the upstream's reset hint) and try the next one. A transport failure (502, 504, or a 503 whose body is an edge connect/reset error) is retried once on the same account, then skipped for only 5s. A slow first token moves on to the next account without a cooldown. Health UI and `peaproxy health` show adapter health (last ListModels/Validate), **quota remaining when the provider reports it**, and remaining cooldown time. See [CONFIG.md](CONFIG.md#failover).
+Multiple accounts that list the same model id follow `failover.policy` (`round-robin` default, `fill-first`, or `sticky`). HTTP **429**, **401**, **503**, **529**, and provider bodies that look like rate-limit / quota, overloaded, or auth-expired cool that account down (30s, or the upstream's reset hint) and try the next one. An **entitlement** failure — HTTP **402**, exhausted free tier, spent quota — gets **15 minutes** instead of 30s, because it does not clear in half a minute; a `Retry-After` still wins. A transport failure (502, 504, or a 503 whose body is an edge connect/reset error) is retried once on the same account, then skipped for only 5s. A slow first token moves on to the next account without a cooldown. Health UI and `peaproxy health` show adapter health (last ListModels/Validate), **quota remaining when the provider reports it**, and remaining cooldown time. See [CONFIG.md](CONFIG.md#failover).
 
 ## Quota remaining
 

@@ -27,6 +27,11 @@ jobs:
         env:
           PEAPROXY_SECRET_BACKEND: file
         run: go test ./...
+      # Promotion gate. The routing promises are the product's claims, and a
+      # claim that only the release notes assert is not a claim. This step
+      # fails the build when a change breaks one.
+      - name: Routing promises
+        run: go test ./internal/eval -run 'TestRoutingPromises|TestCheaperChoiceReallyIsCheaper' -v -count=1
       - name: Build
         run: go build ./...
   race:

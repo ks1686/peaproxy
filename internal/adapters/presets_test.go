@@ -17,8 +17,8 @@ func TestAccountPresetsIncludeHosted(t *testing.T) {
 		"ollama-local", "lmstudio-local", "llamacpp-local", "vllm-local", "jan-local", "gpt4all-local", "ollama-cloud",
 		"google-key", "groq-key", "cerebras-key",
 		"xai-key", "huggingface", "nim-key", "workers-ai", "sambanova-key", "openrouter", "custom", "anthropic-oauth", "openai-oauth",
-		"antigravity", "xai-oauth", "kimi-oauth", "kimi-ai-oauth", "meta-oauth", "qwen-oauth",
-		"copilot-oauth", "factory-oauth", "opencode-go",
+		"antigravity", "xai-oauth", "kimi-oauth", "kimi-ai-oauth", "meta-oauth",
+		"copilot-oauth", "opencode-go",
 	} {
 		if _, ok := got[id]; !ok {
 			t.Fatalf("missing preset %s", id)
@@ -36,14 +36,8 @@ func TestAccountPresetsIncludeHosted(t *testing.T) {
 	if got["antigravity"].Adapter != "antigravity" || got["antigravity"].Warn == "" {
 		t.Fatalf("antigravity preset: %#v", got["antigravity"])
 	}
-	if got["qwen-oauth"].Adapter != "qwen_oauth" || got["qwen-oauth"].Warn == "" {
-		t.Fatalf("qwen stub: %#v", got["qwen-oauth"])
-	}
 	if got["copilot-oauth"].Adapter != "copilot_oauth" || got["copilot-oauth"].Warn == "" {
 		t.Fatalf("copilot oauth: %#v", got["copilot-oauth"])
-	}
-	if got["factory-oauth"].Adapter != "factory_oauth" || !strings.Contains(strings.ToLower(got["factory-oauth"].Warn), "not yet") {
-		t.Fatalf("factory stub: %#v", got["factory-oauth"])
 	}
 	if got["opencode-go"].Adapter != "opencode_go" || got["opencode-go"].EnvKey != "OPENCODE_API_KEY" {
 		t.Fatalf("opencode go: %#v", got["opencode-go"])

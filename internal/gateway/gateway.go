@@ -23,6 +23,8 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/contextopt"
+	"github.com/ks1686/peaproxy/internal/contextstore"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/localruntime"
 	"github.com/ks1686/peaproxy/internal/oauth"
@@ -41,12 +43,24 @@ var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
-	mu            sync.RWMutex
-	cfg           config.Config
-	path          string
-	reg           *adapter.Registry
-	inst          []instance
-	models        []catalog.Model
+	mu     sync.RWMutex
+	cfg    config.Config
+	path   string
+	reg    *adapter.Registry
+	inst   []instance
+	models []catalog.Model
+
+	// Artifacts holds context PeaProxy gathered earlier in the session. Nil
+	// means no context store is attached, and every consumer must treat that as
+	// "nothing to offer" rather than as empty.
+	Artifacts *contextstore.Store
+
+	// spendWindow supplies recorded spend for the spend ceiling. It is a field
+	// so the ceiling can be exercised without a usage store.
+	spendWindow spendWindow
+	// allPriced reports whether every call in the window carried a price. A
+	// nil value means unknown, which the ceiling treats as untrustworthy.
+	allPriced     func() bool
 	Usage         *usage.Store
 	cool          map[string]cooldownSlots
 	rr            uint64
@@ -129,6 +143,10 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	} else {
 		g.Usage = &usage.Store{}
 	}
+	// The spend ceiling reads from the same ledger everything else reports, so
+	// it counts spend PeaProxy actually recorded. Leaving this nil would make
+	// the ceiling see a permanent zero and never fire.
+	g.SetUsage(g.Usage)
 	if err := g.rebuild(); err != nil {
 		return nil, err
 	}
@@ -497,16 +515,57 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 		var resp adapter.ChatResponse
 		var callErr error
 		var attempted atomic.Bool
+		// callOnce issues one upstream attempt. It is forward-declared so the
+		// proxy tool loop below can wrap it without the two closures having to
+		// be ordered around each other.
+		var callOnce func(context.Context, []byte, bool) (adapter.ChatResponse, error)
 		callUpstream := func(runCtx context.Context) (adapter.ChatResponse, error) {
+			// Proxy tool rounds wrap the transport retries rather than the other
+			// way round: a search is part of answering one request, so a failed
+			// re-send is a failed round, not a new request.
+			body := raw
+			rounds := contextopt.NewBudget()
+			first := true
+			for {
+				resp, err := callOnce(runCtx, body, first)
+				if err != nil {
+					return resp, err
+				}
+				calls := contextopt.ProxyToolCalls(resp.Raw)
+				if len(calls) == 0 || g.Artifacts == nil {
+					return resp, nil
+				}
+				if !rounds.Take() {
+					// The model kept searching past the limit. Stop here rather
+					// than continuing against a provider that is charging.
+					return resp, nil
+				}
+				results := contextopt.RunSearches(g.Artifacts, session, calls)
+				next := contextopt.AppendToolResults(body, calls, results)
+				if string(next) == string(body) {
+					// The body could not carry a result. Stopping beats resending
+					// an identical request the model will answer the same way.
+					return resp, nil
+				}
+				body = next
+				first = false
+			}
+		}
+		callOnce = func(runCtx context.Context, body []byte, countAttempt bool) (adapter.ChatResponse, error) {
 			var once adapter.ChatResponse
 			var onceErr error
 			for attempt := 0; attempt < 2; attempt++ {
-				if err := budgetAttempts.take(); err != nil {
-					return adapter.ChatResponse{}, errAttemptBudgetExhausted
+				// The attempt budget exists to stop a retry storm on failure. A
+				// proxy search round is a successful call, so charging it against
+				// that budget would stop a legitimate search after one round.
+				if countAttempt {
+					if err := budgetAttempts.take(); err != nil {
+						return adapter.ChatResponse{}, errAttemptBudgetExhausted
+					}
 				}
 				attempted.Store(true)
 				once, onceErr = admitted(g, runCtx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
-					return inst.Adapter.Chat(c, chatReq(inst, model, g.promptBody(raw, inst.Provider.Adapter), false, budget))
+					return inst.Adapter.Chat(c, chatReq(inst, model, g.bodyFor(body, inst, session), false, budget))
 				})
 				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
 					break
@@ -625,7 +684,13 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
 			_, callErr = admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
-				return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, model, raw, true, budget), dest))
+				// Drain any held partial token before the guard finishes, so the
+				// bytes reach the client in the order they arrived.
+				err := inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest)
+				if flushErr := flushWriter(dest); err == nil {
+					err = flushErr
+				}
+				return struct{}{}, noteStream(guard, err)
 			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
@@ -1567,10 +1632,22 @@ const transientCooldownTTL = 5 * time.Second
 
 // cooldownFor is how long an account is skipped after err: the upstream's
 // own reset hint when it sent one, else a short or normal window.
+// EntitlementCooldownTTL is how long an account stays out of rotation after the
+// provider says it may not be used at all.
+//
+// An exhausted free tier or a quota that has run out does not recover in thirty
+// seconds. Cooling for that long means the account is retried, fails the same
+// way, and cools again -- and where it is the only account serving a model, the
+// user sees the failure every half minute instead of once with a usable message.
+const EntitlementCooldownTTL = 15 * time.Minute
+
 func cooldownFor(err error) time.Duration {
 	var he adapter.HTTPError
 	if errors.As(err, &he) && he.RetryAfter > 0 {
 		return he.RetryAfter
+	}
+	if router.Classify(err) == router.FailoverEntitlement {
+		return EntitlementCooldownTTL
 	}
 	if router.Transient(err) {
 		return min(cooldownTTL, transientCooldownTTL)

@@ -1053,3 +1053,27 @@ func jsonString(s string) string {
 func responseStub(id, model string) string {
 	return fmt.Sprintf(`{"id":%q,"object":"response","status":"in_progress","model":%q}`, id, model)
 }
+
+// WriteOpenAIChatSSEError reports a failure that happened after the stream had
+// already started.
+//
+// A cut stream must be told apart from a quiet finish. Emitting a
+// finish_reason here would tell the client the answer is complete when it is
+// not, which is the one thing this proxy must never do: a client that believes
+// a truncated answer is finished will act on it. So no terminal event is
+// written, only an error the client can surface and the operator can find in
+// the log.
+func WriteOpenAIChatSSEError(w io.Writer, message string) error {
+	payload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": message,
+			"type":    "upstream_stream_error",
+			"code":    "stream_incomplete",
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(w, "data: "+string(payload)+"\n\n")
+	return err
+}

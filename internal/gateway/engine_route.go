@@ -2,11 +2,14 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
+	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/economics"
 	"github.com/ks1686/peaproxy/internal/promptcache"
 	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/responsecache"
@@ -56,18 +59,33 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	now := time.Now()
 	models := catalog.AllAnnotated(append([]catalog.Model(nil), g.models...), g.queryLocked())
 	pinned, _ := g.liveAffinityLocked(session, routeName, now)
-	cool := make(map[string]Cooldown, len(g.cool))
+	cool := make(map[string]cooldownSlots, len(g.cool))
 	for id, slots := range g.cool {
-		// Any active slot means the account is out; a route that needs a model
-		// this account happens to be cooling is still handled further down.
-		if c, ok := slots.anyActive(now); ok {
-			cool[id] = c
+		// Copy the slots that can still bite. Keeping the whole struct would
+		// share the models map with the live gateway, and the ranking below
+		// reads it after the lock is dropped.
+		active := cooldownSlots{wide: slots.wide}
+		for model, c := range slots.models {
+			if now.Before(c.Until) {
+				if active.models == nil {
+					active.models = map[string]Cooldown{}
+				}
+				active.models[model] = c
+			}
+		}
+		if _, busy := active.anyActive(now); busy {
+			cool[id] = active
 		}
 	}
 	g.mu.Unlock()
 	allowed := g.cfg.AutomaticRoutes.Models(routeName)
 	var ranked []instance
 	var rankedModel []string
+	// Tracked separately so a freeOnly refusal can say why rather than
+	// reporting the generic "no eligible model".
+	var freeBlocked, freeSeen bool
+	var ceilingBlocked bool
+	var ceilingReason string
 	for _, m := range models {
 		if !m.Routable {
 			continue
@@ -81,7 +99,32 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		if !automaticKind(g, routeName, m) {
 			continue
 		}
-		if c, ok := cool[m.AccountID]; ok && (c.Model == "" || c.Model == m.ID) {
+		// freeOnly is a refusal to spend, not a preference. It applies to every
+		// route: a deployment that cannot show a zero price is disqualified
+		// rather than treated as a fallback.
+		if g.cfg.FreeOnly() {
+			if freeOnlyAllows(g, m) {
+				freeSeen = true
+			} else {
+				freeBlocked = true
+				continue
+			}
+		}
+		// The spend ceiling is a refusal to spend, so it is checked after
+		// free-only: a deployment already proven free costs nothing and cannot
+		// breach a ceiling. Anything else is gated, and a refusal is reported
+		// rather than silently dropped from the candidates.
+		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
+			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
+				ceilingBlocked, ceilingReason = true, reason
+				continue
+			}
+		}
+		// Judge this account against this model. Collapsing the slots into one
+		// entry first lost cooldowns: anyActive returns a single slot, so a
+		// model cooling for an hour ranked as available whenever an unrelated
+		// model on the same account was cooling with a sooner expiry.
+		if _, cooling := activeCooldown(cool[m.AccountID], m.ID, now); cooling {
 			continue
 		}
 		inst := g.instanceFor(m.AccountID)
@@ -96,11 +139,19 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		rankedModel = append(rankedModel, m.ID)
 	}
 	if len(ranked) == 0 {
+		if ceilingBlocked {
+			return "", nil, "", errors.New(ceilingReason)
+		}
+		if freeBlocked && !freeSeen {
+			return "", nil, "", fmt.Errorf(
+				"automatic route %q has no free model: optimization.freeOnly is on and no deployment has a verified zero price",
+				routeName)
+		}
 		return "", nil, "", fmt.Errorf("automatic route %q has no eligible model", routeName)
 	}
 	pick := 0
 	if routeName == router.RouteEconomy {
-		pick = cheapest(g, rankedModel)
+		pick = cheapest(g, ranked)
 	}
 	if pinned != "" {
 		for i, inst := range ranked {
@@ -108,6 +159,13 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 				pick = i
 				break
 			}
+		}
+	} else {
+		// With no pin, a warm prompt cache may win where price could not
+		// separate the candidates. It runs after the pinned check so an
+		// explicit provider choice is never overridden by a saving.
+		if move := g.preferWarm(ranked[pick:], g.warmSet()); move != 0 {
+			pick += move
 		}
 	}
 	if pick != 0 {
@@ -137,6 +195,11 @@ func (g *Gateway) instanceFor(account string) instance {
 	return instance{}
 }
 
+// automaticKind reports whether a deployment qualifies for a route. A price
+// belongs to a deployment -- an account, an endpoint and a model -- so the
+// lookup is scoped to the account. Looking a quote up by model id alone made
+// two accounts exposing the same model share one price, which let a free
+// deployment make a paid one qualify for pea/free (#D5).
 func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 	switch routeName {
 	case router.RouteLocal:
@@ -145,36 +208,112 @@ func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 		}
 		return g.cfg.AutomaticRoutes.CloudFallback
 	case router.RouteFree:
-		return g.priceFor(m.ID).Free()
+		return priceForDeployment(g, m.AccountID, m.ID).Free()
 	case router.RouteEconomy:
-		return g.priceFor(m.ID).Input != nil || g.priceFor(m.ID).Output != nil
+		p := priceForDeployment(g, m.AccountID, m.ID)
+		return p.Input != nil || p.Output != nil
 	default:
 		return true
 	}
 }
 
-func (g *Gateway) priceFor(model string) catalog.Price {
+// assertedPrice marks a quote the user configured rather than one a provider
+// published.
+//
+// The quote is honoured exactly as before -- a user who states that a
+// deployment is free is believed, because they may know something the catalog
+// does not. What changes is that the origin is recorded, so economics can tell
+// a measured free price from an asserted one and apply a stricter rule to the
+// second. A price is marked Verified either way because it is the user's
+// explicit statement, not a guess; Source is what distinguishes them.
+func assertedPrice(q config.PriceQuote) catalog.Price {
+	return catalog.Price{
+		Input:    q.Input,
+		Output:   q.Output,
+		Currency: "USD",
+		Source:   PriceSourceConfig,
+		Verified: q.Verified,
+	}
+}
+
+// PriceSourceConfig marks a price that came from user configuration rather than
+// from a provider's published pricing.
+const PriceSourceConfig = "config"
+
+// freeOnlyAllows reports whether a deployment may be used when the user has
+// forbidden spending.
+//
+// The bar is a verified zero price and nothing else. "Nobody has looked" is not
+// free, and a nonzero price is the opposite of free, so both fail here without
+// needing a judgement call.
+//
+// A price the user configured counts. They asserted it, and asserting that your
+// own account is free is exactly the knowledge the catalog lacks -- a promo
+// credit or a contracted rate appears nowhere in ListModels. The provenance
+// survives so a surface promising safety can still tell an assertion from a
+// published figure.
+func freeOnlyAllows(g *Gateway, m catalog.Model) bool {
+	return deploymentProvenFree(g, m)
+}
+
+// deploymentProvenFree reports whether a deployment's price is verified and
+// zero.
+//
+// Both free-only routing and the spend ceiling need this same judgement, and
+// naming it separately keeps it honest: neither is allowed to treat an unpriced
+// deployment as free, and neither should have to infer that from a helper named
+// after one of its callers.
+func deploymentProvenFree(g *Gateway, m catalog.Model) bool {
+	p := priceForDeployment(g, m.AccountID, m.ID)
+	return p.Verified && p.Currency == economics.LedgerCurrency && p.Free()
+}
+
+// chargedUsage marks a request as one that may cost money, for the checks that
+// only care whether a call is free rather than what it will cost.
+//
+// The token counts are left unknown on purpose: PeaProxy cannot state the
+// output length before the model has answered, and a partial estimate used as
+// a complete one is exactly the error this project exists to avoid.
+func chargedUsage() economics.Usage { return economics.Usage{Unknown: true} }
+
+// priceForDeployment returns the verified quote for one deployment. An explicit
+// user quote may be keyed by "account/model" and wins over the catalog row for
+// that same account; a quote keyed by bare model id stays available for configs
+// that predate deployment-scoped quotes.
+func priceForDeployment(g *Gateway, account, model string) catalog.Price {
+	if account != "" {
+		if quote, ok := g.cfg.AutomaticRoutes.Prices[account+"/"+model]; ok {
+			return assertedPrice(quote)
+		}
+	}
 	if quote, ok := g.cfg.AutomaticRoutes.Prices[model]; ok {
-		return catalog.Price{Input: quote.Input, Output: quote.Output, Verified: quote.Verified}
+		return assertedPrice(quote)
 	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	for _, row := range g.models {
-		if row.ID == model && row.Price.Verified {
-			return row.Price
+		if row.ID != model || !row.Price.Verified {
+			continue
 		}
+		if account != "" && row.AccountID != account {
+			continue
+		}
+		return row.Price
 	}
 	return catalog.Price{}
 }
 
-func cheapest(g *Gateway, models []string) int {
+// cheapest returns the index of the least expensive deployment. It compares
+// deployments, not model ids: two accounts serving the same id can be quoted
+// differently, and comparing ids would rank them by whichever row came first.
+func cheapest(g *Gateway, ranked []instance) int {
 	best := -1
-	for i, id := range models {
-		price := g.priceFor(id)
+	for i, inst := range ranked {
+		price := priceForDeployment(g, inst.Provider.ID, inst.upstreamModel)
 		if price.Input == nil && price.Output == nil {
 			continue
 		}
-		if best < 0 || catalog.Cheaper(price, g.priceFor(models[best])) {
+		if best < 0 || catalog.Cheaper(price, priceForDeployment(g, ranked[best].Provider.ID, ranked[best].upstreamModel)) {
 			best = i
 		}
 	}

@@ -555,7 +555,10 @@ func TestHealthzPublicAndPresets(t *testing.T) {
 	if prr.Code != http.StatusOK {
 		t.Fatalf("presets %d %s", prr.Code, prr.Body)
 	}
-	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth", "copilot_oauth", "factory_oauth", "opencode_go"} {
+	if !strings.Contains(prr.Body.String(), `"group":"Official API keys"`) {
+		t.Fatalf("presets payload is missing groups: %s", prr.Body)
+	}
+	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth", "copilot_oauth", "opencode_go", "deepseek", "cohere"} {
 		if !strings.Contains(prr.Body.String(), name) {
 			t.Fatalf("missing %s in %s", name, prr.Body)
 		}

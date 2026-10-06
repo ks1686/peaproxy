@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"github.com/ks1686/peaproxy/internal/config"
 	"io"
 	"net"
 	"net/http"
@@ -151,4 +152,66 @@ func sameOrigin(r *http.Request) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Host, r.Host)
+}
+
+// handlePolicy reports what v3 is currently doing, so an opinionated default is
+// something a user can see and turn off rather than merely accept.
+//
+// Every value is the resolved one. The nullable booleans inside the config are
+// an internal distinction between "not said" and "said no"; what a user needs
+// to know is whether a behaviour is on right now.
+//
+// Spend is reported with the same honesty rules as everything else. A ceiling
+// that is not configured is null, not zero, because zero would read as "you
+// have spent nothing and the budget is gone". And when recorded spend cannot be
+// measured, the panel says so rather than presenting a partial total as a
+// complete one.
+func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
+	_ = r
+	cfg := s.gw.Config()
+
+	spent, priced, total := 0.0, 0, 0
+	if u := s.gw.Usage; u != nil {
+		spent, priced, total = u.SpentInLastDays(30)
+	}
+
+	ceiling := any(nil)
+	if v := cfg.SpendCeiling(); v > 0 {
+		ceiling = v
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"policy": map[string]any{
+			"automatic":             cfg.OptimizationEnabled(),
+			"freeOnly":              cfg.FreeOnly(),
+			"contextOptimization":   s.gw.ContextOptimizationEnabled(),
+			"spendCeilingUSD":       ceiling,
+			"spentLast30DaysUSD":    spent,
+			"pricedCallsLast30Days": priced,
+			"totalCallsLast30Days":  total,
+			"spendMeasurable":       priced == total,
+			"spendNote":             spendNote(priced, total, cfg.SpendCeiling()),
+			"promptCache":           cfg.EffectivePromptCache(),
+			"localAssistant":        cfg.LocalAssistantEnabled(),
+			"localEndpointConfigured": func() bool {
+				_, ok := cfg.LocalAssistantConfig()
+				return ok
+			}(),
+			"persistentContext": cfg.PersistentContextEnabled(),
+			"policyVersion":     config.OptimizationPolicyVersion,
+			"schemaVersion":     config.SchemaVersion,
+		},
+		"honesty": "spendCeilingUSD is null when no ceiling is set; 0 there would mean a budget of zero. " +
+			"spendMeasurable is false when calls in the window carried no published price, and spentLast30DaysUSD is then a floor, not a total.",
+	})
+}
+
+func spendNote(priced, total int, ceiling float64) string {
+	if priced < total {
+		return "some calls in this window had no published price, so the total is a floor rather than a sum"
+	}
+	if ceiling > 0 {
+		return "measured spend over the last 30 days, against the configured ceiling"
+	}
+	return "measured spend over the last 30 days; no ceiling is configured"
 }

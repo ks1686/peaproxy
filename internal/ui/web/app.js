@@ -1,4 +1,5 @@
 const pages = {
+  policy: policyPage,
   accounts: accountsPage,
   catalog: catalogPage,
   showcase: showcasePage,
@@ -318,6 +319,38 @@ async function refreshLanBanner() {
   }
 }
 
+// Presets arrive grouped from the server. Rendering optgroups keeps a list of
+// forty-odd providers navigable instead of a single undifferentiated column.
+// A preset with no group still renders, so a server that predates grouping
+// does not produce an empty dropdown.
+function presetOptions(presets) {
+  const order = [];
+  const byGroup = new Map();
+  for (const p of presets) {
+    const g = p.group || "";
+    if (!byGroup.has(g)) {
+      byGroup.set(g, []);
+      order.push(g);
+    }
+    byGroup.get(g).push(p);
+  }
+  return order
+    .map((g) => {
+      const opts = byGroup
+        .get(g)
+        .map((p) => {
+          const mark = p.unverified ? " (not verified)" : "";
+          const label = (p.label || p.id) + mark;
+          return `<option value="${escapeHtml(p.id)}">${escapeHtml(label)}</option>`;
+        })
+        .join("");
+      return g
+        ? `<optgroup label="${escapeHtml(g)}">${opts}</optgroup>`
+        : opts;
+    })
+    .join("");
+}
+
 function accountsPage(root) {
   root.innerHTML = `
     <section class="card">
@@ -529,9 +562,7 @@ function accountsPage(root) {
     try {
       const data = await getJSON("/admin/presets");
       presets = data.presets || [];
-      sel.innerHTML = presets
-        .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label || p.id)}</option>`)
-        .join("");
+      sel.innerHTML = presetOptions(presets);
       applyPreset();
     } catch (err) {
       sel.innerHTML = `<option>unavailable</option>`;
@@ -1240,3 +1271,54 @@ document.querySelector("nav").addEventListener("click", (e) => {
 
 refreshLanBanner();
 render("accounts");
+
+// policyPage shows what v3 is doing right now.
+//
+// The defaults are opinionated, which is only fair if they are visible: a user
+// who cannot see that free-only or a spend ceiling is in effect has no way to
+// turn it off. Values are the resolved ones from /admin/policy -- what is on,
+// not what was merely left unset.
+function policyPage(root) {
+  root.innerHTML = `<section class="card"><h2>Cost policy</h2><div id="policy-body">loading…</div></section>`;
+  getJSON("/admin/policy")
+    .then((data) => {
+      const p = data.policy || {};
+      const yesNo = (v) => (v ? "on" : "off");
+      const rows = [
+        ["Automatic optimizations", yesNo(p.automatic), "routing and prompt-cache savings applied without being asked"],
+        ["Free only", yesNo(p.freeOnly), "refuses any deployment that cannot show a verified zero price"],
+        ["Context optimization", yesNo(p.contextOptimization), "carries context across turns for clients that cannot run tools"],
+        ["Local assistant", yesNo(p.localAssistant), p.localEndpointConfigured ? "configured" : "no endpoint configured"],
+        ["Persistent context", yesNo(p.persistentContext), "stored artifacts survive a restart"],
+        ["Prompt cache", escapeHtml(p.promptCache || ""), "how request prefixes are handled"],
+      ];
+      const spendRows = [];
+      if (p.spendCeilingUSD === null || p.spendCeilingUSD === undefined) {
+        spendRows.push("<tr><td>Ceiling</td><td>none set</td><td class='muted'>0 would mean a budget of zero, so it is reported as unset</td></tr>");
+      } else {
+        spendRows.push(
+          `<tr><td>Ceiling</td><td>$${Number(p.spendCeilingUSD).toFixed(2)}</td><td class='muted'>30-day window</td></tr>`,
+        );
+      }
+      spendRows.push(
+        `<tr><td>Spent (30d)</td><td>$${Number(p.spentLast30DaysUSD || 0).toFixed(2)}</td><td class='muted'>${escapeHtml(p.spendNote || "")}</td></tr>`,
+      );
+      if (p.spendMeasurable === false) {
+        spendRows.push(
+          `<tr><td>Completeness</td><td class='warn'>partial</td><td class='muted'>${p.totalCallsLast30Days - p.pricedCallsLast30Days} call(s) had no published price, so this total is a floor rather than a sum</td></tr>`,
+        );
+      }
+      root.querySelector("#policy-body").innerHTML =
+        `<table><tbody>${rows
+          .map(
+            ([k, v, note]) =>
+              `<tr><td>${escapeHtml(k)}</td><td>${v}</td><td class='muted'>${escapeHtml(note)}</td></tr>`,
+          )
+          .join("")}</tbody></table>` +
+        `<h3>Spend</h3><table><tbody>${spendRows.join("")}</tbody></table>` +
+        `<p class="muted">${escapeHtml(data.honesty || "")}</p>`;
+    })
+    .catch((err) => {
+      root.querySelector("#policy-body").innerHTML = `<p class="warn">${escapeHtml(err.message)}</p>`;
+    });
+}
