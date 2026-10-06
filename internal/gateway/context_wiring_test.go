@@ -433,3 +433,61 @@ func TestTransformedRequestIsNotStoredInTheResponseCache(t *testing.T) {
 		t.Fatalf("upstream was contacted %d time(s); a context-bearing answer was served from cache on the second turn", hits)
 	}
 }
+
+// The adapter-dependent case: the caller declares tools and the stored material
+// has no lexical overlap with the query, so prefetch produces nothing. The only
+// thing that would change the body is injecting pea_search, which happens only
+// when the chosen provider supports tools.
+//
+// This is the case the candidate-aware fix exists for. With the previous
+// instance{} check the adapter was nil, the injection went unseen, and the
+// answer was cached and shared. The lexical cases above pass either way, so
+// they cannot catch a revert of this.
+func TestToolUsingRequestWithoutPrefetchHitIsStillSessionSpecific(t *testing.T) {
+	var hits int
+	stub := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		hits++
+		_, _ = io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+		})
+	}
+	gw := twoAccountGateway(t, stub, stub)
+	gw.cfg.RequestEngine.CacheResponses = true
+	gw.cfg.Optimization.ContextOptimization = boolp(true)
+
+	// Stored material shares no term with the query, so nothing is prefetched.
+	if err := gw.Artifacts.Put("s1", contextstore.Artifact{
+		Key:  "unrelated",
+		Body: []byte("zeppelin quokka xylophone marmalade"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	withTools := []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"lookup"}}],` +
+		`"messages":[{"role":"user","content":"quantum tunnelling dynamics"}]}`)
+
+	// The decision itself must hold: a tool-using request is session-specific
+	// even with no lexical hit, because the tool is injected regardless.
+	// The real adapter, which is the point: whether tools are supported comes
+	// from the provider, not from a stub standing in for one.
+	cands := []instance{{Adapter: gw.inst[0].Adapter}}
+	if !gw.sessionSpecificBody(withTools, "s1", cands) {
+		t.Fatal("a tool-using request with no prefetch hit was reported cacheable; the pea_search injection is invisible again")
+	}
+
+	// And end to end: two sessions, same bytes, second must reach upstream.
+	if _, _, err := gw.Chat(router.WithSession(context.Background(), "s1"), withTools); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := gw.Chat(router.WithSession(context.Background(), "s2"), withTools); err != nil {
+		t.Fatal(err)
+	}
+	if hits < 2 {
+		t.Fatalf("upstream was contacted %d time(s); a tool-using answer was shared across sessions", hits)
+	}
+}
