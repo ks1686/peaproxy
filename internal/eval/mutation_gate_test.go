@@ -33,12 +33,117 @@ type Mutation struct {
 	// and silently passing on zero matches is how a gate becomes a no-op.
 	From string
 	To   string
+	// AlsoFrom/AlsoTo break a second guard in AlsoFile, for a promise that
+	// depends on two of them stacked. A single edit can leave the other one
+	// standing, and the scenario then passes with its protection half intact --
+	// which reads as "the promise is covered" and is not.
+	AlsoFile string
+	AlsoFrom string
+	AlsoTo   string
 	// Why states what this proves, so a failure here is legible.
 	Why string
 }
 
+// assertEveryPromiseIsBroken fails when a routing promise has no mutation, or a
+// mutation names a promise that no longer exists.
+//
+// A promise nobody tries to break is a comment. The previous version of this
+// gate covered six of fifteen scenarios and the README said "each promise", so
+// the gap read as coverage from the outside -- which is the failure this file
+// exists to prevent, applied to the file itself.
+// notYetBroken lists promises that are asserted every run but have no mutation
+// yet, each with the reason it could not be written.
+//
+// They are named rather than omitted. The previous version of this gate left
+// nine of fifteen promises unmutated and said nothing, so the gap read as
+// coverage; an explicit list with a reason is a debt someone can close, and it
+// cannot grow by accident.
+var notYetBroken = map[string]string{
+	"an explicitly selected model is never substituted": "the harness gives every deployment the same model id, so there is nothing to substitute one for; " +
+		"the scenario needs a second deployment listing a different id before a mutation can bite",
+	"spend measured from tokens alone does not satisfy a ceiling": "SeedUsage builds events directly, so the scenario never reaches the parser this mutation breaks; " +
+		"the parser side is covered by TestPartialUsageIsNotPriced in internal/usage",
+	"an unknown price never wins over a known one": "three guards stand in the way -- automaticKind filters an unpriced deployment out of economy " +
+		"candidacy, cheapest skips it while ranking, and Cheaper refuses both an unpriced challenger and " +
+		"an unpriced incumbent. Breaking the first two still leaves the promise intact, which is defence " +
+		"in depth rather than a weak promise; showing it would need all three broken at once",
+	"the caller's own tools survive routing": "with no session in the body contextOptimize returns early, so the injection path never runs; " +
+		"the scenario currently only proves routing leaves the body alone",
+}
+
+func assertEveryPromiseIsBroken(t *testing.T, mutations []Mutation) {
+	t.Helper()
+	scenarios := routingPromises()
+	mutated := map[string]bool{}
+	for _, m := range mutations {
+		if mutated[m.Scenario] {
+			t.Errorf("two mutations target the same promise %q; one of them proves nothing extra", m.Scenario)
+		}
+		mutated[m.Scenario] = true
+	}
+	for _, s := range scenarios {
+		if mutated[s.Name] {
+			continue
+		}
+		if reason, exempt := notYetBroken[s.Name]; exempt {
+			t.Logf("promise %q is asserted but not yet broken: %s", s.Name, reason)
+			continue
+		}
+		t.Errorf("promise %q has no mutation and no recorded reason for its absence: it is asserted, "+
+			"but nothing checks that it can fail. Either add one to routingMutations, or record the reason "+
+			"in notYetBroken.", s.Name)
+	}
+	for _, m := range mutations {
+		found := false
+		for _, s := range scenarios {
+			if s.Name == m.Scenario {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("mutation targets %q, which is not a routing promise any more", m.Scenario)
+		}
+	}
+}
+
 func routingMutations() []Mutation {
 	return []Mutation{
+		{
+			Scenario: "economy prefers the cheapest deployment",
+			File:     "internal/gateway/engine_route.go",
+			From:     "best := -1",
+			To:       "return 0\n\tbest := -1",
+			Why:      "ranking has to pick the cheapest, not the first one declared",
+		},
+		{
+			Scenario: "free-only still serves a free deployment",
+			File:     "internal/gateway/engine_route.go",
+			From:     "return p.Verified && p.Currency == economics.LedgerCurrency && p.Free()",
+			To:       "return p.Verified && false",
+			Why:      "a deployment proven free must survive free-only; blocking everything would not protect the account, it would break it",
+		},
+		{
+			Scenario: "an unmeasured spend total does not satisfy a ceiling",
+			File:     "internal/usage/usage.go",
+			From:     "w.Priced += d.CostCalls + d.EstimatedCalls",
+			To:       "w.Priced += d.Calls",
+			Why:      "counting every call as priced turns a fail-closed ceiling into a fail-open one",
+		},
+		{
+			Scenario: "free-only refuses a named model too",
+			File:     "internal/gateway/engine_route.go",
+			From:     "if g.cfg.FreeOnly() && !deploymentProvenFree(g, m) {",
+			To:       "if false {",
+			Why:      "naming a model must not be a way around the switch that protects the account",
+		},
+		{
+			Scenario: "warmth decides when price cannot",
+			File:     "internal/gateway/cache_warm.go",
+			From:     "return catalog.NotDearer(warm, current)",
+			To:       "return false",
+			Why:      "warmth is the tie-breaker when price leaves two deployments equal; declining always is not a tie-break",
+		},
 		{
 			Scenario: "economy weighs output, not only input",
 			File:     "internal/catalog/pricing.go",
@@ -121,6 +226,11 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 	root := repoRoot(t)
 	mutations := routingMutations()
 
+	// The coverage claim is the whole point of this file, so it is asserted
+	// rather than left to be noticed. Six mutations against fifteen promises
+	// once read as complete, because nothing compared the two sets.
+	assertEveryPromiseIsBroken(t, mutations)
+
 	// Guard the other direction first: the promises pass before anything is
 	// touched, so a failure below means the mutation was caught rather than the
 	// gate simply being broken.
@@ -143,6 +253,14 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 		}
 		original[m.File] = b
 		restored = append(restored, m.File)
+		if m.AlsoFile != "" && m.AlsoFile != m.File {
+			extra, err := os.ReadFile(filepath.Join(root, m.AlsoFile))
+			if err != nil {
+				t.Fatalf("reading %s: %v", m.AlsoFile, err)
+			}
+			original[m.AlsoFile] = extra
+			restored = append(restored, m.AlsoFile)
+		}
 	}
 	defer func() {
 		for _, f := range restored {
@@ -168,12 +286,39 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 			if bytes.Equal(mutated, before) {
 				t.Fatalf("%s was not modified; the mutation was a no-op", m.File)
 			}
+
+			var alsoPath string
+			var alsoBefore, alsoMutated []byte
+			if m.AlsoFile != "" {
+				if n := bytes.Count(mutated, []byte(m.AlsoFrom)); n != 1 {
+					t.Fatalf("%s contains %d occurrences of the second anchor, want exactly 1:\nanchor: %s",
+						m.AlsoFile, n, m.AlsoFrom)
+				}
+				alsoPath = filepath.Join(root, m.AlsoFile)
+				b, rerr := os.ReadFile(alsoPath)
+				if rerr != nil {
+					t.Fatal(rerr)
+				}
+				alsoBefore = b
+				alsoMutated = bytes.Replace(alsoBefore, []byte(m.AlsoFrom), []byte(m.AlsoTo), 1)
+			}
+
 			if err := os.WriteFile(path, mutated, 0o644); err != nil {
 				t.Fatal(err)
+			}
+			if alsoPath != "" {
+				if err := os.WriteFile(alsoPath, alsoMutated, 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			defer func() {
 				if err := os.WriteFile(path, before, 0o644); err != nil {
 					t.Fatalf("restoring %s: %v", m.File, err)
+				}
+				if alsoPath != "" {
+					if err := os.WriteFile(alsoPath, alsoBefore, 0o644); err != nil {
+						t.Fatalf("restoring %s: %v", m.AlsoFile, err)
+					}
 				}
 			}()
 

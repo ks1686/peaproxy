@@ -24,8 +24,13 @@ func routingPromises() []Scenario {
 			Model:   "pea/economy",
 			Request: plain,
 			Deployments: []Deployment{
-				{ID: "cheap", Input: 1, Output: 2},
+				// The dear one is declared first on purpose. A scenario that
+				// declares the winner first passes whether or not the ranking
+				// works, because "take the first" happens to be right -- which
+				// is what let the mutation gate report this promise as covered
+				// when breaking the ranking changed nothing.
 				{ID: "dear", Input: 30, Output: 60},
+				{ID: "cheap", Input: 1, Output: 2},
 			},
 			WantAccount: "cheap",
 		},
@@ -85,8 +90,11 @@ func routingPromises() []Scenario {
 			Model:   "pea/economy",
 			Request: plain,
 			Deployments: []Deployment{
-				{ID: "known", Input: 5, Output: 5},
+				// Unpriced first, for the same reason the dear deployment is
+				// declared first above: the scenario has to fail when the
+				// comparison picks the wrong one.
 				{ID: "unpriced"},
+				{ID: "known", Input: 5, Output: 5},
 			},
 			Configure: func(c *config.Config) {
 				// Remove the quote for one account, leaving it unpriced.
