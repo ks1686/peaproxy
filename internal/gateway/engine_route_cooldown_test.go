@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/router"
 )
 
@@ -99,5 +100,41 @@ func TestAutomaticAccountWideCooldownExcludesEveryModel(t *testing.T) {
 		if c.Provider.ID == "acct-a" {
 			t.Fatal("acct-a ranked despite an active account-wide cooldown")
 		}
+	}
+}
+
+// An exhausted free tier does not recover in thirty seconds. Cooling it that
+// briefly re-tests a known-bad account every half minute, and on a model served
+// by that account alone the user gets the failure over and over instead of a
+// cooldown that actually reflects the situation.
+func TestEntitlementFailureGetsALongCooldown(t *testing.T) {
+	entitlement := adapter.HTTPError{Status: 402, Body: `{"error":{"message":"payment required, free tier exhausted"}}`}
+	if got := cooldownFor(entitlement); got != EntitlementCooldownTTL {
+		t.Errorf("a 402 entitlement cooled for %s, want %s", got, EntitlementCooldownTTL)
+	}
+	if EntitlementCooldownTTL <= CooldownTTL {
+		t.Error("the entitlement cooldown is not longer than the generic one, so nothing changed")
+	}
+}
+
+// The long cooldown must not swallow the errors that genuinely do clear in
+// seconds.
+func TestShortLivedFailuresKeepShortCooldowns(t *testing.T) {
+	rateLimit := adapter.HTTPError{Status: 429, Body: `{"error":{"message":"rate_limit_exceeded"}}`}
+	if got := cooldownFor(rateLimit); got >= EntitlementCooldownTTL {
+		t.Errorf("a rate limit cooled for %s; it is not an entitlement failure", got)
+	}
+	server := adapter.HTTPError{Status: 500, Body: "internal error"}
+	if got := cooldownFor(server); got != CooldownTTL {
+		t.Errorf("a 500 cooled for %s, want the generic %s", got, CooldownTTL)
+	}
+}
+
+// An explicit Retry-After from the provider is the provider telling us when to
+// return, and it outranks any opinion of ours.
+func TestRetryAfterOutranksOurEntitlementCooldown(t *testing.T) {
+	withRetry := adapter.HTTPError{Status: 402, Body: `{"error":{"message":"payment required"}}`, RetryAfter: 90 * time.Second}
+	if got := cooldownFor(withRetry); got != 90*time.Second {
+		t.Errorf("Retry-After was overridden: got %s, want 90s", got)
 	}
 }

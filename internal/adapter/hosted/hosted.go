@@ -227,8 +227,8 @@ var (
 		DefaultBaseURL: "https://api.cohere.ai/compatibility/v1",
 		DefaultTier:    catalog.TierPaid,
 		EnvKey:         "COHERE_API_KEY",
-		Notes:          "Cohere OpenAI compatibility layer. Trial keys are rate limited. Not live-verified by PeaProxy.",
-		Unverified:     true,
+		Notes:          "Cohere OpenAI compatibility layer. Trial keys are rate limited. Live-verified 2026-10-05: listing, chat, streaming termination and streaming tool calls.",
+		Unverified:     false,
 		Group:          GroupAPIKey,
 	}
 )

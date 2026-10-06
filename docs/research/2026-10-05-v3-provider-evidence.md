@@ -136,3 +136,33 @@ Cheapest first, most valuable first:
    leans on those tags harder than v2 ever did.
 
 Steps 1 and 3 cost nothing. They should happen before, not after, release.
+
+## Cohere — live-verified 2026-10-05
+
+Upgraded from `documented-only` to `live-verified`. Verified against a real
+trial account, through PeaProxy's own adapter path on an isolated instance
+(port 8931, own config directory, `apiKeyEnv` so the key never touched a file).
+The live proxy on 8317 was not involved.
+
+| Check | Result |
+| --- | --- |
+| `GET /models` discovery | 35 models returned; `command-r7b-12-2024` present |
+| Non-streaming chat | `finish_reason: stop`, content and usage returned |
+| Streaming chat | `finish_reason` present, `[DONE]` sentinel present |
+| Streaming with `tools` | `tool_calls` deltas emitted, terminal finish event emitted |
+| Usage reporting | `prompt_tokens`, `completion_tokens`, `prompt_tokens_details.cached_tokens` present |
+
+This is the first provider verified against a live account. It does not make the
+other 18 presets verified, and the marker stays on all of them.
+
+Note the D1 relevance: Cohere's OpenAI-compatible endpoint terminates its stream
+correctly, which is the behaviour the `openai_compat` adapter is now tested
+against. That test was written before this verification and passed against a
+mock; a live account agreeing with it is corroboration, not proof.
+
+### Trial allowance
+
+The trial key provides a bounded monthly call allowance. The exact number was
+taken from Cohere's documentation and **not** measured, because measuring it
+would mean spending it. It stays classified as a finite trial rather than a
+recurring free tier, which is the conservative reading.

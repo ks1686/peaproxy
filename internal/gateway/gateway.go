@@ -1632,10 +1632,22 @@ const transientCooldownTTL = 5 * time.Second
 
 // cooldownFor is how long an account is skipped after err: the upstream's
 // own reset hint when it sent one, else a short or normal window.
+// EntitlementCooldownTTL is how long an account stays out of rotation after the
+// provider says it may not be used at all.
+//
+// An exhausted free tier or a quota that has run out does not recover in thirty
+// seconds. Cooling for that long means the account is retried, fails the same
+// way, and cools again -- and where it is the only account serving a model, the
+// user sees the failure every half minute instead of once with a usable message.
+const EntitlementCooldownTTL = 15 * time.Minute
+
 func cooldownFor(err error) time.Duration {
 	var he adapter.HTTPError
 	if errors.As(err, &he) && he.RetryAfter > 0 {
 		return he.RetryAfter
+	}
+	if router.Classify(err) == router.FailoverEntitlement {
+		return EntitlementCooldownTTL
 	}
 	if router.Transient(err) {
 		return min(cooldownTTL, transientCooldownTTL)
