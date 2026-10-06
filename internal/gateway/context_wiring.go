@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"github.com/ks1686/peaproxy/internal/contextopt"
 	"github.com/ks1686/peaproxy/internal/contextstore"
@@ -88,7 +89,21 @@ var _ = contextstore.New
 // context optimization follows, since attaching reference material changes the
 // body the cache would otherwise have keyed on.
 func (g *Gateway) bodyFor(raw []byte, inst instance, session string) []byte {
-	return g.contextOptimize(g.promptBody(raw, inst.Provider.Adapter), inst, session)
+	out, _ := g.bodyForScoped(raw, inst, session)
+	return out
+}
+
+// bodyForScoped is bodyFor plus whether the bytes actually changed.
+//
+// The distinction matters for caching: an unchanged body genuinely is the same
+// request from any session and may be coalesced, while a body carrying this
+// session's artifacts is not the same request as an identical body from another
+// session. Reporting "did it change" beats inferring it from settings, which got
+// the exclusion wrong in both directions.
+func (g *Gateway) bodyForScoped(raw []byte, inst instance, session string) ([]byte, bool) {
+	base := g.promptBody(raw, inst.Provider.Adapter)
+	out := g.contextOptimize(base, inst, session)
+	return out, !bytes.Equal(out, base)
 }
 
 // streamRequested reports whether the caller asked for an incremental response.
@@ -100,4 +115,15 @@ func streamRequested(raw []byte) bool {
 		return false
 	}
 	return doc.Stream
+}
+
+// sessionScoped reports whether this request's upstream form depends on the
+// session rather than only on the caller's bytes.
+//
+// Context optimization injects that session's stored artifacts, and the proxy
+// tool appends retrieved passages, both without changing the caller's own body.
+// The response cache is keyed on the caller's body, so such a request must not
+// participate: a shared entry would leak one session's context to another.
+func (g *Gateway) sessionScoped(session string) bool {
+	return session != "" && g.contextOptimizationEnabled()
 }

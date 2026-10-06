@@ -578,7 +578,14 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			}
 			return once, onceErr
 		}
-		if coalesce && g.flight != nil {
+		// Coalescing is only safe when the bytes we send upstream are the
+		// caller's bytes. Once context optimization has injected this session's
+		// artifacts, an identical body from a different session is a different
+		// request, and a shared answer would leak one session's context to
+		// another. The test is on the produced body, not on the settings, so a
+		// session with nothing to carry still coalesces normally.
+		_, sessionSpecific := g.bodyForScoped(raw, inst, session)
+		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
 			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
 				once, err := callUpstream(runCtx)
