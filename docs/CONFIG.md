@@ -171,6 +171,14 @@ providers:
 
 Every field is optional and unset means "keep the adapter's own declaration" — only `tools`, `visionIn`, `imageOut` and `embeddings` can be corrected, because those are the ones an adapter asserts without being able to check. A declared `false` is believed in both directions: routing will not send a tool call there, and `/v1/models` and the health report say `no` rather than `unknown`, because you already know and PeaProxy has no reason to pretend otherwise.
 
+**A misspelled key here is ignored, not refused.** The loader does not reject
+unknown keys, so `capabilites:` validates as `ok` and the declaration it looks
+like it made is not in effect. That is a property of the whole config format, not
+of this block — turning it around would refuse existing configs that carry an
+unknown key today, which is a breaking change rather than a bug fix. Until that
+is decided, confirm a correction took effect by watching the health report change
+(`peaproxy health` lists the capabilities PeaProxy believes each account has).
+
 #### How the ledger is priced
 
 A provider's own `usage.cost` is the bill and is recorded as-is. Most providers publish none, so PeaProxy prices those calls itself from the published token counts and the deployment's quote, and reports that figure separately as an estimate (`estimatedUSD` on an event, `estimatedLast30DaysUSD` in the policy panel). An estimate is recorded only when the quote covers every component the call touched:
