@@ -114,7 +114,7 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		// free-only: a deployment already proven free costs nothing and cannot
 		// breach a ceiling. Anything else is gated, and a refusal is reported
 		// rather than silently dropped from the candidates.
-		if g.cfg.SpendCeiling() > 0 && !freeOnlyAllows(g, m) {
+		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
 			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
 				ceilingBlocked, ceilingReason = true, reason
 				continue
@@ -253,6 +253,17 @@ const PriceSourceConfig = "config"
 // survives so a surface promising safety can still tell an assertion from a
 // published figure.
 func freeOnlyAllows(g *Gateway, m catalog.Model) bool {
+	return deploymentProvenFree(g, m)
+}
+
+// deploymentProvenFree reports whether a deployment's price is verified and
+// zero.
+//
+// Both free-only routing and the spend ceiling need this same judgement, and
+// naming it separately keeps it honest: neither is allowed to treat an unpriced
+// deployment as free, and neither should have to infer that from a helper named
+// after one of its callers.
+func deploymentProvenFree(g *Gateway, m catalog.Model) bool {
 	p := priceForDeployment(g, m.AccountID, m.ID)
 	return p.Verified && p.Currency == economics.LedgerCurrency && p.Free()
 }
