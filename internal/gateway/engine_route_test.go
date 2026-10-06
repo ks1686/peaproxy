@@ -51,12 +51,44 @@ func TestExactNativeUnknownPassesThrough(t *testing.T) {
 	}
 }
 
+// A deployment that cannot do the tools a request needs is excluded. The stub
+// matters: openai_compat declares tool support, so without one this test would
+// pass for the wrong reason. It used to, and was pinning a bug -- see D9.
 func TestRequiredToolsFilterCandidates(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	for i := range gw.inst {
+		gw.inst[i].Adapter = noTools{Adapter: gw.inst[i].Adapter}
+	}
 	gw.cfg.AutomaticRoutes.Enabled = true
 	body := []byte(`{"model":"pea/auto","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`)
 	if _, _, err := gw.Chat(context.Background(), body); err == nil || !strings.Contains(err.Error(), "no eligible") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// noTools is a deployment that cannot run tool calls.
+type noTools struct{ adapter.Adapter }
+
+func (n noTools) Capabilities() adapter.Capabilities {
+	c := n.Adapter.Capabilities()
+	c.Tools = false
+	return c
+}
+
+// A tool-using request must reach an OpenAI-compatible provider. Before
+// openai_compat declared Tools, every such request on an automatic route failed
+// with "no eligible model", because the whole compatible roster was excluded
+// from tool-aware routing.
+func TestToolUsingRequestReachesAnOpenAICompatibleProvider(t *testing.T) {
+	hits := 0
+	gw := twoAccountGateway(t, countOK(&hits, "ok"), countOK(new(int), "b"))
+	gw.cfg.AutomaticRoutes.Enabled = true
+	body := []byte(`{"model":"pea/auto","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`)
+	if _, _, err := gw.Chat(context.Background(), body); err != nil {
+		t.Fatalf("a tool-using request on an automatic route failed: %v", err)
+	}
+	if hits == 0 {
+		t.Fatal("no upstream received the tool-using request")
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/contextstore"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/localruntime"
 	"github.com/ks1686/peaproxy/internal/oauth"
@@ -47,6 +48,11 @@ type Gateway struct {
 	reg    *adapter.Registry
 	inst   []instance
 	models []catalog.Model
+
+	// Artifacts holds context PeaProxy gathered earlier in the session. Nil
+	// means no context store is attached, and every consumer must treat that as
+	// "nothing to offer" rather than as empty.
+	Artifacts *contextstore.Store
 
 	// spendWindow supplies recorded spend for the spend ceiling. It is a field
 	// so the ceiling can be exercised without a usage store.
@@ -513,7 +519,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 				}
 				attempted.Store(true)
 				once, onceErr = admitted(g, runCtx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
-					return inst.Adapter.Chat(c, chatReq(inst, model, g.promptBody(raw, inst.Provider.Adapter), false, budget))
+					return inst.Adapter.Chat(c, chatReq(inst, model, g.bodyFor(raw, inst, session), false, budget))
 				})
 				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
 					break
@@ -632,7 +638,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
 			_, callErr = admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
-				return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, model, raw, true, budget), dest))
+				return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest))
 			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {

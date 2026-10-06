@@ -39,6 +39,11 @@ type OptimizationPrefs struct {
 	// Unset means off, and ephemeral storage is still per-session.
 	PersistentContext *bool `yaml:"persistentContext,omitempty" json:"persistentContext,omitempty"`
 
+	// ContextOptimization turns carried context on or off independently of the
+	// rest of the optimization policy. Unset follows Automatic, so the v3
+	// default is on and turning optimization off still turns this off.
+	ContextOptimization *bool `yaml:"contextOptimization,omitempty" json:"contextOptimization,omitempty"`
+
 	// FreeOnly refuses any deployment that cannot prove a call will not be
 	// billed. Unset means off, so an existing paid config is not broken.
 	FreeOnly *bool `yaml:"freeOnly,omitempty" json:"freeOnly,omitempty"`

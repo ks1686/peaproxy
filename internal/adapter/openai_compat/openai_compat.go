@@ -64,7 +64,13 @@ func (a *Adapter) SetProviderName(name string) { a.provider = name }
 
 func (a *Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
-		Chat:       true,
+		Chat:  true,
+		Tools: true,
+		// Tools is declared because the adapter forwards the caller's `tools`
+		// array untouched to an OpenAI-compatible endpoint, exactly as it
+		// forwards VisionIn and ImageOut. Leaving this false was not a cautious
+		// default: it silently excluded the whole OpenAI-compatible roster
+		// from every tool-aware decision, including proxy-owned tools.
 		Stream:     true,
 		VisionIn:   true,
 		ImageOut:   true,

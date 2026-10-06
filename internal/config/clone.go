@@ -45,6 +45,7 @@ func cloneOptimization(p OptimizationPrefs) OptimizationPrefs {
 	out.PersistentContext = clonePtr(p.PersistentContext)
 	out.FreeOnly = clonePtr(p.FreeOnly)
 	out.AllowAnonymousProviders = clonePtr(p.AllowAnonymousProviders)
+	out.ContextOptimization = clonePtr(p.ContextOptimization)
 	return out
 }
 
