@@ -52,11 +52,18 @@ func routingPromises() []Scenario {
 			Model:   "m",
 			Request: `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
 			Deployments: []Deployment{
-				// A second deployment serving a *different* model. Without it
-				// there is nothing to substitute one for, so this promise could
-				// not be broken however the routing behaved.
-				{ID: "only", Input: 50, Output: 50, Models: []string{"m"}},
+				// A second deployment serving a *different* model, declared
+				// first on purpose.
+				//
+				// Price ranking only runs for pea/economy, so any other route
+				// name -- including a plain model id that reached this path --
+				// takes the first candidate in catalog order. Declaring the
+				// deployment that answers the wrong model first is what makes a
+				// named model routed as if it were a route actually land on it.
+				// With the right-hand deployment declared first instead, the
+				// scenario passed under the very mutation meant to break it.
 				{ID: "other", Input: 1, Output: 1, Models: []string{"something-else"}},
+				{ID: "only", Input: 50, Output: 50, Models: []string{"m"}},
 			},
 			WantAccount: "only",
 		},
