@@ -140,3 +140,44 @@ func TestPartlyPricedDayCountsEveryCall(t *testing.T) {
 		t.Errorf("priced/total = %d/%d, want 4/10", w.Priced, w.Total)
 	}
 }
+
+// The ceiling is checked against measured spend plus what is still held. The
+// window between "the gateway returned" and "the event is recorded" is where a
+// hold released on return leaves the spend in neither total -- so the ceiling
+// reads as untouched and lets the next request through.
+//
+// Asserted on the total, not on the field: a fix that merely moved the dip from
+// reserved to USD would still pass a test watching either one.
+func TestSpendNeverDipsWhileACallIsSettledIntoItsEvent(t *testing.T) {
+	s := Open("")
+
+	// One call in flight, holding 5.00 against a 10.00 ceiling.
+	if _, ok := s.HoldSpend(7, func(SpendWindow) bool { return true }, 5.00); !ok {
+		t.Fatal("the hold was refused")
+	}
+	during := s.SpentInLastDays(7).USD
+	if during != 5.00 {
+		t.Fatalf("during the call the window reads %v, want 5.00", during)
+	}
+
+	cost := 4.80
+	s.Add(Event{
+		AccountID: "acct", Model: "m", TokensKnown: true, Costable: true, CostUSD: &cost,
+	})
+	after := s.SpentInLastDays(7).USD
+
+	// The hold has left and the measured cost has arrived. The total moves by the
+	// difference between the estimate and the truth, and never below the true
+	// cost at any point -- the dip is what a concurrent request would have read.
+	if after < cost {
+		t.Fatalf("the window reads %v after the event, below the %v actually spent: "+
+			"the hold left before the cost arrived", after, cost)
+	}
+	if got := s.Reserved(); got != 0 {
+		t.Fatalf("after the event the reservation still holds %v: a hold that is never released "+
+			"makes the ceiling refuse forever, which costs the user the proxy", got)
+	}
+	if after > 5.00 {
+		t.Fatalf("the window reads %v, above the 5.00 it was holding: the event and the hold both counted", after)
+	}
+}

@@ -128,6 +128,9 @@ type Store struct {
 	// persisted: a restart ends every in-flight request, so a reservation that
 	// outlived the process would refuse requests for money already spent.
 	reserved float64
+	// holds are the in-flight reservations waiting for their events, oldest
+	// first. See consumeHoldLocked for why they are not matched to an event.
+	holds []spendHold
 }
 
 // Open loads events from path if the file exists.
@@ -198,6 +201,19 @@ func (s *Store) Add(e Event) {
 		s.events = append(s.events, e)
 	}
 	s.noteDayLocked(e)
+	// A hold stops counting the moment its call is recorded, not the moment the
+	// gateway returns. Releasing it earlier opened a window in which the
+	// estimate had left reserved and the measured cost had not yet landed: spend
+	// was briefly in neither, and a concurrent request could pass a ceiling that
+	// it should have been refused by.
+	//
+	// Holds are released oldest-first rather than matched to this event. The
+	// reserved total and the ceiling it feeds are both global, so what matters is
+	// that one hold leaves for one event, not which one. Matching would need a
+	// key, and the keys disagree: a hold is taken against the deployment's model
+	// while the event records the name the client sent, which for an automatic
+	// route is the route name.
+	s.consumeHoldLocked()
 	s.flushLocked()
 	s.appendLogLocked(e)
 }
@@ -587,7 +603,54 @@ func (s *Store) HoldSpend(days int, decide func(SpendWindow) bool, usd float64) 
 	}
 	w.USD += usd
 	s.reserved += usd
+	s.holds = append(s.holds, spendHold{usd: usd, at: time.Now()})
+	s.sweepHoldsLocked()
 	return w, true
+}
+
+// spendHold is one in-flight request's reservation, waiting for the event that
+// records what it actually cost.
+type spendHold struct {
+	usd float64
+	at  time.Time
+}
+
+// holdExpiry bounds how long a hold can outlive the call that took it.
+//
+// Normally a hold is released by the event for its call. Some calls never record
+// one -- a request rejected after admission, or an embedder using the gateway
+// directly -- and a hold that waited forever would make the ceiling refuse
+// forever, which fails closed into a broken proxy rather than an expensive one.
+const holdExpiry = 2 * time.Minute
+
+// consumeHoldLocked releases the oldest hold, which the newest event has paid
+// for.
+func (s *Store) consumeHoldLocked() {
+	if len(s.holds) == 0 {
+		return
+	}
+	s.reserved -= s.holds[0].usd
+	s.holds = s.holds[1:]
+	if s.reserved < 0 {
+		s.reserved = 0
+	}
+}
+
+// sweepHoldsLocked releases holds whose call never recorded an event.
+func (s *Store) sweepHoldsLocked() {
+	cutoff := time.Now().Add(-holdExpiry)
+	kept := s.holds[:0]
+	for _, h := range s.holds {
+		if h.at.Before(cutoff) {
+			s.reserved -= h.usd
+			continue
+		}
+		kept = append(kept, h)
+	}
+	s.holds = kept
+	if s.reserved < 0 {
+		s.reserved = 0
+	}
 }
 
 // SpentInLastDays reports recorded spend over the last n calendar days,
@@ -652,28 +715,11 @@ func (s *Store) windowLocked(n int) SpendWindow {
 // its event, and clamping here keeps a stale settlement from creating credit the
 // next request would happily spend.
 //
-// There is deliberately no standalone Reserve. Holding spend without deciding
-// against the ceiling is the fail-open bug the hold exists to close -- a reserve
-// that skips the check can be called by anyone, from anywhere, and would look
-// like the real thing to a reader skimming its name. A reservation is taken by
-// HoldSpend, which reads the total and takes it in one critical section, and
-// released here.
-func (s *Store) Settle(usd float64) {
-	if usd <= 0 {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reserved -= usd
-	if s.reserved < 0 {
-		s.reserved = 0
-	}
-}
-
 // Reserved reports the spend currently held by in-flight requests.
 func (s *Store) Reserved() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.sweepHoldsLocked()
 	return s.reserved
 }
 

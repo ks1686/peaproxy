@@ -132,10 +132,14 @@ func TestCeilingStopsConcurrentRequestsOvershooting(t *testing.T) {
 	}
 }
 
-// A reservation is held for the call and given back when it finishes. One that
-// is never released refuses every request for the rest of the window, which is
-// a different way of spending the user's money: it costs them the proxy.
-func TestReservationIsReleasedWhenTheCallCompletes(t *testing.T) {
+// The hold outlives the call, and is released by the event that records what the
+// call cost.
+//
+// Releasing it when the gateway returned left a window: the estimate had left
+// reserved and the measured cost had not yet landed, so for that window the
+// spend was in neither total and a concurrent request could pass a ceiling it
+// should have been refused by. That window is the whole gap.
+func TestAHoldIsReleasedByItsEventNotByTheCallReturning(t *testing.T) {
 	b := newBlockingGateway(t, 100, 1.5)
 	done := make(chan error, 1)
 	go func() {
@@ -143,19 +147,36 @@ func TestReservationIsReleasedWhenTheCallCompletes(t *testing.T) {
 		done <- err
 	}()
 	<-b.arrived
-	if b.store.Reserved() <= 0 {
+	held := b.store.Reserved()
+	if held <= 0 {
 		t.Fatal("nothing was held while the request was upstream")
 	}
 	b.unblock()
 	if err := <-done; err != nil {
-		t.Fatalf("first request: %v", err)
-	}
-	if got := b.store.Reserved(); got != 0 {
-		t.Fatalf("a completed request still holds %v", got)
+		t.Fatalf("the in-flight request failed: %v", err)
 	}
 
-	// With nothing measured yet and nothing held, the same request is allowed
-	// again: the ceiling reads the ledger, and the ledger is empty again.
+	// The call is over. Nothing has been recorded yet, so the reservation is
+	// still doing its job: it is the only thing standing between the next
+	// request and a ceiling that would read as untouched.
+	if got := b.store.Reserved(); got != held {
+		t.Fatalf("the hold was released when the call returned: reserved %v, want %v.\n"+
+			"Between here and the event, the spend is in neither total.", got, held)
+	}
+
+	// Recording the call pays the hold back.
+	cost := 0.001
+	b.store.Add(usage.Event{
+		AccountID: "acct", Model: "m", PromptTokens: 100, CompletionTokens: 10,
+		TokensKnown: true, Costable: true, CostUSD: &cost,
+	})
+	if got := b.store.Reserved(); got != 0 {
+		t.Fatalf("the event did not release the hold: reserved %v, want 0", got)
+	}
+
+	// The recorded call is priced, so the ceiling can read it. The next request
+	// is allowed because the spend is real and known, not because the machinery
+	// lost track of it.
 	_, _, err := b.gw.Chat(context.Background(), b.body(10))
 	if err != nil {
 		t.Fatalf("a settled reservation still blocked the next request: %v", err)
