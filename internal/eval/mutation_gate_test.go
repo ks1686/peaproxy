@@ -3,6 +3,7 @@ package eval
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -207,6 +208,57 @@ func routingMutations() []Mutation {
 
 // repoRoot walks up from the test's working directory to the module root, so the
 // harness works from a worktree as readily as from a checkout.
+// sandbox copies the working tree so the mutations never touch the real one.
+//
+// This was a live bug: `go test ./...` compiles every package in parallel, so
+// the eval package rewriting internal/usage/usage.go on disk meant the usage
+// package could compile the mutant instead of the source. On CI it did, and five
+// tests in internal/usage failed on a branch where every one of them passes
+// locally -- a failure that looked like a regression in the spend ledger and
+// was nothing of the kind. Serialising this test does not help; the other
+// packages are compiled by `go test`, not by anything under this test's
+// control.
+//
+// The copy is of the working tree, not of HEAD, so a developer gets a result
+// about the code they are editing rather than about the last commit.
+func sandbox(t *testing.T) string {
+	t.Helper()
+	src := repoRoot(t)
+	dst := t.TempDir()
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		// .git is large and irrelevant; node_modules is not Go source.
+		if d.IsDir() {
+			if rel == ".git" || rel == "node_modules" || strings.HasPrefix(rel, "scripts/node_modules") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		// Everything else comes too, because //go:embed needs it: an embedded
+		// asset left out of the copy fails the build, and a sandbox that cannot
+		// build proves nothing about the mutation.
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copying the tree into a sandbox: %v", err)
+	}
+	return dst
+}
+
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -235,11 +287,7 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 	if testing.Short() {
 		t.Skip("mutation gate recompiles the tree per scenario; skipped under -short")
 	}
-	// Serial on purpose: this edits source files other packages are compiled
-	// from, and two of these running at once would corrupt each other's view of
-	// the tree. So no t.Parallel here, deliberately.
-
-	root := repoRoot(t)
+	root := sandbox(t)
 	mutations := routingMutations()
 
 	// The coverage claim is the whole point of this file, so it is asserted
