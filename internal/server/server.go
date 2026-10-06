@@ -79,6 +79,7 @@ func New(opts Options) *Server {
 	mux.HandleFunc("GET /admin/health", admin(s.handleHealth))
 	mux.HandleFunc("GET /admin/quota", admin(s.handleQuota))
 	mux.HandleFunc("GET /admin/presets", admin(s.handlePresets))
+	mux.HandleFunc("GET /admin/policy", admin(s.handlePolicy))
 	mux.HandleFunc("GET /admin/accounts", admin(s.handleAccounts))
 	mux.HandleFunc("POST /admin/accounts", admin(s.handleAddAccount))
 	mux.HandleFunc("DELETE /admin/accounts/{id}", admin(s.handleDeleteAccount))

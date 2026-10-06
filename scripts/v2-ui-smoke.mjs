@@ -158,6 +158,27 @@ try {
     throw new Error("preset dropdown rendered a label as markup");
   }
   console.log(`accounts dropdown: ${groups.length} groups, ${labels.length} presets`);
+
+  // The cost policy panel exists so an opinionated default is visible. A user
+  // who cannot see that free-only or a spend ceiling is on has no way to turn
+  // it off.
+  await page.getByRole("button", { name: "Policy" }).click();
+  const policy = page.locator("#policy-body");
+  await policy.getByText("Automatic optimizations").waitFor({ timeout: 10000 });
+  const policyText = await policy.innerText();
+  for (const must of ["Free only", "Context optimization", "Local assistant", "Spent (30d)"]) {
+    if (!policyText.includes(must)) {
+      throw new Error(`policy panel is missing ${must}: ${policyText}`);
+    }
+  }
+  // An unset ceiling must read as unset, not as a zero budget.
+  if (!policyText.includes("none set")) {
+    throw new Error("an unconfigured spend ceiling is not reported as unset: " + policyText);
+  }
+  if (await page.locator("#policy-body img, #policy-body script").count()) {
+    throw new Error("policy panel rendered content as markup");
+  }
+  console.log("policy panel rendered");
   if (!labels.some((l) => l.includes("(not verified)"))) {
     throw new Error("no preset carries the unverified marker");
   }

@@ -52,6 +52,11 @@ func (g *Gateway) contextOptimize(raw []byte, inst instance, session string) []b
 	return out
 }
 
+// ContextOptimizationEnabled reports whether carried context runs at all. It
+// is exported so the admin surface can show the resolved value rather than the
+// raw nullable one.
+func (g *Gateway) ContextOptimizationEnabled() bool { return g.contextOptimizationEnabled() }
+
 // contextOptimizationEnabled reports whether context optimization runs at all.
 //
 // It follows the v3 optimization policy by default, so a user who configured
