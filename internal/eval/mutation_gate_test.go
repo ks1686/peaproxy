@@ -59,10 +59,14 @@ type Mutation struct {
 // coverage; an explicit list with a reason is a debt someone can close, and it
 // cannot grow by accident.
 var notYetBroken = map[string]string{
-	"an explicitly selected model is never substituted": "the harness gives every deployment the same model id, so there is nothing to substitute one for; " +
-		"the scenario needs a second deployment listing a different id before a mutation can bite",
 	"spend measured from tokens alone does not satisfy a ceiling": "SeedUsage builds events directly, so the scenario never reaches the parser this mutation breaks; " +
 		"the parser side is covered by TestPartialUsageIsNotPriced in internal/usage",
+	"an explicitly selected model is never substituted": "UNRESOLVED. Inverting the exact-vs-automatic branch changes nothing here: with a cheaper " +
+		"second deployment serving a different id -- and, probed, serving the same id -- the " +
+		"outcome is unchanged, so that branch is not the guard and the real one was not identified. " +
+		"The scenario itself is no longer vacuous (it now has something to substitute for the named " +
+		"model, via Deployment.Models), but until the guard is known no honest mutation exists. " +
+		"Recorded rather than dressed up with a mutation that proves nothing",
 	"an unknown price never wins over a known one": "three guards stand in the way -- automaticKind filters an unpriced deployment out of economy " +
 		"candidacy, cheapest skips it while ranking, and Cheaper refuses both an unpriced challenger and " +
 		"an unpriced incumbent. Breaking the first two still leaves the promise intact, which is defence " +

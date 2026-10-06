@@ -52,7 +52,11 @@ func routingPromises() []Scenario {
 			Model:   "m",
 			Request: `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
 			Deployments: []Deployment{
-				{ID: "only", Input: 50, Output: 50},
+				// A second deployment serving a *different* model. Without it
+				// there is nothing to substitute one for, so this promise could
+				// not be broken however the routing behaved.
+				{ID: "only", Input: 50, Output: 50, Models: []string{"m"}},
+				{ID: "other", Input: 1, Output: 1, Models: []string{"something-else"}},
 			},
 			WantAccount: "only",
 		},

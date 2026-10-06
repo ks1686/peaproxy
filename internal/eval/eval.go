@@ -40,6 +40,22 @@ type Deployment struct {
 	// claims to cover is a promise nobody can break -- which is worse than no
 	// promise, because the gate reports it as covered.
 	Tools *bool
+	// Models are the model ids this deployment serves, advertised by its
+	// /v1/models. An empty list means the single id "m".
+	//
+	// It exists so a scenario can offer a deployment serving a *different* model
+	// and catch one being substituted for the model the client named. With every
+	// deployment serving the same id there was nothing to substitute one for, so
+	// the promise could not be broken no matter what the routing did.
+	Models []string
+}
+
+// modelIDs is what a deployment advertises.
+func (d Deployment) modelIDs() []string {
+	if len(d.Models) == 0 {
+		return []string{"m"}
+	}
+	return d.Models
 }
 
 // Boolp is the scenario-facing way to state a capability, so a table of
@@ -104,8 +120,12 @@ func Run(t *testing.T, s Scenario) Result {
 		hits := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/v1/models" {
+				var listed []map[string]string
+				for _, id := range d.modelIDs() {
+					listed = append(listed, map[string]string{"id": id})
+				}
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"object": "list", "data": []map[string]string{{"id": "m"}},
+					"object": "list", "data": listed,
 				})
 				return
 			}
@@ -150,8 +170,10 @@ func Run(t *testing.T, s Scenario) Result {
 	}
 	for _, d := range s.Deployments {
 		in, out := d.Input, d.Output
-		cfg.AutomaticRoutes.Prices[d.ID+"/m"] = config.PriceQuote{
-			Input: &in, Output: &out, Verified: true,
+		for _, id := range d.modelIDs() {
+			cfg.AutomaticRoutes.Prices[d.ID+"/"+id] = config.PriceQuote{
+				Input: &in, Output: &out, Verified: true,
+			}
 		}
 	}
 	if s.Configure != nil {
