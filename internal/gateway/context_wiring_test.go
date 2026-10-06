@@ -342,6 +342,10 @@ func TestGatewayAlwaysHasAnArtifactStore(t *testing.T) {
 // upstream request depend on the session's stored artifacts. An identical body
 // from a different session is then a different request, and sharing an answer
 // would leak one session's retrieved context to another.
+//
+// The earlier version of this test only logged when the body changed, so it
+// could not fail. It asserts the decision, and drives two sessions through the
+// real caching path.
 func TestSessionTransformedRequestIsNotSharedThroughTheCacheKey(t *testing.T) {
 	stub := func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
@@ -354,26 +358,27 @@ func TestSessionTransformedRequestIsNotSharedThroughTheCacheKey(t *testing.T) {
 	}
 	raw := []byte(`{"model":"m","messages":[{"role":"user","content":"where is staging"}]}`)
 
-	// Nothing stored yet: the body is unchanged, so coalescing stays correct.
+	// Nothing stored: the body is unchanged, so caching stays correct.
 	empty := twoAccountGateway(t, stub, stub)
 	empty.cfg.Optimization.ContextOptimization = boolp(true)
-	inst := instance{}
-	if _, changed := empty.bodyForScoped(raw, inst, "s1"); changed {
-		t.Error("an empty artifact store still marked the request session-specific, disabling coalescing for nothing")
+	if empty.sessionSpecificBody(raw, "s1") {
+		t.Error("an empty artifact store still marked the request session-specific, disabling caching for nothing")
 	}
 
-	// With a stored artifact the body differs, and must not be shared.
+	// A stored artifact that prefetch will actually surface changes the body,
+	// and that request must be excluded from both caches.
 	stored := twoAccountGateway(t, stub, stub)
 	stored.cfg.Optimization.ContextOptimization = boolp(true)
-	if err := stored.Artifacts.Put("s1", contextstore.Artifact{Key: "k", Body: []byte("staging lives on 8443")}); err != nil {
+	if err := stored.Artifacts.Put("s1", contextstore.Artifact{Key: "k", Body: []byte("the staging cluster runs on port 8443")}); err != nil {
 		t.Fatal(err)
 	}
-	pref := contextopt.Prefetch{Store: stored.Artifacts, Session: "s1"}
-	_ = pref
-	if _, changed := stored.bodyForScoped(raw, inst, "s1"); changed {
-		// Prefetch only fires when the client has no tools; with an empty
-		// message set there may be nothing to prepend. Assert the guard exists
-		// rather than which branch this particular body takes.
-		t.Log("this body was transformed and will not be coalesced")
+	carrying := []byte(`{"model":"m","messages":[{"role":"user","content":"where is the staging cluster"}]}`)
+	if !stored.sessionSpecificBody(carrying, "s1") {
+		t.Fatal("a request carrying a retrievable session artifact was still reported cacheable; the cross-session leak remains")
+	}
+
+	// Another session's identical body must not be served this one's answer.
+	if stored.sessionSpecificBody(carrying, "s2") {
+		t.Error("a different session's identical body was marked session-specific without its own artifacts")
 	}
 }

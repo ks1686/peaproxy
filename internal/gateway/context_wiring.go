@@ -124,6 +124,21 @@ func streamRequested(raw []byte) bool {
 // tool appends retrieved passages, both without changing the caller's own body.
 // The response cache is keyed on the caller's body, so such a request must not
 // participate: a shared entry would leak one session's context to another.
+// sessionSpecificBody reports whether the bytes PeaProxy will send upstream
+// differ from the caller's bytes for this request.
+//
+// Testing the produced body rather than the settings keeps the exclusion as
+// narrow as the behaviour that requires it: a session with nothing to carry
+// still caches normally, and only a request that genuinely carries session
+// context is kept out of every cache.
+func (g *Gateway) sessionSpecificBody(raw []byte, session string) bool {
+	if !g.sessionScoped(session) {
+		return false
+	}
+	_, changed := g.bodyForScoped(raw, instance{}, session)
+	return changed
+}
+
 func (g *Gateway) sessionScoped(session string) bool {
 	return session != "" && g.contextOptimizationEnabled()
 }
