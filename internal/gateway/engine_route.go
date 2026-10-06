@@ -36,7 +36,8 @@ func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (
 		if err != nil {
 			return model, cands, session, err
 		}
-		if err := g.refuseIfForbidden(cands, model); err != nil {
+		cands, err = g.forbiddenFiltered(cands, model)
+		if err != nil {
 			return model, nil, session, err
 		}
 		return model, cands, session, nil
@@ -47,39 +48,51 @@ func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (
 	return g.pickAutomatic(ctx, raw, model)
 }
 
-// refuseIfForbidden applies the two money guards to a deployment set that
-// routing chose without consulting them.
+// forbiddenFiltered applies the two money guards to a deployment set and returns
+// the candidates still allowed to serve the request.
 //
-// freeOnly and the spend ceiling were checked only where PeaProxy picked the
-// deployment itself. A client that named the model outright took a different
-// path, and that path checked neither: the one switch a user set to protect
-// their account could be walked past by naming a model. Both are refusals to
-// spend, and a refusal does not become a preference because the request did not
-// use a route.
-//
-// A deployment proven free, or one that runs on this machine, costs nothing and
-// cannot breach either.
-func (g *Gateway) refuseIfForbidden(cands []instance, model string) error {
+// It filters rather than refusing outright, for the same reason automatic
+// selection filters: one exact model can be offered by several accounts, and a
+// paid account first in the list says nothing about the free account behind it.
+// Refusing on the first forbidden candidate turned "this account costs money"
+// into "this model is unusable", which is a different and much worse claim.
+func (g *Gateway) forbiddenFiltered(cands []instance, model string) ([]instance, error) {
 	if !g.cfg.FreeOnly() && g.cfg.SpendCeiling() <= 0 {
-		return nil
+		return cands, nil
 	}
+	allowed := make([]instance, 0, len(cands))
+	var blockedReason string
 	for _, inst := range cands {
 		m := g.deploymentFor(inst.Provider.ID, model)
 		if g.runsOnThisMachine(inst.Provider.ID, m.ID) {
+			allowed = append(allowed, inst)
 			continue
 		}
 		if g.cfg.FreeOnly() && !deploymentProvenFree(g, m) {
-			return fmt.Errorf(
-				"refusing to serve %q on %s: optimization.freeOnly is on and this deployment has no verified zero price. Name a free deployment, or turn freeOnly off to spend",
-				model, inst.Provider.ID)
+			if blockedReason == "" {
+				blockedReason = fmt.Sprintf(
+					"refusing to serve %q on %s: optimization.freeOnly is on and this deployment has no verified zero price. Name a free deployment, or turn freeOnly off to spend",
+					model, inst.Provider.ID)
+			}
+			continue
 		}
 		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
 			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
-				return errors.New(reason)
+				if blockedReason == "" {
+					blockedReason = reason
+				}
+				continue
 			}
 		}
+		allowed = append(allowed, inst)
 	}
-	return nil
+	if len(allowed) == 0 {
+		if blockedReason != "" {
+			return nil, errors.New(blockedReason)
+		}
+		return nil, fmt.Errorf("no account can serve %q", model)
+	}
+	return allowed, nil
 }
 
 // anonymousDeployment reports whether a deployment has no account attached.

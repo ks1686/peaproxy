@@ -173,8 +173,10 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	cfg := s.gw.Config()
 
 	spent := usage.SpendWindow{}
+	reserved := 0.0
 	if u := s.gw.Usage; u != nil {
 		spent = u.SpentInLastDays(30)
+		reserved = u.Reserved()
 	}
 
 	ceiling := any(nil)
@@ -190,7 +192,7 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 			"spendCeilingUSD":        ceiling,
 			"spentLast30DaysUSD":     spent.USD,
 			"estimatedLast30DaysUSD": spent.EstimatedUSD,
-			"inFlightReservedUSD":    s.gw.Usage.Reserved(),
+			"inFlightReservedUSD":    reserved,
 			"pricedCallsLast30Days":  spent.Priced,
 			"totalCallsLast30Days":   spent.Total,
 			"spendMeasurable":        spent.Priced == spent.Total,

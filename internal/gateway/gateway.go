@@ -1244,7 +1244,18 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			}
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
-			err := noteStream(guard, flushAfter(dest, nr.ResponsesStream(attemptCtx, jsonx.SetStream(raw, true), dest)))
+			// The hold and the slot are taken around the upstream call, not
+			// around the write to the client: this branch streams straight from
+			// the provider to dest, so calling the adapter directly left the
+			// native Responses stream outside both guards that every other
+			// attempt goes through.
+			streamBody := jsonx.SetStream(raw, true)
+			var streamErr error
+			_, streamErr = admitted(g, attemptCtx, inst.Provider.ID, model, streamBody, func(c context.Context) (struct{}, error) {
+				streamErr = noteStream(guard, flushAfter(dest, nr.ResponsesStream(c, streamBody, dest)))
+				return struct{}{}, streamErr
+			})
+			err := streamErr
 			stop()
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)

@@ -283,20 +283,27 @@ func AppendToolResults(body []byte, calls []ToolCall, results map[string]string)
 
 // assistantToolCallTurn builds the assistant message that issued the calls.
 //
-// Arguments are re-encoded as an object rather than passed through as the
-// model's string, because the wire format for tool_call arguments is a JSON
-// object and a server that parses them strictly rejects a quoted string. The
-// query PeaProxy answered with is what goes back, so the model's own turn stays
-// truthful about what it asked for.
+// Arguments go back as a JSON-encoded *string*, which is what the Chat
+// Completions wire format carries: "arguments": "{\"query\": \"...\"}". The
+// object is encoded into that string, never written as a bare object. The rest of
+// this repository models the field as a string for the same reason (see
+// internal/translate/claude.go), and a server that parses tool_call arguments
+// strictly rejects the other shape -- so emitting an object here would
+// reintroduce on this path exactly the rejection the assistant turn exists to
+// fix.
+//
+// The query PeaProxy answered with is what goes back, so the model's own turn
+// stays truthful about what it asked for.
 func assistantToolCallTurn(calls []ToolCall) (json.RawMessage, bool) {
 	if len(calls) == 0 {
 		return nil, false
 	}
 	type fn struct {
-		Name      string `json:"name"`
-		Arguments struct {
-			Query string `json:"query"`
-		} `json:"arguments"`
+		Name string `json:"name"`
+		// Arguments is the encoded object carried as a string, per the wire
+		// format. It is not a nested struct: that serialises to a bare object
+		// and strict servers reject it.
+		Arguments string `json:"arguments"`
 	}
 	type call struct {
 		ID       string `json:"id"`
@@ -308,9 +315,17 @@ func assistantToolCallTurn(calls []ToolCall) (json.RawMessage, bool) {
 		ToolCalls []call `json:"tool_calls"`
 	}{Role: "assistant"}
 	for _, c := range calls {
-		f := fn{Name: ToolName}
-		f.Arguments.Query = c.Query
-		turn.ToolCalls = append(turn.ToolCalls, call{ID: c.ID, Type: "function", Function: f})
+		encoded, err := json.Marshal(struct {
+			Query string `json:"query"`
+		}{Query: c.Query})
+		if err != nil {
+			return nil, false
+		}
+		turn.ToolCalls = append(turn.ToolCalls, call{
+			ID:       c.ID,
+			Type:     "function",
+			Function: fn{Name: ToolName, Arguments: string(encoded)},
+		})
 	}
 	raw, err := json.Marshal(turn)
 	if err != nil {

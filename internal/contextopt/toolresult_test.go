@@ -93,11 +93,47 @@ func TestSeveralCallsShareOneAssistantTurn(t *testing.T) {
 
 // The arguments are sent back as a JSON object, not the raw string the model
 // wrote. A server that parses tool_call arguments strictly rejects a string.
-func TestAppendedCallCarriesObjectArguments(t *testing.T) {
+// Chat Completions carries tool-call arguments as a JSON-encoded *string*, not
+// as an object. Writing the bare object is what a strict OpenAI-compatible
+// server rejects, so the shape is asserted from the wire format rather than
+// from what the implementation happens to emit.
+func TestAppendedCallCarriesArgumentsAsAnEncodedString(t *testing.T) {
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"q"}]}`)
 	out := AppendToolResults(body, []ToolCall{{ID: "a", Query: "needle"}}, map[string]string{"a": "1"})
-	if !strings.Contains(string(out), `"arguments":{"query":"needle"}`) {
-		t.Fatalf("arguments were not sent as an object: %s", out)
+
+	var wire struct {
+		Messages []struct {
+			Role      string `json:"role"`
+			ToolCalls []struct {
+				Function struct {
+					Arguments json.RawMessage `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, m := range wire.Messages {
+		for _, tc := range m.ToolCalls {
+			found = true
+			var args string
+			if err := json.Unmarshal(tc.Function.Arguments, &args); err != nil {
+				t.Fatalf("arguments is not a JSON-encoded string, it is %s: a strict server rejects that",
+					tc.Function.Arguments)
+			}
+			var decoded map[string]string
+			if err := json.Unmarshal([]byte(args), &decoded); err != nil {
+				t.Fatalf("arguments string does not decode as an object: %v", err)
+			}
+			if decoded["query"] != "needle" {
+				t.Fatalf("arguments carried %q, want the query PeaProxy answered", decoded["query"])
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no assistant tool call was appended: %s", out)
 	}
 }
 
