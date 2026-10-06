@@ -103,7 +103,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | **Automatic cost routing** | Shipped in v3. `pea/auto`, `pea/economy`, `pea/free`, `pea/local` choose a live model for cost and capability **on by default**. Exact model names are never substituted. Full behaviour and rollback: [docs/V3.md](docs/V3.md) |
 | **Spend ceiling** | Shipped in v3. `optimization.spendCeilingUSD` caps spend in a rolling window and **fails closed** when spend cannot be measured |
 | **Free-only routing** | Shipped in v3. `optimization.freeOnly` refuses any deployment that cannot prove a call stays free |
-| **Carried context (`pea_search`)** | Shipped in v3, bounded at 4 rounds. Only for tool-using, non-streaming requests — a streaming client would have to be buffered. Toolless clients get pre-retrieval instead |
+| **Carried context (`pea_search`)** | Shipped in v3, bounded at 4 rounds. Only for tool-using, non-streaming requests — a streaming client would have to be buffered. Toolless clients get pre-retrieval instead. Fixed in 3.0.1: the artifact store was not being constructed, so this silently did nothing |
 | **Local assistant** | Shipped in v3, **off by default**. Loopback only; no setting allows anything else |
 | **Routing promotion gates** | Shipped in v3. `internal/eval` runs eight routing promises in CI; cost *and* equivalence are asserted |
 | **Policy inspector** | Shipped in v3. `GET /admin/policy` plus a UI panel; unset ceiling reports `null`, never `0` |

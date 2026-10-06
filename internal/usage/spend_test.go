@@ -98,3 +98,41 @@ func TestSpentInLastDaysRejectsNonPositiveWindows(t *testing.T) {
 }
 
 func f64(v float64) *float64 { return &v }
+
+// A day with no priced calls still had calls. Dropping the whole day because
+// its cost is unknown made `priced` equal `total` at zero, which the spend
+// ceiling read as "measurably nothing spent" -- so a ceiling failed open
+// precisely when nobody had priced anything.
+func TestUnpricedDayStillCountsItsCalls(t *testing.T) {
+	s := &Store{days: []DayRollup{
+		{Day: "2026-10-06", Calls: 5, CostCalls: 0},
+	}}
+
+	usd, priced, total := s.SpentInLastDays(1)
+	if total != 5 {
+		t.Errorf("total calls = %d, want 5; unpriced calls were dropped entirely", total)
+	}
+	if priced == total {
+		t.Errorf("priced (%d) == total (%d); an unmeasured day looks measurably free", priced, total)
+	}
+	if usd != 0 {
+		t.Errorf("usd = %v, want 0 for an unpriced day", usd)
+	}
+}
+
+// A day that is partly priced contributes both sides, so the caller can tell
+// how much of the spend is actually known.
+func TestPartlyPricedDayCountsEveryCall(t *testing.T) {
+	cost := 1.5
+	s := &Store{days: []DayRollup{
+		{Day: "2026-10-06", Calls: 10, CostCalls: 4, CostUSD: &cost},
+	}}
+
+	usd, priced, total := s.SpentInLastDays(1)
+	if usd != 1.5 {
+		t.Errorf("usd = %v, want 1.5", usd)
+	}
+	if priced != 4 || total != 10 {
+		t.Errorf("priced/total = %d/%d, want 4/10", priced, total)
+	}
+}

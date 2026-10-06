@@ -147,6 +147,11 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	// it counts spend PeaProxy actually recorded. Leaving this nil would make
 	// the ceiling see a permanent zero and never fire.
 	g.SetUsage(g.Usage)
+	// The artifact store is what carried context reads from. It was left nil,
+	// and every context path treats nil as "skip", so carried context and
+	// pea_search never ran in a real proxy while the docs described them as
+	// on by default. Constructing it here is what makes the feature real.
+	g.Artifacts = newArtifactStore(&cfg)
 	if err := g.rebuild(); err != nil {
 		return nil, err
 	}
@@ -573,7 +578,14 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			}
 			return once, onceErr
 		}
-		if coalesce && g.flight != nil {
+		// Coalescing is only safe when the bytes we send upstream are the
+		// caller's bytes. Once context optimization has injected this session's
+		// artifacts, an identical body from a different session is a different
+		// request, and a shared answer would leak one session's context to
+		// another. The test is on the produced body, not on the settings, so a
+		// session with nothing to carry still coalesces normally.
+		_, sessionSpecific := g.bodyForScoped(raw, inst, session)
+		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
 			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
 				once, err := callUpstream(runCtx)
@@ -2406,4 +2418,19 @@ func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
 	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
 	return g.persistAndRefresh(mine)
+}
+
+// newArtifactStore builds the session-scoped artifact store the configuration
+// asks for.
+//
+// It is constructed unconditionally rather than behind an enable flag: nil is
+// what made every context path silently skip, so a store that is always present
+// is the safer default. Context optimization still has to be switched on before
+// anything is stored or searched.
+//
+// Disk persistence is not implemented in the store, so this is memory-only.
+// optimization.persistentContext remains unset-honoured but not yet honoured;
+// that gap is documented rather than faked here.
+func newArtifactStore(_ *config.Config) *contextstore.Store {
+	return contextstore.New(contextstore.Options{})
 }
