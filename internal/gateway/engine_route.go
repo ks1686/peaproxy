@@ -40,6 +40,10 @@ func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (
 		if err != nil {
 			return model, nil, session, err
 		}
+		cands, err = g.requirementsFiltered(ctx, cands, model)
+		if err != nil {
+			return model, nil, session, err
+		}
 		return model, cands, session, nil
 	}
 	if !g.cfg.AutomaticRoutes.Enabled {
@@ -56,6 +60,64 @@ func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (
 // paid account first in the list says nothing about the free account behind it.
 // Refusing on the first forbidden candidate turned "this account costs money"
 // into "this model is unusable", which is a different and much worse claim.
+// requirementsFiltered drops deployments that cannot do what the request asked
+// for, naming the model rather than the route.
+//
+// Without this, naming a model outright was a way around every capability the
+// automatic path enforces. A provider declared tools: false would still be handed
+// a tool-calling request, and the tool call would be silently lost at an endpoint
+// that accepts the array and ignores it -- the same loss as sending it nowhere,
+// except the client is told it succeeded.
+//
+// It is the v3.0.1 finding that exact-model routing bypasses freeOnly and the
+// ceiling, applied to the capability overrides v3.0.4 added. Those two were
+// fixed for this path; this one was missed, and nothing in the test suite noticed
+// because every scenario exercising a capability went through a route.
+func (g *Gateway) requirementsFiltered(ctx context.Context, cands []instance, model string) ([]instance, error) {
+	req, _ := requestmeta.FromContext(ctx)
+	if !req.Requirements.Tools && !req.Requirements.ParallelTools &&
+		!req.Requirements.StrictSchema && !req.Requirements.Vision &&
+		!req.Requirements.Continuation {
+		return cands, nil
+	}
+	allowed := make([]instance, 0, len(cands))
+	var unmet []string
+	for _, inst := range cands {
+		if eligibleForAutomaticRoute(evidenceFor(inst), req.Requirements) {
+			allowed = append(allowed, inst)
+			continue
+		}
+		for requirement, needed := range map[catalog.Requirement]bool{
+			catalog.RequirementTools:         req.Requirements.Tools,
+			catalog.RequirementParallelTools: req.Requirements.ParallelTools,
+			catalog.RequirementStrictSchema:  req.Requirements.StrictSchema,
+			catalog.RequirementVision:        req.Requirements.Vision,
+			catalog.RequirementContinuation:  req.Requirements.Continuation,
+		} {
+			if needed && !unmetSatisfied(unmet, requirement) {
+				unmet = append(unmet, string(requirement))
+			}
+		}
+	}
+	if len(allowed) > 0 {
+		return allowed, nil
+	}
+	return nil, fmt.Errorf(
+		"model %q has no deployment here that can do what this request needs (%s). "+
+			"Declare what your endpoints do under each provider's capabilities block",
+		model, strings.Join(unmet, ", "))
+}
+
+// unmetSatisfied keeps the refusal message from naming the same requirement twice.
+func unmetSatisfied(seen []string, r catalog.Requirement) bool {
+	for _, s := range seen {
+		if s == string(r) {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *Gateway) forbiddenFiltered(cands []instance, model string) ([]instance, error) {
 	if !g.cfg.FreeOnly() && g.cfg.SpendCeiling() <= 0 {
 		return cands, nil
