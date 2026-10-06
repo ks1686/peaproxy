@@ -21,11 +21,11 @@ func TestSpentInLastDaysComesFromDurableRollups(t *testing.T) {
 		s.Add(Event{Time: today, CostUSD: f64(1.0)})
 	}
 
-	if got, priced, total := s.SpentInLastDays(1); priced != 3 || total != 3 || got != 3.0 {
-		t.Fatalf("today = %v, %d priced of %d calls; want 3.0, 3 of 3", got, priced, total)
+	if w := s.SpentInLastDays(1); w.Priced != 3 || w.Total != 3 || w.USD != 3.0 {
+		t.Fatalf("today = %v, %d priced of %d calls; want 3.0, 3 of 3", w.USD, w.Priced, w.Total)
 	}
-	if _, _, total := s.SpentInLastDays(3); total != 3 {
-		t.Fatalf("a three-day window lost calls: %d", total)
+	if w := s.SpentInLastDays(3); w.Total != 3 {
+		t.Fatalf("a three-day window lost calls: %d", w.Total)
 	}
 }
 
@@ -37,12 +37,12 @@ func TestSpentInLastDaysIgnoresOlderDays(t *testing.T) {
 	s.Add(Event{Time: today, CostUSD: f64(2.0)})
 	s.Add(Event{Time: today.AddDate(0, 0, -5), CostUSD: f64(100.0)})
 
-	if got, priced, total := s.SpentInLastDays(1); priced != 1 || total != 1 || got != 2.0 {
-		t.Fatalf("older spend leaked into the window: %v, %d priced of %d", got, priced, total)
+	if w := s.SpentInLastDays(1); w.Priced != 1 || w.Total != 1 || w.USD != 2.0 {
+		t.Fatalf("older spend leaked into the window: %v, %d priced of %d", w.USD, w.Priced, w.Total)
 	}
 	// A wider window legitimately sees it.
-	if got, _, _ := s.SpentInLastDays(7); got != 102.0 {
-		t.Fatalf("seven-day window = %v, want 102", got)
+	if w := s.SpentInLastDays(7); w.USD != 102.0 {
+		t.Fatalf("seven-day window = %v, want 102", w.USD)
 	}
 }
 
@@ -56,14 +56,14 @@ func TestSpentInLastDaysCountsOnlyPricedCalls(t *testing.T) {
 	s.Add(Event{Time: now, CostUSD: f64(3.0)})
 	s.Add(Event{Time: now}) // no price published
 
-	got, priced, total := s.SpentInLastDays(1)
-	if got != 3.0 {
-		t.Fatalf("known spend = %v, want 3", got)
+	w := s.SpentInLastDays(1)
+	if w.USD != 3.0 {
+		t.Fatalf("known spend = %v, want 3", w.USD)
 	}
 	// The unpriced call is invisible in the total but visible in the count, and
 	// that difference is what tells a caller the total is a floor.
-	if priced != 1 || total != 2 {
-		t.Fatalf("priced=%d total=%d, want 1 of 2", priced, total)
+	if w.Priced != 1 || w.Total != 2 {
+		t.Fatalf("priced=%d total=%d, want 1 of 2", w.Priced, w.Total)
 	}
 }
 
@@ -73,15 +73,15 @@ func TestSpentInLastDaysIgnoresFailedUncostedCalls(t *testing.T) {
 	s := Open("")
 	s.Add(Event{Time: time.Now(), Status: 500, Error: "upstream refused"})
 
-	if got, priced, _ := s.SpentInLastDays(1); got != 0 || priced != 0 {
-		t.Fatalf("a failed uncosted call counted as spend: %v, %d priced", got, priced)
+	if w := s.SpentInLastDays(1); w.USD != 0 || w.Priced != 0 {
+		t.Fatalf("a failed uncosted call counted as spend: %v, %d priced", w.USD, w.Priced)
 	}
 }
 
 func TestSpentInLastDaysEmptyIsZero(t *testing.T) {
 	s := Open("")
-	if got, priced, total := s.SpentInLastDays(7); got != 0 || priced != 0 || total != 0 {
-		t.Fatalf("empty store reported %v, %d of %d", got, priced, total)
+	if w := s.SpentInLastDays(7); w.USD != 0 || w.Priced != 0 || w.Total != 0 {
+		t.Fatalf("empty store reported %v, %d of %d", w.USD, w.Priced, w.Total)
 	}
 }
 
@@ -91,8 +91,8 @@ func TestSpentInLastDaysRejectsNonPositiveWindows(t *testing.T) {
 	s := Open("")
 	s.Add(Event{Time: time.Now(), CostUSD: f64(5.0)})
 	for _, n := range []int{0, -1} {
-		if got, priced, total := s.SpentInLastDays(n); got != 0 || priced != 0 || total != 0 {
-			t.Fatalf("window %d returned %v, %d of %d", n, got, priced, total)
+		if w := s.SpentInLastDays(n); w.USD != 0 || w.Priced != 0 || w.Total != 0 {
+			t.Fatalf("window %d returned %v, %d of %d", n, w.USD, w.Priced, w.Total)
 		}
 	}
 }
@@ -111,15 +111,15 @@ func TestUnpricedDayStillCountsItsCalls(t *testing.T) {
 		{Day: today, Calls: 5, CostCalls: 0},
 	}}
 
-	usd, priced, total := s.SpentInLastDays(1)
-	if total != 5 {
-		t.Errorf("total calls = %d, want 5; unpriced calls were dropped entirely", total)
+	w := s.SpentInLastDays(1)
+	if w.Total != 5 {
+		t.Errorf("total calls = %d, want 5; unpriced calls were dropped entirely", w.Total)
 	}
-	if priced == total {
-		t.Errorf("priced (%d) == total (%d); an unmeasured day looks measurably free", priced, total)
+	if w.Priced == w.Total {
+		t.Errorf("priced (%d) == total (%d); an unmeasured day looks measurably free", w.Priced, w.Total)
 	}
-	if usd != 0 {
-		t.Errorf("usd = %v, want 0 for an unpriced day", usd)
+	if w.USD != 0 {
+		t.Errorf("usd = %v, want 0 for an unpriced day", w.USD)
 	}
 }
 
@@ -132,11 +132,11 @@ func TestPartlyPricedDayCountsEveryCall(t *testing.T) {
 		{Day: today, Calls: 10, CostCalls: 4, CostUSD: &cost},
 	}}
 
-	usd, priced, total := s.SpentInLastDays(1)
-	if usd != 1.5 {
-		t.Errorf("usd = %v, want 1.5", usd)
+	w := s.SpentInLastDays(1)
+	if w.USD != 1.5 {
+		t.Errorf("usd = %v, want 1.5", w.USD)
 	}
-	if priced != 4 || total != 10 {
-		t.Errorf("priced/total = %d/%d, want 4/10", priced, total)
+	if w.Priced != 4 || w.Total != 10 {
+		t.Errorf("priced/total = %d/%d, want 4/10", w.Priced, w.Total)
 	}
 }

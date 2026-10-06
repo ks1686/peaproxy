@@ -33,8 +33,12 @@ func policyGateway(t *testing.T, policy string, handlers ...http.HandlerFunc) *G
 	for i, h := range handlers {
 		srv := httptest.NewServer(h)
 		t.Cleanup(srv.Close)
+		// A key makes these fixtures representative: automatic routes refuse a
+		// provider with no account attached unless the user opts in, and a test
+		// about affinity or warmth is not a test about that guard.
 		providers = append(providers, config.Provider{
 			ID: ids[i], Adapter: "openai_compat", Tier: "paid", BaseURL: srv.URL + "/v1",
+			APIKey: "sk-test",
 		})
 	}
 	cfg := config.Config{

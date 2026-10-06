@@ -297,8 +297,15 @@ func TestRepeatingSearchIsStoppedAtTheRoundLimit(t *testing.T) {
 	gw.cfg.Optimization.Automatic = boolp(true)
 
 	body := []byte(`{"model":"m","tools":[{"type":"function","function":{"name":"t"}}],"messages":[{"role":"user","content":"anything at all here"}]}`)
-	if _, _, err := gw.Chat(context.Background(), body); err != nil {
-		t.Fatal(err)
+	// The turn ends with an error rather than with the round that asked for a
+	// search the budget no longer had. Handing that round back would give the
+	// client a pea_search call it never made.
+	_, _, err := gw.Chat(context.Background(), body)
+	if err == nil {
+		t.Fatal("an exhausted search budget returned a normal answer")
+	}
+	if !strings.Contains(err.Error(), contextopt.ToolName) {
+		t.Fatalf("the refusal does not name the loop that ended: %v", err)
 	}
 	if hits > contextopt.MaxRounds+1 {
 		t.Fatalf("the search loop ran %d upstream calls, past the budget of %d", hits, contextopt.MaxRounds)

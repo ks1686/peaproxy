@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -31,12 +33,94 @@ func (g *Gateway) promptBody(raw []byte, adapterName string) []byte {
 func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (string, []instance, string, error) {
 	if !router.Automatic(model) {
 		cands, session, err := g.route(ctx, raw, model)
-		return model, cands, session, err
+		if err != nil {
+			return model, cands, session, err
+		}
+		if err := g.refuseIfForbidden(cands, model); err != nil {
+			return model, nil, session, err
+		}
+		return model, cands, session, nil
 	}
 	if !g.cfg.AutomaticRoutes.Enabled {
 		return "", nil, "", fmt.Errorf("automatic route %q is disabled", model)
 	}
 	return g.pickAutomatic(ctx, raw, model)
+}
+
+// refuseIfForbidden applies the two money guards to a deployment set that
+// routing chose without consulting them.
+//
+// freeOnly and the spend ceiling were checked only where PeaProxy picked the
+// deployment itself. A client that named the model outright took a different
+// path, and that path checked neither: the one switch a user set to protect
+// their account could be walked past by naming a model. Both are refusals to
+// spend, and a refusal does not become a preference because the request did not
+// use a route.
+//
+// A deployment proven free, or one that runs on this machine, costs nothing and
+// cannot breach either.
+func (g *Gateway) refuseIfForbidden(cands []instance, model string) error {
+	if !g.cfg.FreeOnly() && g.cfg.SpendCeiling() <= 0 {
+		return nil
+	}
+	for _, inst := range cands {
+		m := g.deploymentFor(inst.Provider.ID, model)
+		if g.runsOnThisMachine(inst.Provider.ID, m.ID) {
+			continue
+		}
+		if g.cfg.FreeOnly() && !deploymentProvenFree(g, m) {
+			return fmt.Errorf(
+				"refusing to serve %q on %s: optimization.freeOnly is on and this deployment has no verified zero price. Name a free deployment, or turn freeOnly off to spend",
+				model, inst.Provider.ID)
+		}
+		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
+			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
+				return errors.New(reason)
+			}
+		}
+	}
+	return nil
+}
+
+// anonymousDeployment reports whether a deployment has no account attached.
+//
+// The question is whether *any* credential is attached, not whether an API key
+// is: a subscription session is an account just as much as a key, and
+// Capabilities().APIKey is false for every OAuth adapter whether or not it
+// holds a valid session. Asking about the API key alone would have refused the
+// ChatGPT- and Copilot-hosted accounts this proxy exists to aggregate.
+//
+// A configured OAuth session counts as an account even when its token has
+// expired: the failure there is an expired login, not an anonymous endpoint,
+// and refusing it as anonymous would report the wrong problem.
+func anonymousDeployment(g *Gateway, m catalog.Model) bool {
+	inst := g.instanceFor(m.AccountID)
+	if inst.Adapter == nil {
+		return false
+	}
+	if caps := inst.Adapter.Capabilities(); caps.OAuth && !caps.NeedsAuth {
+		return false
+	}
+	if inst.Provider.OAuth != nil {
+		return false
+	}
+	if inst.Provider.APIKey != "" || inst.Provider.APIKeyEnv != "" {
+		return false
+	}
+	return true
+}
+
+// deploymentFor finds the catalog row for one account's model, so the guards
+// read the same price and tier routing would.
+func (g *Gateway) deploymentFor(account, model string) catalog.Model {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	for _, m := range g.models {
+		if m.ID == model && m.AccountID == account {
+			return m
+		}
+	}
+	return catalog.Model{}
 }
 
 func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName string) (string, []instance, string, error) {
@@ -81,9 +165,14 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	allowed := g.cfg.AutomaticRoutes.Models(routeName)
 	var ranked []instance
 	var rankedModel []string
-	// Tracked separately so a freeOnly refusal can say why rather than
-	// reporting the generic "no eligible model".
+	// Tracked separately so a refusal can say why rather than reporting the
+	// generic "no eligible model".
 	var freeBlocked, freeSeen bool
+	var anonymousBlocked bool
+	// Which requirements the request needs and no candidate could satisfy, so
+	// the refusal can name them. "No eligible model" does not tell a user who
+	// just declared an endpoint tool-less why their tool call went nowhere.
+	var unmet = map[catalog.Requirement]bool{}
 	var ceilingBlocked bool
 	var ceilingReason string
 	for _, m := range models {
@@ -97,6 +186,16 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 			continue
 		}
 		if !automaticKind(g, routeName, m) {
+			continue
+		}
+		// A provider with no credentials is somebody else's machine, and a
+		// prompt sent there has been published. The setting that says whether
+		// that is allowed was read by nothing until now; it is checked here,
+		// on automatic routes, which are the ones that pick the deployment.
+		// A local account is exempt: it is this machine, and it never needed a
+		// key.
+		if !g.cfg.AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {
+			anonymousBlocked = true
 			continue
 		}
 		// freeOnly is a refusal to spend, not a preference. It applies to every
@@ -132,6 +231,17 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 			continue
 		}
 		if !eligibleForAutomaticRoute(evidenceFor(inst), req.Requirements) {
+			for requirement, needed := range map[catalog.Requirement]bool{
+				catalog.RequirementTools:         req.Requirements.Tools,
+				catalog.RequirementParallelTools: req.Requirements.ParallelTools,
+				catalog.RequirementStrictSchema:  req.Requirements.StrictSchema,
+				catalog.RequirementVision:        req.Requirements.Vision,
+				catalog.RequirementContinuation:  req.Requirements.Continuation,
+			} {
+				if needed {
+					unmet[requirement] = true
+				}
+			}
 			continue
 		}
 		inst.upstreamModel = m.ID
@@ -146,6 +256,21 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 			return "", nil, "", fmt.Errorf(
 				"automatic route %q has no free model: optimization.freeOnly is on and no deployment has a verified zero price",
 				routeName)
+		}
+		if anonymousBlocked {
+			return "", nil, "", fmt.Errorf(
+				"automatic route %q has no eligible model: every candidate is an anonymous provider with no account attached, and optimization.allowAnonymousProviders is off. Attach an account, or set allowAnonymousProviders to true if you mean it",
+				routeName)
+		}
+		if len(unmet) > 0 {
+			names := make([]string, 0, len(unmet))
+			for r := range unmet {
+				names = append(names, string(r))
+			}
+			sort.Strings(names)
+			return "", nil, "", fmt.Errorf(
+				"automatic route %q has no eligible model: this request needs %s, and no deployment here is known to provide it. Declare what your endpoints do under each provider's capabilities block",
+				routeName, strings.Join(names, ", "))
 		}
 		return "", nil, "", fmt.Errorf("automatic route %q has no eligible model", routeName)
 	}
@@ -228,11 +353,13 @@ func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 // explicit statement, not a guess; Source is what distinguishes them.
 func assertedPrice(q config.PriceQuote) catalog.Price {
 	return catalog.Price{
-		Input:    q.Input,
-		Output:   q.Output,
-		Currency: "USD",
-		Source:   PriceSourceConfig,
-		Verified: q.Verified,
+		Input:      q.Input,
+		Output:     q.Output,
+		CacheRead:  q.CacheRead,
+		CacheWrite: q.CacheWrite,
+		Currency:   "USD",
+		Source:     PriceSourceConfig,
+		Verified:   q.Verified,
 	}
 }
 
@@ -328,12 +455,18 @@ func evidenceFor(inst instance) catalog.CapabilityEvidence {
 	if inst.Adapter == nil {
 		return evidence
 	}
-	caps := inst.Adapter.Capabilities()
+	caps := effectiveCapabilities(inst)
 	if caps.Tools {
 		evidence.Tools = catalog.SupportYes
+	} else if inst.Provider.Capabilities.Tools != nil {
+		// The user stated it. "Unknown" would tell them PeaProxy has not found
+		// out, which is true and useless: they already know, and they said.
+		evidence.Tools = catalog.SupportNo
 	}
 	if caps.VisionIn {
 		evidence.Vision = catalog.SupportYes
+	} else if inst.Provider.Capabilities.VisionIn != nil {
+		evidence.Vision = catalog.SupportNo
 	}
 	return catalog.FillUnknown(promptcache.ProfileForAdapter(inst.Provider.Adapter), evidence)
 }

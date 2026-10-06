@@ -31,9 +31,20 @@ type Deployment struct {
 	Input  float64
 	Output float64
 	Free   bool
-	Tools  bool
-	Warm   bool
+	// Tools is a tri-state: nil keeps the adapter's declaration, and an explicit
+	// false marks a deployment that accepts a tools array and ignores it.
+	//
+	// It is nullable for the same reason the config's capability overrides are.
+	// A plain bool cannot distinguish "this scenario does not care" from "this
+	// endpoint cannot run tools", and a scenario that cannot express the case it
+	// claims to cover is a promise nobody can break -- which is worse than no
+	// promise, because the gate reports it as covered.
+	Tools *bool
 }
+
+// Boolp is the scenario-facing way to state a capability, so a table of
+// deployments can say what it means.
+func Boolp(b bool) *bool { return &b }
 
 // Scenario is one claim about routing, stated so it can fail.
 type Scenario struct {
@@ -115,8 +126,15 @@ func Run(t *testing.T, s Scenario) Result {
 		if d.Free {
 			tier = "free"
 		}
+		// The stub is credentialed. Automatic routes refuse a provider with no
+		// account attached unless the scenario opts in, and a scenario about
+		// price or capability is not a scenario about that guard.
 		providers = append(providers, config.Provider{
 			ID: d.ID, Adapter: "openai_compat", Tier: tier, BaseURL: srv.URL + "/v1",
+			APIKey: "sk-eval",
+			Capabilities: config.ProviderCapabilities{
+				Tools: d.Tools,
+			},
 		})
 		_ = i
 	}
@@ -220,17 +238,21 @@ func RunAll(t *testing.T, scenarios []Scenario) {
 	t.Helper()
 	var results []Result
 	for _, s := range scenarios {
-		results = append(results, Run(t, s))
+		// As subtests, so a single promise can be selected by name from
+		// outside -- which is what the mutation gate does when it re-runs one
+		// scenario against a deliberately broken build.
+		t.Run(s.Name, func(t *testing.T) {
+			r := Run(t, s)
+			status := "PASS"
+			if !r.Passed {
+				status = "FAIL"
+			}
+			t.Logf("%s  %-46s account=%-10s cost=$%.6f", status, r.Name, r.Account, r.Cost)
+			results = append(results, r)
+		})
 	}
 	sort.SliceStable(results, func(i, j int) bool { return !results[i].Passed && results[j].Passed })
 
-	for _, r := range results {
-		status := "PASS"
-		if !r.Passed {
-			status = "FAIL"
-		}
-		t.Logf("%s  %-46s account=%-10s cost=$%.6f", status, r.Name, r.Account, r.Cost)
-	}
 	var broken []Result
 	for _, r := range results {
 		if !r.Passed {

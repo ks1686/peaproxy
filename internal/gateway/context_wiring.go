@@ -29,7 +29,7 @@ func (g *Gateway) contextOptimize(raw []byte, inst instance, session string) []b
 
 	req := requestmeta.RequirementsFromBody(requestmeta.WireChat, raw)
 	injectedTool := false
-	if req.Tools && inst.Adapter != nil && inst.Adapter.Capabilities().Tools {
+	if req.Tools && inst.Adapter != nil && effectiveCapabilities(inst).Tools {
 		if out, ok := contextopt.Inject(raw, contextopt.Plan{
 			Enabled:       true,
 			ClientTools:   true,

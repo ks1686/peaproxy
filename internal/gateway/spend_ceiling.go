@@ -13,7 +13,7 @@ import (
 // The last two are separate because their difference is the whole question. If
 // they match, the recorded total is trustworthy. If they do not, some calls
 // cost money nobody could measure, and the total is a floor rather than a sum.
-type spendWindow func(days int) (usd float64, priced, total int)
+type spendWindow func(days int) usage.SpendWindow
 
 // spendCeilingDays is the window a ceiling is measured over. A month is long
 // enough to bound a runaway and short enough that a mistake expires on its own.
@@ -40,27 +40,42 @@ func (g *Gateway) ceilingBlocks(u economics.Usage) (bool, string) {
 	if u.IsFree() {
 		return false, ""
 	}
-	spent, priced, total := g.spentInWindow(spendCeilingDays)
+	return g.ceilingBlocksIn(g.spentInWindow(spendCeilingDays), ceiling, 0)
+}
 
-	if priced < total {
+// ceilingBlocksIn is the ceiling decision for one window reading, named apart
+// from the read so that a reservation can be taken against the very same
+// reading the decision was made on.
+//
+// pending is spend a request is about to commit and has not been held yet. It
+// counts toward the ceiling, because the decision that matters is whether the
+// request being sent now would breach it -- not whether some earlier request
+// already had.
+func (g *Gateway) ceilingBlocksIn(w usage.SpendWindow, ceiling, pending float64) (bool, string) {
+	if w.Priced < w.Total {
 		// Recorded spend is a floor, not a total. Refusing is the safe
 		// direction: the alternative quietly spends money on the accounts
 		// whose prices PeaProxy knows least about.
 		return true, fmt.Sprintf(
 			"refusing to spend: the optimization.spendCeilingUSD ceiling is set to %.2f, but spend in this window cannot be measured because %d of %d calls carried no published price. Set the prices in automaticRoutes, or raise the ceiling once the total is trustworthy",
-			ceiling, total-priced, total)
+			ceiling, w.Total-w.Priced, w.Total)
 	}
-	if spent >= ceiling {
+	if total := w.USD + pending; total >= ceiling {
+		if pending > 0 {
+			return true, fmt.Sprintf(
+				"refusing to spend: %.2f USD is already committed over the last %d days, including %.2f USD held by requests in flight, which meets the optimization.spendCeilingUSD ceiling of %.2f",
+				total, spendCeilingDays, pending, ceiling)
+		}
 		return true, fmt.Sprintf(
 			"refusing to spend: %.2f USD recorded over the last %d days meets the optimization.spendCeilingUSD ceiling of %.2f",
-			spent, spendCeilingDays, ceiling)
+			w.USD, spendCeilingDays, ceiling)
 	}
 	return false, ""
 }
 
-func (g *Gateway) spentInWindow(days int) (usd float64, priced, total int) {
+func (g *Gateway) spentInWindow(days int) usage.SpendWindow {
 	if g.spendWindow == nil {
-		return 0, 0, 0
+		return usage.SpendWindow{}
 	}
 	return g.spendWindow(days)
 }

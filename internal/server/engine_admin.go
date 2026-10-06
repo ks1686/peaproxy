@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/usage"
 	"io"
 	"net"
 	"net/http"
@@ -170,9 +172,9 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	_ = r
 	cfg := s.gw.Config()
 
-	spent, priced, total := 0.0, 0, 0
+	spent := usage.SpendWindow{}
 	if u := s.gw.Usage; u != nil {
-		spent, priced, total = u.SpentInLastDays(30)
+		spent = u.SpentInLastDays(30)
 	}
 
 	ceiling := any(nil)
@@ -182,17 +184,19 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"policy": map[string]any{
-			"automatic":             cfg.OptimizationEnabled(),
-			"freeOnly":              cfg.FreeOnly(),
-			"contextOptimization":   s.gw.ContextOptimizationEnabled(),
-			"spendCeilingUSD":       ceiling,
-			"spentLast30DaysUSD":    spent,
-			"pricedCallsLast30Days": priced,
-			"totalCallsLast30Days":  total,
-			"spendMeasurable":       priced == total,
-			"spendNote":             spendNote(priced, total, cfg.SpendCeiling()),
-			"promptCache":           cfg.EffectivePromptCache(),
-			"localAssistant":        cfg.LocalAssistantEnabled(),
+			"automatic":              cfg.OptimizationEnabled(),
+			"freeOnly":               cfg.FreeOnly(),
+			"contextOptimization":    s.gw.ContextOptimizationEnabled(),
+			"spendCeilingUSD":        ceiling,
+			"spentLast30DaysUSD":     spent.USD,
+			"estimatedLast30DaysUSD": spent.EstimatedUSD,
+			"inFlightReservedUSD":    s.gw.Usage.Reserved(),
+			"pricedCallsLast30Days":  spent.Priced,
+			"totalCallsLast30Days":   spent.Total,
+			"spendMeasurable":        spent.Priced == spent.Total,
+			"spendNote":              spendNote(spent, cfg.SpendCeiling()),
+			"promptCache":            cfg.EffectivePromptCache(),
+			"localAssistant":         cfg.LocalAssistantEnabled(),
 			"localEndpointConfigured": func() bool {
 				_, ok := cfg.LocalAssistantConfig()
 				return ok
@@ -202,16 +206,20 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 			"schemaVersion":     config.SchemaVersion,
 		},
 		"honesty": "spendCeilingUSD is null when no ceiling is set; 0 there would mean a budget of zero. " +
-			"spendMeasurable is false when calls in the window carried no published price, and spentLast30DaysUSD is then a floor, not a total.",
+			"spendMeasurable is false when calls in the window carried no published price, and spentLast30DaysUSD is then a floor, not a total. " +
+			"estimatedLast30DaysUSD is the part of that total PeaProxy priced from published tokens rather than a provider's own cost figure.",
 	})
 }
 
-func spendNote(priced, total int, ceiling float64) string {
-	if priced < total {
+func spendNote(w usage.SpendWindow, ceiling float64) string {
+	switch {
+	case w.Priced < w.Total:
 		return "some calls in this window had no published price, so the total is a floor rather than a sum"
-	}
-	if ceiling > 0 {
+	case w.EstimatedUSD > 0 && ceiling > 0:
+		return fmt.Sprintf("measured spend over the last 30 days, of which %.2f USD was estimated from published token counts, against the configured ceiling", w.EstimatedUSD)
+	case ceiling > 0:
 		return "measured spend over the last 30 days, against the configured ceiling"
+	default:
+		return "measured spend over the last 30 days; no ceiling is configured"
 	}
-	return "measured spend over the last 30 days; no ceiling is configured"
 }

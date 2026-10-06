@@ -3,7 +3,7 @@ package gateway
 import (
 	"time"
 
-	"github.com/ks1686/peaproxy/internal/economics"
+	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/localassistant"
 )
 
@@ -30,13 +30,13 @@ func (g *Gateway) preferWarm(ranked []instance, warm map[string]bool) int {
 	if len(ranked) < 2 || len(warm) == 0 {
 		return 0
 	}
-	current := priceForDeployment(g, ranked[0].Provider.ID, ranked[0].upstreamModel).Quote()
 	for i := 1; i < len(ranked); i++ {
 		cand := ranked[i]
 		if cand.upstreamModel == "" || !warm[cand.Provider.ID+"\x00"+cand.upstreamModel] {
 			continue
 		}
-		if warmthDecides(priceForDeployment(g, cand.Provider.ID, cand.upstreamModel).Quote(), current) {
+		if warmthDecides(priceForDeployment(g, cand.Provider.ID, cand.upstreamModel),
+			priceForDeployment(g, ranked[0].Provider.ID, ranked[0].upstreamModel)) {
 			return i
 		}
 	}
@@ -45,11 +45,13 @@ func (g *Gateway) preferWarm(ranked []instance, warm map[string]bool) int {
 
 // warmthDecides reports whether price leaves the comparison open, leaving warmth
 // as the deciding signal.
-func warmthDecides(warm, current economics.Quote) bool {
-	if warm.Input == nil || warm.Output == nil || current.Input == nil || current.Output == nil {
-		return false
-	}
-	return *warm.Input <= *current.Input
+//
+// The comparison is catalog.NotDearer, the same one economy ranking uses.
+// Comparing the input rate alone let warmth pick a deployment that was cheap to
+// prompt with and expensive to read from -- which is the expensive one, on any
+// answer long enough for the output to matter.
+func warmthDecides(warm, current catalog.Price) bool {
+	return catalog.NotDearer(warm, current)
 }
 
 // warmSet is the set of deployments that recently served a cache read.

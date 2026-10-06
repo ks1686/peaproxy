@@ -133,6 +133,14 @@ func insertBreakpoint(body []byte) ([]byte, error) {
 	}
 	elem := body[start+elemStart : start+elemEnd]
 
+	// Only an object can carry a marker. The insertion point is the element's
+	// last `}`, and on anything else -- a bare string, or a string containing a
+	// brace of its own -- that `}` is a character in the caller's prompt. The
+	// marker then lands mid-string and the request stops being the JSON the
+	// caller wrote, which is a corrupted prompt rather than a cache hint.
+	if !isObject(elem) {
+		return body, nil
+	}
 	if hasJSONKey(elem, "cache_control") {
 		return body, nil
 	}
@@ -225,6 +233,14 @@ func hasJSONKey(obj []byte, want string) bool {
 func isEmptyObject(obj []byte) bool {
 	trimmed := bytes.TrimSpace(obj)
 	return len(trimmed) == 2 && trimmed[0] == '{' && trimmed[1] == '}'
+}
+
+// isObject reports whether the bytes are a JSON object. It is a shape test, not
+// a parse: the whole point of this insertion is to leave the caller's bytes
+// untouched apart from the marker.
+func isObject(obj []byte) bool {
+	trimmed := bytes.TrimSpace(obj)
+	return len(trimmed) >= 2 && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}'
 }
 
 // ProfileForAdapter maps an adapter id to a documented profile, or empty.

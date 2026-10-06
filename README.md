@@ -101,11 +101,11 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Capability | Status |
 |---|---|
 | **Automatic cost routing** | Shipped in v3. `pea/auto`, `pea/economy`, `pea/free`, `pea/local` choose a live model for cost and capability **on by default**. Exact model names are never substituted. Full behaviour and rollback: [docs/V3.md](docs/V3.md) |
-| **Spend ceiling** | Shipped in v3. `optimization.spendCeilingUSD` caps spend in a rolling window and **fails closed** when spend cannot be measured |
-| **Free-only routing** | Shipped in v3. `optimization.freeOnly` refuses any deployment that cannot prove a call stays free |
+| **Spend ceiling** | Shipped in v3. `optimization.spendCeilingUSD` caps spend in a rolling window and **fails closed** when spend cannot be measured. In 3.0.4 the ledger prices published token counts against the deployment quote, and each request holds its input cost for the duration, so concurrent requests cannot all pass the same check |
+| **Free-only routing** | Shipped in v3. `optimization.freeOnly` refuses any deployment that cannot prove a call stays free — including a model you named outright, and a deployment that publishes a paid cache rate |
 | **Carried context (`pea_search`)** | Shipped in v3, bounded at 4 rounds. Only for tool-using, non-streaming requests — a streaming client would have to be buffered. Toolless clients get pre-retrieval instead. Fixed in 3.0.1: the artifact store was not being constructed, so this silently did nothing |
 | **Local assistant** | Shipped in v3, **off by default**. Loopback only; no setting allows anything else |
-| **Routing promotion gates** | Shipped in v3. `internal/eval` runs eight routing promises in CI; cost *and* equivalence are asserted |
+| **Routing promotion gates** | Shipped in v3. `internal/eval` runs fifteen routing promises in CI; cost *and* equivalence are asserted. Each promise is also **broken on purpose** and required to fail, so a promise that cannot detect its own regression fails the gate |
 | **Policy inspector** | Shipped in v3. `GET /admin/policy` plus a UI panel; unset ceiling reports `null`, never `0` |
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped. `routes:` are stable local names that rewrite to a live id; pin/rename stay listing-only |
 | `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is `reasoning_opaque` on the assistant message (stripped before OpenAI-compat upstreams) |
@@ -118,6 +118,8 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | API keys + custom OpenAI-compat | Shipped |
 | Free/local presets (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All, Groq, Cerebras, HF, NIM, Workers AI, Ollama Cloud, SambaNova, Zen, OpenRouter) | Shipped |
 | Grouped accounts UI + 8 new paid presets (DeepSeek, Mistral, Z.AI, MiniMax, Together, Fireworks, Alibaba Coding Plan, Cohere) | Shipped in v3. Only **Cohere** is live-verified (2026-10-05); the rest show `(not verified)` and mean it |
+| **Anonymous-provider consent** | Enforced since 3.0.4. `allowAnonymousProviders` was previously read by nothing. Automatic routes now refuse a deployment with no credential of any kind; local accounts and OAuth sessions are exempt, because an OAuth session is an account just as much as a key |
+| **Per-endpoint capability overrides** | Since 3.0.4. An OpenAI-compatible server is a wire shape, not a promise — plenty accept a `tools` array and ignore it. `capabilities` under a provider corrects `tools`, `visionIn`, `imageOut`, `embeddings` for your machine; unset keeps the adapter's own declaration |
 | Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways |
 | Claude OAuth Messages cloak | **Shipped** — `anthropic_oauth` injects Claude Code billing header + CLI identity (caller system relocated, never deleted). Client-preset cloak defaults stay **off** |
 | Codex OAuth `store` / token limits | **Shipped** — `openai_oauth` forces `store: false` and omits `max_output_tokens` / `stream_options` |
