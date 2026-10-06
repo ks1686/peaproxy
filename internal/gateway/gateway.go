@@ -502,7 +502,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	// in-flight one. One decision, taken once, guards read, coalesce and store.
 	// It is hoisted above both candidate loops because it does not depend on the
 	// instance being tried.
-	sessionSpecific := g.sessionSpecificBody(raw, session)
+	sessionSpecific := g.sessionSpecificBody(raw, session, cands)
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if !sessionSpecific {

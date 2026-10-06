@@ -131,12 +131,23 @@ func streamRequested(raw []byte) bool {
 // narrow as the behaviour that requires it: a session with nothing to carry
 // still caches normally, and only a request that genuinely carries session
 // context is kept out of every cache.
-func (g *Gateway) sessionSpecificBody(raw []byte, session string) bool {
+func (g *Gateway) sessionSpecificBody(raw []byte, session string, cands []instance) bool {
 	if !g.sessionScoped(session) {
 		return false
 	}
-	_, changed := g.bodyForScoped(raw, instance{}, session)
-	return changed
+	// Every candidate is checked, not one representative. The transformation
+	// depends on the adapter -- pea_search is only injected when the provider
+	// supports tools -- so evaluating against a single instance can conclude
+	// "nothing changed" for a request the next candidate would have transformed.
+	// Any candidate that would change the body makes the request
+	// session-specific, because a shared cache entry outlives the candidate that
+	// would have refused it.
+	for _, inst := range cands {
+		if _, changed := g.bodyForScoped(raw, inst, session); changed {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *Gateway) sessionScoped(session string) bool {
