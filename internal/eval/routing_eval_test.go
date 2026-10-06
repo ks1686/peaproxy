@@ -244,10 +244,13 @@ func routingPromises() []Scenario {
 			WantFailure: true,
 		},
 		{
-			Name:    "the caller's own tools survive routing",
-			Why:     "PeaProxy adds capabilities to a request; it must never remove what the client asked for.",
-			Model:   "pea/economy",
-			Request: withTools,
+			Name:  "the caller's own tools survive routing",
+			Why:   "PeaProxy adds capabilities to a request; it must never remove what the client asked for.",
+			Model: "pea/economy",
+			// A session, because without one the carried-context path returns
+			// before it runs -- and a scenario that never reaches the code which
+			// could strip the caller's tools asserts nothing about it.
+			Request: `{"model":"pea/economy","session_id":"s-tools","messages":[{"role":"user","content":"run the tests"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`,
 			Deployments: []Deployment{
 				{ID: "withtools", Input: 1, Output: 1, Tools: Boolp(true)},
 			},

@@ -59,14 +59,16 @@ type Mutation struct {
 // coverage; an explicit list with a reason is a debt someone can close, and it
 // cannot grow by accident.
 var notYetBroken = map[string]string{
-	"spend measured from tokens alone does not satisfy a ceiling": "SeedUsage builds events directly, so the scenario never reaches the parser this mutation breaks; " +
-		"the parser side is covered by TestPartialUsageIsNotPriced in internal/usage",
+	"spend measured from tokens alone does not satisfy a ceiling": "structurally unbreakable here, not weakly tested: pricing an event is the server's job " +
+		"(priceEvent calls QuoteFor), and the eval harness never does it, so no event in a " +
+		"scenario can ever gain a CostUSD and tokens alone cannot become cost. Both halves of the " +
+		"promise are covered elsewhere -- the parser by TestPartialUsageIsNotPriced in internal/usage, " +
+		"and the priced-versus-total accounting by the mutation on w.Priced above. Making it " +
+		"breakable needs a harness that prices events, which is a server-level test",
 	"an unknown price never wins over a known one": "three guards stand in the way -- automaticKind filters an unpriced deployment out of economy " +
 		"candidacy, cheapest skips it while ranking, and Cheaper refuses both an unpriced challenger and " +
 		"an unpriced incumbent. Breaking the first two still leaves the promise intact, which is defence " +
 		"in depth rather than a weak promise; showing it would need all three broken at once",
-	"the caller's own tools survive routing": "with no session in the body contextOptimize returns early, so the injection path never runs; " +
-		"the scenario currently only proves routing leaves the body alone",
 }
 
 func assertEveryPromiseIsBroken(t *testing.T, mutations []Mutation) {
@@ -142,6 +144,14 @@ func routingMutations() []Mutation {
 			From:     "if g.cfg.FreeOnly() && !deploymentProvenFree(g, m) {",
 			To:       "if false {",
 			Why:      "naming a model must not be a way around the switch that protects the account",
+		},
+		{
+			Scenario: "the caller's own tools survive routing",
+			File:     "internal/contextopt/inject.go",
+			From:     "tools = append(tools, spec)",
+			To:       "tools = []json.RawMessage{spec}",
+			Why: "injecting PeaProxy's own tool by replacing the caller's is the same as removing " +
+				"what the client asked for",
 		},
 		{
 			Scenario: "warmth decides when price cannot",

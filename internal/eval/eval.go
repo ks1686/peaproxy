@@ -21,6 +21,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/contextstore"
 	"github.com/ks1686/peaproxy/internal/gateway"
 	"github.com/ks1686/peaproxy/internal/usage"
 )
@@ -185,6 +186,10 @@ func Run(t *testing.T, s Scenario) Result {
 		t.Fatalf("%s: gateway: %v", s.Name, err)
 	}
 	gw.SetUsage(usage.Open(""))
+	// The session store the carried-context path needs. Without it
+	// contextOptimize returns before it does anything, so a scenario about
+	// tools surviving routing would never reach the code that could strip them.
+	gw.Artifacts = contextstore.New(contextstore.Options{})
 	for _, e := range s.SeedUsage {
 		gw.Usage.Add(e)
 	}
