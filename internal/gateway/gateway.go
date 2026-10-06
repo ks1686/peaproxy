@@ -495,14 +495,24 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 	if err != nil {
 		return adapter.ChatResponse{}, "", err
 	}
+	// Both response caches are keyed on the caller's bytes. Once context
+	// optimization injects this session's artifacts, an identical body from a
+	// different session is a different request, so an answer derived from one
+	// session must never be served to another -- through the durable cache or the
+	// in-flight one. One decision, taken once, guards read, coalesce and store.
+	// It is hoisted above both candidate loops because it does not depend on the
+	// instance being tried.
+	sessionSpecific := g.sessionSpecificBody(raw, session)
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
-		if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
-			hit.Raw = echoClientModel(hit.Raw, client, model)
-			if client != model {
-				hit.Model = client
+		if !sessionSpecific {
+			if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
+				hit.Raw = echoClientModel(hit.Raw, client, model)
+				if client != model {
+					hit.Model = client
+				}
+				return hit, inst.Provider.ID, nil
 			}
-			return hit, inst.Provider.ID, nil
 		}
 	}
 	var last error
@@ -578,13 +588,6 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			}
 			return once, onceErr
 		}
-		// Coalescing is only safe when the bytes we send upstream are the
-		// caller's bytes. Once context optimization has injected this session's
-		// artifacts, an identical body from a different session is a different
-		// request, and a shared answer would leak one session's context to
-		// another. The test is on the produced body, not on the settings, so a
-		// session with nothing to carry still coalesces normally.
-		_, sessionSpecific := g.bodyForScoped(raw, inst, session)
 		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
 			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
@@ -610,7 +613,9 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 			if client != model {
 				resp.Model = client
 			}
-			g.storeChat(lastAccount, inst.Provider.BaseURL, model, raw, resp.Raw)
+			if !sessionSpecific {
+				g.storeChat(lastAccount, inst.Provider.BaseURL, model, raw, resp.Raw)
+			}
 			return resp, lastAccount, nil
 		}
 		last = callErr

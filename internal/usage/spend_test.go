@@ -104,8 +104,11 @@ func f64(v float64) *float64 { return &v }
 // ceiling read as "measurably nothing spent" -- so a ceiling failed open
 // precisely when nobody had priced anything.
 func TestUnpricedDayStillCountsItsCalls(t *testing.T) {
+	// Built from the current day rather than a literal: the window rolls, and a
+	// fixed date would drop out of it tomorrow and fail for the wrong reason.
+	today := time.Now().UTC().Format("2006-01-02")
 	s := &Store{days: []DayRollup{
-		{Day: "2026-10-06", Calls: 5, CostCalls: 0},
+		{Day: today, Calls: 5, CostCalls: 0},
 	}}
 
 	usd, priced, total := s.SpentInLastDays(1)
@@ -123,9 +126,10 @@ func TestUnpricedDayStillCountsItsCalls(t *testing.T) {
 // A day that is partly priced contributes both sides, so the caller can tell
 // how much of the spend is actually known.
 func TestPartlyPricedDayCountsEveryCall(t *testing.T) {
+	today := time.Now().UTC().Format("2006-01-02")
 	cost := 1.5
 	s := &Store{days: []DayRollup{
-		{Day: "2026-10-06", Calls: 10, CostCalls: 4, CostUSD: &cost},
+		{Day: today, Calls: 10, CostCalls: 4, CostUSD: &cost},
 	}}
 
 	usd, priced, total := s.SpentInLastDays(1)
