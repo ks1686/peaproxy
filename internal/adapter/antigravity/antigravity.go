@@ -1628,6 +1628,13 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		}
 	}
 	if err := sc.Err(); err != nil {
+		// Same rule as every other translated wire: a cut stream is announced,
+		// never completed. Returning quietly here leaves the client holding a
+		// response that stops without a terminal event, which it can only
+		// report as a missing finish_reason.
+		if wErr := translate.WriteOpenAIChatSSEError(w, "upstream stream ended before the response was complete: "+err.Error()); wErr != nil {
+			return wErr
+		}
 		return err
 	}
 	if err := writeRole(); err != nil {

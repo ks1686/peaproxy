@@ -1,7 +1,8 @@
 # v3 release blocker: stream ended without finish_reason
 
-Status: user-observed runtime failure; **PeaProxy side ruled out by exhaustive
-test** (2026-10-05). Remaining cause is upstream or client-side.
+Status: **root cause found and fixed** (2026-10-05). Affected accounts:
+`openai-oauth` (`gpt-6-astra`, the ChatGPT-hosted backend) and `antigravity`
+(`google-oauth`). Both are translated wires.
 
 ## Investigation result
 
@@ -81,3 +82,55 @@ The gap that reasoning leaves: an intermediary which closes a response cleanly p
 6. Verify with `PEAPROXY_SECRET_BACKEND=file go test ./internal/translate ./internal/streamguard ./internal/gateway ./internal/server`, then replay with the affected client through an isolated proxy instance. Automated fixtures alone do not establish that the live incident is fixed.
 
 Include this investigation before default-changing optimizations in the v3 implementation plan. No fix has been implemented or verified.
+
+
+## Root cause
+
+The failing client was this session's own client: `pi` with
+`PI_PROVIDER=peaproxy`, on the Chat Completions wire. The failing upstream was
+`gpt-6-astra`, served by the `openai-oauth` adapter, which speaks the Responses
+API upstream and **translates** to Chat Completions for the client.
+
+On a clean EOF the translator always wrote a terminal event. On a **mid-stream
+transport error** it did not:
+
+```go
+if err := sc.Err(); err != nil {
+    return err          // returns without writing any terminal event
+}
+...
+return translate.WriteOpenAIChatSSEFinish(w, id, model, reason)
+```
+
+The upstream was cut after text had already reached the client, so the client
+held a partial response that simply stopped -- no `finish_reason`, no `[DONE]`,
+no error. The client could only report that as `stream ended without
+finish_reason`.
+
+This was silent truncation: the exact failure this project exists to avoid. It
+was reproducible and deterministic with a reader that returns data and then an
+error, with no network and no account cost.
+
+### Fix
+
+`translate.WriteOpenAIChatSSEError` writes a terminal error carrying
+`stream_incomplete`, and **no** `finish_reason`. A cut stream is announced, not
+completed. Fabricating a finish would tell the client the answer is whole when
+it is not, and a client that believes that will act on a truncated answer.
+
+The same defect was present and fixed in `antigravity` (`google-oauth`), found
+by scanning for the pattern rather than by waiting for it to happen again.
+
+### Why it looked like a provider problem
+
+Earlier live probing found the passthrough wire losing nothing, which was true
+and misleading: the failure was never on the passthrough wire. It is on the two
+*translated* wires, and only when the upstream connection dies mid-body -- an
+eventuality that clean-EOF reasoning explicitly does not cover, which is why the
+earlier note recorded the gap between "finished" and "cut cleanly part way".
+
+### Remaining
+
+The fix is verified by fixture at both adapter layers and needs no account.
+Confirmation in the field requires the diagnostics build running against the
+session's own account, which is the one step still outstanding.

@@ -1498,6 +1498,14 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		}
 	}
 	if err := sc.Err(); err != nil {
+		// The upstream was cut after bytes had already reached the client.
+		// Returning here leaves that client looking at a stream that simply
+		// stops, which is what "stream ended without finish_reason" is. Say
+		// what happened instead, and do not invent a completion: a client told
+		// a truncated answer is finished will go on to use it.
+		if wErr := translate.WriteOpenAIChatSSEError(w, "upstream stream ended before the response was complete: "+err.Error()); wErr != nil {
+			return wErr
+		}
 		return err
 	}
 	reason := "stop"
