@@ -10,8 +10,14 @@ import (
 	"github.com/ks1686/peaproxy/internal/usage"
 )
 
-// holdSpend commits part of the spend ceiling to one upstream attempt and
-// returns the function that gives it back.
+// holdSpend commits part of the spend ceiling to one upstream attempt.
+//
+// It returns no release function, and that is the point. An earlier version
+// returned one and the caller deferred it, which read exactly like the bug it
+// had been written to fix -- and was re-reported as unfixed afterwards, because
+// a no-op closure deferred at the end of a call is indistinguishable from a real
+// release to anything reading the code. The hold is released by the event that
+// records what the call cost, which happens after this function returns.
 //
 // Without this, a ceiling is read once and then enforced by nothing: every
 // concurrent request sees the same recorded spend, decides the same request is
@@ -27,23 +33,22 @@ import (
 // model has written it, and inventing a figure would make the hold a guess
 // dressed as a cap. What is held is the request's own input, which is knowable
 // now, and what it turns out to be is measured when the call completes.
-func (g *Gateway) holdSpend(account, model string, body []byte) (func(), error) {
-	noop := func() {}
+func (g *Gateway) holdSpend(account, model string, body []byte) error {
 	ceiling := g.cfg.SpendCeiling()
 	store := g.Usage
 	if ceiling <= 0 || store == nil || account == "" {
-		return noop, nil
+		return nil
 	}
 	if g.runsOnThisMachine(account, model) {
 		// A local deployment costs nothing to run, so holding spend against it
 		// would refuse requests that cannot cost money.
-		return noop, nil
+		return nil
 	}
 	estimate := g.inputCostFor(account, model, body)
 	if estimate <= 0 {
 		// No price, or nothing to price. The ceiling has already been consulted
 		// during routing; fabricating a hold here would only invent a number.
-		return noop, nil
+		return nil
 	}
 	w, ok := store.HoldSpend(spendCeilingDays, func(w usage.SpendWindow) bool {
 		blocked, _ := g.ceilingBlocksIn(w, ceiling, estimate)
@@ -51,15 +56,11 @@ func (g *Gateway) holdSpend(account, model string, body []byte) (func(), error) 
 	}, estimate)
 	if !ok {
 		if blocked, reason := g.ceilingBlocksIn(w, ceiling, estimate); blocked {
-			return noop, ceilingRefusal{reason: reason}
+			return ceilingRefusal{reason: reason}
 		}
-		return noop, nil
+		return nil
 	}
-	// No release callback. The hold is released by the event this call records,
-	// which happens after this function returns -- releasing it here opened a
-	// window where the estimate had left the total and the measured cost had not
-	// yet arrived, and a concurrent request could spend through it.
-	return noop, nil
+	return nil
 }
 
 // inputCostFor prices the input side of a request before it is sent.

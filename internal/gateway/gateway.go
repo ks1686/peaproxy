@@ -1774,11 +1774,9 @@ func admitted[T any](g *Gateway, ctx context.Context, account, model string, bod
 		return zero, err
 	}
 	defer release()
-	settle, err := g.holdSpend(account, model, body)
-	if err != nil {
+	if err := g.holdSpend(account, model, body); err != nil {
 		return zero, err
 	}
-	defer settle()
 	return f(ctx)
 }
 

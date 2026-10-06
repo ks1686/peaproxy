@@ -2,13 +2,14 @@ package server
 
 import (
 	"encoding/json"
-	"github.com/ks1686/peaproxy/internal/adapters"
-	"github.com/ks1686/peaproxy/internal/config"
-	"github.com/ks1686/peaproxy/internal/gateway"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/ks1686/peaproxy/internal/adapters"
+	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/gateway"
 )
 
 // #75: a loopback peer sending a non-loopback Host is the DNS-rebinding

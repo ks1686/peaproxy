@@ -4,14 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ks1686/peaproxy/internal/config"
-	"github.com/ks1686/peaproxy/internal/usage"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/usage"
 
 	"github.com/ks1686/peaproxy/internal/clients"
 )
