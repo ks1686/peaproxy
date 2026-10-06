@@ -11,6 +11,7 @@ package contextopt
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // ToolName is the proxy-owned retrieval tool. It is namespaced so it cannot
@@ -33,6 +34,12 @@ type Plan struct {
 	ClientTools bool
 	// ProviderTools reports that the selected provider supports tool calls.
 	ProviderTools bool
+	// Streaming reports that the client asked for an incremental response.
+	// PeaProxy answers its own tool between rounds, which is only possible if
+	// it can see the whole answer first. Buffering a stream to find out would
+	// defeat the thing the client asked for, so streaming requests are not
+	// offered the tool and fall back to pre-retrieval.
+	Streaming bool
 }
 
 // toolSpec is the definition PeaProxy adds. It is deliberately small: the
@@ -58,7 +65,7 @@ var toolSpec = map[string]any{
 // Injection is refused unless every condition holds, because a tool PeaProxy
 // cannot answer is a broken turn rather than a useful one.
 func Inject(body []byte, plan Plan) ([]byte, bool) {
-	if !plan.Enabled || !plan.ClientTools || !plan.ProviderTools {
+	if !plan.Enabled || !plan.ClientTools || !plan.ProviderTools || plan.Streaming {
 		return body, false
 	}
 	var doc map[string]json.RawMessage
@@ -168,4 +175,97 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// ToolCall is one proxy-owned tool call from a response.
+type ToolCall struct {
+	ID    string
+	Query string
+}
+
+// ProxyToolCalls returns the calls in a response that PeaProxy owns.
+//
+// A caller's own tools are never returned. Those belong to the client, which
+// expects to fill the slot itself; answering one would put results into a slot
+// the client is going to write over.
+func ProxyToolCalls(raw []byte) []ToolCall {
+	var resp struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil
+	}
+	var out []ToolCall
+	for _, ch := range resp.Choices {
+		for _, tc := range ch.Message.ToolCalls {
+			if tc.Function.Name != ToolName {
+				continue
+			}
+			out = append(out, ToolCall{ID: tc.ID, Query: parseQuery(tc.Function.Arguments)})
+		}
+	}
+	return out
+}
+
+func parseQuery(args string) string {
+	var a struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal([]byte(args), &a); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Query)
+}
+
+// AppendToolResults adds the results as tool messages and returns the body to
+// send next round.
+//
+// A body that cannot be parsed is returned unchanged. Handing back something
+// invented here would drop the entire conversation, which is a far worse
+// failure than simply not continuing.
+func AppendToolResults(body []byte, calls []ToolCall, results map[string]string) []byte {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body
+	}
+	raw, ok := doc["messages"]
+	if !ok {
+		return body
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		return body
+	}
+	for _, c := range calls {
+		msg, err := json.Marshal(map[string]string{
+			"role":         "tool",
+			"tool_call_id": c.ID,
+			"name":         ToolName,
+			"content":      results[c.ID],
+		})
+		if err != nil {
+			return body
+		}
+		messages = append(messages, msg)
+	}
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		return body
+	}
+	doc["messages"] = encoded
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return out
 }

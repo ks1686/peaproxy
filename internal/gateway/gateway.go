@@ -23,6 +23,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/contextopt"
 	"github.com/ks1686/peaproxy/internal/contextstore"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/localruntime"
@@ -514,16 +515,57 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 		var resp adapter.ChatResponse
 		var callErr error
 		var attempted atomic.Bool
+		// callOnce issues one upstream attempt. It is forward-declared so the
+		// proxy tool loop below can wrap it without the two closures having to
+		// be ordered around each other.
+		var callOnce func(context.Context, []byte, bool) (adapter.ChatResponse, error)
 		callUpstream := func(runCtx context.Context) (adapter.ChatResponse, error) {
+			// Proxy tool rounds wrap the transport retries rather than the other
+			// way round: a search is part of answering one request, so a failed
+			// re-send is a failed round, not a new request.
+			body := raw
+			rounds := contextopt.NewBudget()
+			first := true
+			for {
+				resp, err := callOnce(runCtx, body, first)
+				if err != nil {
+					return resp, err
+				}
+				calls := contextopt.ProxyToolCalls(resp.Raw)
+				if len(calls) == 0 || g.Artifacts == nil {
+					return resp, nil
+				}
+				if !rounds.Take() {
+					// The model kept searching past the limit. Stop here rather
+					// than continuing against a provider that is charging.
+					return resp, nil
+				}
+				results := contextopt.RunSearches(g.Artifacts, session, calls)
+				next := contextopt.AppendToolResults(body, calls, results)
+				if string(next) == string(body) {
+					// The body could not carry a result. Stopping beats resending
+					// an identical request the model will answer the same way.
+					return resp, nil
+				}
+				body = next
+				first = false
+			}
+		}
+		callOnce = func(runCtx context.Context, body []byte, countAttempt bool) (adapter.ChatResponse, error) {
 			var once adapter.ChatResponse
 			var onceErr error
 			for attempt := 0; attempt < 2; attempt++ {
-				if err := budgetAttempts.take(); err != nil {
-					return adapter.ChatResponse{}, errAttemptBudgetExhausted
+				// The attempt budget exists to stop a retry storm on failure. A
+				// proxy search round is a successful call, so charging it against
+				// that budget would stop a legitimate search after one round.
+				if countAttempt {
+					if err := budgetAttempts.take(); err != nil {
+						return adapter.ChatResponse{}, errAttemptBudgetExhausted
+					}
 				}
 				attempted.Store(true)
 				once, onceErr = admitted(g, runCtx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
-					return inst.Adapter.Chat(c, chatReq(inst, model, g.bodyFor(raw, inst, session), false, budget))
+					return inst.Adapter.Chat(c, chatReq(inst, model, g.bodyFor(body, inst, session), false, budget))
 				})
 				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
 					break

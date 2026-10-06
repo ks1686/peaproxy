@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"github.com/ks1686/peaproxy/internal/contextopt"
 	"github.com/ks1686/peaproxy/internal/contextstore"
 	"github.com/ks1686/peaproxy/internal/requestmeta"
@@ -32,6 +33,10 @@ func (g *Gateway) contextOptimize(raw []byte, inst instance, session string) []b
 			Enabled:       true,
 			ClientTools:   true,
 			ProviderTools: true,
+			// Detected from the body rather than passed in, so no call site can
+			// forget it. A streaming request that PeaProxy could only answer by
+			// buffering would be answered late or not at all.
+			Streaming: streamRequested(raw),
 		}); ok {
 			raw, injectedTool = out, true
 		}
@@ -84,4 +89,15 @@ var _ = contextstore.New
 // body the cache would otherwise have keyed on.
 func (g *Gateway) bodyFor(raw []byte, inst instance, session string) []byte {
 	return g.contextOptimize(g.promptBody(raw, inst.Provider.Adapter), inst, session)
+}
+
+// streamRequested reports whether the caller asked for an incremental response.
+func streamRequested(raw []byte) bool {
+	var doc struct {
+		Stream bool `json:"stream"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return false
+	}
+	return doc.Stream
 }
