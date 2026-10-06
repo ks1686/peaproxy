@@ -585,6 +585,14 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 					// made and cannot answer, so the turn ends here with the
 					// reason instead. A truncated answer presented as a
 					// complete one is the same failure wearing a hat.
+					//
+					// The round was still fetched upstream and still billed, so
+					// its usage is recorded before it goes. Dropping it here
+					// left the one round the client certainly paid for as the
+					// one call the ledger could not see -- and the round that
+					// ends a runaway loop is not a round anyone would notice
+					// going missing.
+					g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
 					return adapter.ChatResponse{}, RoundLimitError{reason: rounds.Stop()}
 				}
 				results := contextopt.RunSearches(g.Artifacts, session, calls)

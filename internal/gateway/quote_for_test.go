@@ -6,6 +6,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/router"
+	"github.com/ks1686/peaproxy/internal/translate"
 )
 
 // The spend ledger can only price a call it knows the deployment of. An exact
@@ -115,5 +116,31 @@ func TestQuoteNeedsAnAccount(t *testing.T) {
 
 	if q := gw.QuoteFor("", "gpt-5"); q.Input != nil || q.Output != nil {
 		t.Fatalf("quote = %#v, want an unpriceable quote", q)
+	}
+}
+
+// A -thinking-N suffix is an opt-in, not a different deployment: routing strips
+// it and calls the base id upstream. Pricing the suffixed name missed a quote
+// that exists, which left every thinking call unmeasured -- and an unmeasured
+// call fails a spend ceiling closed, so the ceiling refused spends PeaProxy was
+// able to price.
+func TestQuoteForStripsTheThinkingSuffix(t *testing.T) {
+	in, out := 3.0, 15.0
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.models = []catalog.Model{{
+		ID: "claude-3", AccountID: "acct-a", Tier: catalog.TierPaid,
+		Price: catalog.Price{Input: &in, Output: &out, Currency: "USD", Source: "anthropic", Verified: true},
+	}}
+
+	q := gw.QuoteFor("acct-a", "claude-3-thinking-2000")
+	if q.Input == nil || *q.Input != in || q.Output == nil || *q.Output != out {
+		t.Fatalf("quote = %#v, want the base model's rates; a thinking opt-in is not a different deployment", q)
+	}
+
+	// A model whose name legitimately ends that way must not be stripped, and
+	// neither must a suffix that is not a budget.
+	base, _ := translate.SplitThinkingSuffix("claude-3-thinking-2000")
+	if base != "claude-3" {
+		t.Fatalf("base = %q", base)
 	}
 }

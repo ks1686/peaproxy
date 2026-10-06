@@ -4,6 +4,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/economics"
 	"github.com/ks1686/peaproxy/internal/router"
+	"github.com/ks1686/peaproxy/internal/translate"
 )
 
 // QuoteFor returns the verified quote for the deployment that served one call.
@@ -27,7 +28,16 @@ func (g *Gateway) QuoteFor(account, clientModel string) economics.Quote {
 		return economics.Quote{}
 	}
 	if !router.Automatic(clientModel) {
-		return priceForDeployment(g, account, clientModel).Quote()
+		// A -thinking-N suffix is the client's opt-in, not a different
+		// deployment: routing strips it and calls the base id upstream. Looking
+		// the quote up under the suffixed name missed a price that exists, so
+		// every thinking call read as unmeasured -- and an unmeasured call fails
+		// the ceiling closed, refusing a spend PeaProxy could have priced.
+		//
+		// The suffix is stripped the same way prepare strips it, so the ledger
+		// prices the model that actually ran.
+		base, _ := translate.SplitThinkingSuffix(clientModel)
+		return priceForDeployment(g, account, base).Quote()
 	}
 	models := g.routeCandidatesFor(account, clientModel)
 	if len(models) != 1 {
