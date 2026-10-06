@@ -318,3 +318,22 @@ func TestStreamingRequestIsNotOfferedTheProxyTool(t *testing.T) {
 		t.Error("an unparseable body was detected as streaming")
 	}
 }
+
+// A store that is always present is what makes carried context real. It was
+// left nil in the constructor, and every context path treats nil as "skip", so
+// the feature documented as on by default never ran.
+func TestGatewayAlwaysHasAnArtifactStore(t *testing.T) {
+	stub := func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}},
+		})
+	}
+	gw := twoAccountGateway(t, stub, stub)
+	if gw.Artifacts == nil {
+		t.Fatal("the artifact store is nil in a constructed gateway; every context path skips on nil")
+	}
+}

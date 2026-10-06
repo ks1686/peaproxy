@@ -540,12 +540,19 @@ func (s *Store) SpentInLastDays(n int) (usd float64, priced, total int) {
 	defer s.mu.Unlock()
 	for _, d := range s.days {
 		// Day strings are YYYY-MM-DD, so they order lexicographically.
-		if d.Day < cutoff || d.CostUSD == nil {
+		if d.Day < cutoff {
 			continue
 		}
-		usd += *d.CostUSD
-		priced += d.CostCalls
+		// Every call counts towards total, including calls whose cost was never
+		// established. Skipping the day when CostUSD is nil made an entirely
+		// unpriced day look like a day with no calls at all, so priced equalled
+		// total and a spend ceiling read it as measurably nothing spent --
+		// failing open exactly when the ledger knows least.
 		total += d.Calls
+		priced += d.CostCalls
+		if d.CostUSD != nil {
+			usd += *d.CostUSD
+		}
 	}
 	return usd, priced, total
 }

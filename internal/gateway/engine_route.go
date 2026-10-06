@@ -203,10 +203,10 @@ func (g *Gateway) instanceFor(account string) instance {
 func automaticKind(g *Gateway, routeName string, m catalog.Model) bool {
 	switch routeName {
 	case router.RouteLocal:
-		if m.Tier == catalog.TierLocal {
-			return true
-		}
-		return g.cfg.AutomaticRoutes.CloudFallback
+		// pea/local never leaves this machine. cloudFallback applies to
+		// automatic routing generally; honouring it here would return a cloud
+		// account for a route whose name promises the opposite.
+		return router.LocalOnlyRouteAllows(m)
 	case router.RouteFree:
 		return priceForDeployment(g, m.AccountID, m.ID).Free()
 	case router.RouteEconomy:
