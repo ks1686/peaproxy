@@ -142,6 +142,10 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	} else {
 		g.Usage = &usage.Store{}
 	}
+	// The spend ceiling reads from the same ledger everything else reports, so
+	// it counts spend PeaProxy actually recorded. Leaving this nil would make
+	// the ceiling see a permanent zero and never fire.
+	g.SetUsage(g.Usage)
 	if err := g.rebuild(); err != nil {
 		return nil, err
 	}

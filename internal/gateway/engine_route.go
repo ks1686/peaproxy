@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -83,6 +84,8 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 	// Tracked separately so a freeOnly refusal can say why rather than
 	// reporting the generic "no eligible model".
 	var freeBlocked, freeSeen bool
+	var ceilingBlocked bool
+	var ceilingReason string
 	for _, m := range models {
 		if !m.Routable {
 			continue
@@ -107,6 +110,16 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 				continue
 			}
 		}
+		// The spend ceiling is a refusal to spend, so it is checked after
+		// free-only: a deployment already proven free costs nothing and cannot
+		// breach a ceiling. Anything else is gated, and a refusal is reported
+		// rather than silently dropped from the candidates.
+		if g.cfg.SpendCeiling() > 0 && !freeOnlyAllows(g, m) {
+			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
+				ceilingBlocked, ceilingReason = true, reason
+				continue
+			}
+		}
 		// Judge this account against this model. Collapsing the slots into one
 		// entry first lost cooldowns: anyActive returns a single slot, so a
 		// model cooling for an hour ranked as available whenever an unrelated
@@ -126,6 +139,9 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		rankedModel = append(rankedModel, m.ID)
 	}
 	if len(ranked) == 0 {
+		if ceilingBlocked {
+			return "", nil, "", errors.New(ceilingReason)
+		}
 		if freeBlocked && !freeSeen {
 			return "", nil, "", fmt.Errorf(
 				"automatic route %q has no free model: optimization.freeOnly is on and no deployment has a verified zero price",
@@ -240,6 +256,14 @@ func freeOnlyAllows(g *Gateway, m catalog.Model) bool {
 	p := priceForDeployment(g, m.AccountID, m.ID)
 	return p.Verified && p.Currency == economics.LedgerCurrency && p.Free()
 }
+
+// chargedUsage marks a request as one that may cost money, for the checks that
+// only care whether a call is free rather than what it will cost.
+//
+// The token counts are left unknown on purpose: PeaProxy cannot state the
+// output length before the model has answered, and a partial estimate used as
+// a complete one is exactly the error this project exists to avoid.
+func chargedUsage() economics.Usage { return economics.Usage{Unknown: true} }
 
 // priceForDeployment returns the verified quote for one deployment. An explicit
 // user quote may be keyed by "account/model" and wins over the catalog row for

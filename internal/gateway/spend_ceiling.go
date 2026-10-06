@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ks1686/peaproxy/internal/economics"
+	"github.com/ks1686/peaproxy/internal/usage"
 )
 
 // spendWindow returns recorded spend in USD over the last n days, how many
@@ -62,4 +63,18 @@ func (g *Gateway) spentInWindow(days int) (usd float64, priced, total int) {
 		return 0, 0, 0
 	}
 	return g.spendWindow(days)
+}
+
+// SetUsage attaches a ledger and rebinds the spend ceiling to it.
+//
+// Rebinding together is the point. Assigning the store alone would leave the
+// ceiling reading a ledger nobody writes to, which reports a permanent zero
+// spend and never fires -- a money guard that is quietly inert.
+func (g *Gateway) SetUsage(store *usage.Store) {
+	g.Usage = store
+	if store == nil {
+		g.spendWindow = nil
+		return
+	}
+	g.spendWindow = store.SpentInLastDays
 }
