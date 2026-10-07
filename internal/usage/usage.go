@@ -101,6 +101,19 @@ type Event struct {
 	// already set -- and once the window is unmeasurable the ceiling refuses
 	// everything, forever, for a reason that has nothing to do with the prices.
 	NotDispatched bool `json:"notDispatched,omitempty"`
+	// Discarded marks a retrieval round PeaProxy fetched, was billed for, and
+	// then replaced before the client ever saw it.
+	//
+	// The cost is real and counts toward spend like any other call, which is
+	// the whole reason the round is recorded at all. What it also buys is the
+	// ability to say how much of the bill was work nobody received -- without
+	// it, a tool loop reads as one call and the replaced rounds are
+	// indistinguishable from calls that were answered.
+	//
+	// This is a cost, not a saving. It states what retrieval spent, never what
+	// it saved: an avoided call is one that was never made and has no ledger
+	// entry at all.
+	Discarded bool `json:"discarded,omitempty"`
 }
 
 // NotDispatched marks an error for a request refused before any provider was
@@ -138,6 +151,20 @@ type AccountRollup struct {
 	Calls     int    `json:"calls"`
 	Errors    int    `json:"errors"`
 	Tokens    int    `json:"tokens"`
+	// Discarded counts the calls among Calls whose response never reached a
+	// client, and DiscardedTokens the tokens spent producing them.
+	//
+	// DiscardedUSD is money a provider itself reported for those rounds and
+	// DiscardedEstimatedUSD is PeaProxy's own reading of them. They are kept
+	// apart for the same reason CostUSD and EstimatedUSD are: a provider's
+	// number is the bill, and adding an estimate to it would count the same
+	// tokens twice. Both stay nil until every discarded round is priced, so a
+	// partial sum can never read as a smaller total.
+	Discarded               int      `json:"discarded,omitempty"`
+	DiscardedTokens         int      `json:"discardedTokens,omitempty"`
+	DiscardedUSD            *float64 `json:"discardedUSD,omitempty"`
+	DiscardedEstimatedCalls int      `json:"discardedEstimatedCalls,omitempty"`
+	DiscardedEstimatedUSD   *float64 `json:"discardedEstimatedUSD,omitempty"`
 }
 
 // ProviderRollup is a per-adapter summary across accounts that share a provider.
@@ -525,6 +552,32 @@ func (s *Store) ByAccount() []AccountRollup {
 		out[i].Tokens += e.PromptTokens + e.CompletionTokens
 		if e.Status >= 400 || e.Error != "" {
 			out[i].Errors++
+		}
+		if e.Discarded {
+			out[i].Discarded++
+			out[i].DiscardedTokens += e.PromptTokens + e.CompletionTokens
+			switch {
+			case e.CostUSD != nil:
+				if out[i].DiscardedUSD == nil {
+					zero := 0.0
+					out[i].DiscardedUSD = &zero
+				}
+				*out[i].DiscardedUSD += *e.CostUSD
+			case e.EstimatedUSD != nil:
+				out[i].DiscardedEstimatedCalls++
+				if out[i].DiscardedEstimatedUSD == nil {
+					zero := 0.0
+					out[i].DiscardedEstimatedUSD = &zero
+				}
+				*out[i].DiscardedEstimatedUSD += *e.EstimatedUSD
+			default:
+				// A discarded round nobody could price. The counts above stay
+				// true, but any money total for this account is now unknown,
+				// and an unknown that reads as zero is the failure this file
+				// exists to prevent.
+				out[i].DiscardedUSD = nil
+				out[i].DiscardedEstimatedUSD = nil
+			}
 		}
 	}
 	return out

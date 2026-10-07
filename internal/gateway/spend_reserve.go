@@ -113,6 +113,10 @@ func (g *Gateway) recordDiscardedRound(account, model string, body []byte) {
 		Protocol:  "openai",
 		Path:      "/v1/chat/completions",
 		Status:    http.StatusOK,
+		// Marks this round as one the client never received. The cost still
+		// counts; the mark is what lets a rollup say so instead of reading the
+		// loop as a single answered call.
+		Discarded: true,
 	}
 	usage.ApplyPublishedUsage(&e, body, false)
 	if e.CostUSD == nil && e.Costable {
