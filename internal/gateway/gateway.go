@@ -1769,13 +1769,17 @@ func (g *Gateway) publishAdmissionLimits(cfg config.Config) {
 // looked like it was working (#74).
 func admitted[T any](g *Gateway, ctx context.Context, account, model string, body []byte, f func(context.Context) (T, error)) (T, error) {
 	var zero T
+	// Both refusals below happen before f runs, so nothing was sent upstream.
+	// Marking them lets the ledger record an outcome without counting it as
+	// spend, which would otherwise read as an unmeasured call and make the
+	// ceiling refuse everything for a reason it cannot fix.
 	release, err := g.admit(ctx, account)
 	if err != nil {
-		return zero, err
+		return zero, usage.MarkNotDispatched(err)
 	}
 	defer release()
 	if err := g.holdSpend(account, model, body); err != nil {
-		return zero, err
+		return zero, usage.MarkNotDispatched(err)
 	}
 	return f(ctx)
 }

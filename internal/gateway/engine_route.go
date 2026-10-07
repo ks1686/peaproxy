@@ -16,6 +16,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/requestmeta"
 	"github.com/ks1686/peaproxy/internal/responsecache"
 	"github.com/ks1686/peaproxy/internal/router"
+	"github.com/ks1686/peaproxy/internal/usage"
 )
 
 func (g *Gateway) promptBody(raw []byte, adapterName string) []byte {
@@ -150,7 +151,10 @@ func (g *Gateway) forbiddenFiltered(cands []instance, model string) ([]instance,
 	}
 	if len(allowed) == 0 {
 		if blockedReason != "" {
-			return nil, errors.New(blockedReason)
+			// Refused before dispatch: nothing was sent upstream, so this costs
+			// the user nothing and must not enter the spend window as an
+			// unmeasured call.
+			return nil, usage.MarkNotDispatched(errors.New(blockedReason))
 		}
 		return nil, fmt.Errorf("no account can serve %q", model)
 	}

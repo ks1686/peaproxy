@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -90,6 +91,44 @@ type Event struct {
 	// event is what makes a client report a missing finish_reason, so it is
 	// recorded rather than counted as an ordinary success. Empty on non-streams.
 	StreamTerminal string `json:"streamTerminal,omitempty"`
+	// NotDispatched marks a request PeaProxy refused before it reached a
+	// provider.
+	//
+	// Such a request cost the user nothing, so it must not appear in the spend
+	// window at all. Recorded as an ordinary call it inflates the denominator
+	// without ever being priced, which flips a ceiling from "over budget" to
+	// "spend cannot be measured" and then advises setting prices that are
+	// already set -- and once the window is unmeasurable the ceiling refuses
+	// everything, forever, for a reason that has nothing to do with the prices.
+	NotDispatched bool `json:"notDispatched,omitempty"`
+}
+
+// NotDispatched marks an error for a request refused before any provider was
+// called.
+//
+// The account alone cannot say this: routing picks the deployment first, and the
+// spend ceiling refuses afterwards, so a refused request carries a real account
+// and only ever reached PeaProxy. Counting it as a call makes a refusal look
+// like unmeasured spend, which flips a ceiling from "over budget" to "spend
+// cannot be measured" and advises setting prices that are already set.
+type notDispatched struct{ err error }
+
+func (n notDispatched) Error() string { return n.err.Error() }
+func (n notDispatched) Unwrap() error { return n.err }
+
+// MarkNotDispatched tags an error as having been refused before dispatch.
+func MarkNotDispatched(err error) error {
+	if err == nil {
+		return nil
+	}
+	return notDispatched{err}
+}
+
+// IsNotDispatched reports whether err came from a request that never left the
+// machine.
+func IsNotDispatched(err error) bool {
+	var n notDispatched
+	return errors.As(err, &n)
 }
 
 // AccountRollup is a per-account summary.
@@ -418,6 +457,11 @@ func (s *Store) noteDayLocked(e Event) {
 func bumpDay(row *DayRollup, e Event) {
 	if row.Provider == "" {
 		row.Provider = e.Provider
+	}
+	if e.NotDispatched {
+		// Counted as an outcome, never as spend. It never reached a provider.
+		row.Errors++
+		return
 	}
 	row.Calls++
 	if e.Status >= 400 || e.Error != "" {

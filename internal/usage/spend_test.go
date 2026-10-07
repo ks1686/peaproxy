@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -179,5 +180,41 @@ func TestSpendNeverDipsWhileACallIsSettledIntoItsEvent(t *testing.T) {
 	}
 	if after > 5.00 {
 		t.Fatalf("the window reads %v, above the 5.00 it was holding: the event and the hold both counted", after)
+	}
+}
+
+// A request PeaProxy refused never reached a provider and cost the user
+// nothing.
+//
+// Recorded as an ordinary call it inflates the denominator without ever being
+// priced, which flips a ceiling from "over budget" to "spend cannot be measured"
+// -- and then it refuses everything, for a reason that has nothing to do with
+// the prices it goes on to advise the user to set.
+func TestARefusedRequestIsNotAnUnmeasuredCall(t *testing.T) {
+	s := Open("")
+	cost := 0.02
+	s.Add(Event{
+		AccountID: "acct", Model: "m", Time: time.Now(),
+		TokensKnown: true, Costable: true, CostUSD: &cost,
+	})
+
+	measured := s.SpentInLastDays(1)
+	if measured.Priced != measured.Total {
+		t.Fatalf("a priced call left the window unmeasurable: %+v", measured)
+	}
+
+	// The ceiling refuses, and records the refusal.
+	s.Add(Event{Model: "m", Time: time.Now(), Status: 502, Error: "refusing to spend",
+		NotDispatched: IsNotDispatched(MarkNotDispatched(errors.New("refusing to spend")))})
+
+	after := s.SpentInLastDays(1)
+	if after.Priced != after.Total {
+		t.Fatalf("a refusal that never left the machine made the window unmeasurable: %+v", after)
+	}
+	if after.USD != cost {
+		t.Fatalf("a refusal changed the recorded total to %v, want %v", after.USD, cost)
+	}
+	if after.Total != 1 {
+		t.Fatalf("total calls = %d, want 1: a refused request was counted as a call", after.Total)
 	}
 }

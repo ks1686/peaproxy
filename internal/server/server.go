@@ -1041,6 +1041,10 @@ func (s *Server) recordCall(account, model, proto, path string, stream bool, sta
 		if e.Status == 0 {
 			e.Status = statusOf(err)
 		}
+		// The gateway refused before anything upstream was called. Counting
+		// this as a call would make PeaProxy's own refusal look like
+		// unmeasurable spend -- and a refusal costs the user nothing.
+		e.NotDispatched = usage.IsNotDispatched(err)
 	}
 	if snap, ok := s.gw.QuotaSnapshot(account); ok && snap.Reported() && snap.CapturedAt != nil && !snap.CapturedAt.Before(started) {
 		e.QuotaHint = snap.Compact()
