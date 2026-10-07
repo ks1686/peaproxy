@@ -154,6 +154,30 @@ function bindOnboarding(root, pickPreset) {
   });
 }
 
+// Retrieval rounds PeaProxy fetched, was billed for, and then replaced before
+// the client ever saw them.
+//
+// This is money *spent*, never money saved. A call PeaProxy avoided making is
+// one that was never made and leaves no entry here, so the absence of discards
+// is not evidence of a saving, and a figure shown here must not be read as one.
+// An unpriced round reads "cost unknown" rather than $0, because half a usage
+// object is not half a cost.
+function discardedCell(a) {
+  const n = a.discarded || 0;
+  if (!n) return "—";
+  const tokens = a.discardedTokens || 0;
+  // Both figures can be present at once, because a provider figure and an
+  // estimate come from different rounds. Showing only the bill while counting
+  // every round understates what retrieval cost.
+  const parts = [];
+  if (a.discardedUSD != null) parts.push(`$${Number(a.discardedUSD).toFixed(6)}`);
+  if (a.discardedEstimatedUSD != null) {
+    parts.push(`$${Number(a.discardedEstimatedUSD).toFixed(6)} est`);
+  }
+  const money = parts.length ? parts.join(" + ") : "cost unknown";
+  return `${n} round${n === 1 ? "" : "s"}, ${tokens} tokens, ${money}`;
+}
+
 function usageTables(data) {
   const providers = data.byProvider || [];
   const accounts = data.byAccount || [];
@@ -213,6 +237,7 @@ function usageTables(data) {
         <td>${escapeHtml(String(a.calls || 0))}</td>
         <td>${escapeHtml(String(a.errors || 0))}</td>
         <td>${escapeHtml(String(a.tokens || 0))}</td>
+        <td>${discardedCell(a)}</td>
       </tr>`
     )
     .join("");
@@ -252,7 +277,7 @@ function usageTables(data) {
     ${
       accountRows
         ? `<table>
-      <thead><tr><th>Account</th><th>Provider</th><th>Calls</th><th>Errors</th><th>Tokens</th></tr></thead>
+      <thead><tr><th>Account</th><th>Provider</th><th>Calls</th><th>Errors</th><th>Tokens</th><th>Retrieval discarded</th></tr></thead>
       <tbody>${accountRows}</tbody></table>`
         : emptyState("No account usage yet", "Each configured account that serves a request appears here.")
     }

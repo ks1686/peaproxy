@@ -171,13 +171,37 @@ providers:
 
 Every field is optional and unset means "keep the adapter's own declaration" — only `tools`, `visionIn`, `imageOut` and `embeddings` can be corrected, because those are the ones an adapter asserts without being able to check. A declared `false` is believed in both directions: routing will not send a tool call there, and `/v1/models` and the health report say `no` rather than `unknown`, because you already know and PeaProxy has no reason to pretend otherwise.
 
-**A misspelled key here is ignored, not refused.** The loader does not reject
-unknown keys, so `capabilites:` validates as `ok` and the declaration it looks
-like it made is not in effect. That is a property of the whole config format, not
-of this block — turning it around would refuse existing configs that carry an
-unknown key today, which is a breaking change rather than a bug fix. Until that
-is decided, confirm a correction took effect by watching the health report change
+**An unknown key is reported, not refused.** The loader does not reject unknown
+keys, so `capabilites:` never took effect — but `peaproxy config validate` and
+`peaproxy serve` now name every key the file carries that this version does not
+read, with the path that carries it and, where one key is recognisably a typo of
+another, what to write instead:
+
+```
+warning: 1 config key(s) are not read by this version and are ignored:
+  providers[0].baseUrl -- did you mean "baseURL"?
+  ignored keys keep their default, so the setting stays whatever it was
+```
+
+Map entries are not field names and are never reported this way, so `routes:` and
+`catalog.rename:` keys are left alone.
+
+It warns rather than refuses because a config carrying an unknown key is a working
+config today, and failing on it would break a running deployment over a spelling.
+That is why refusing is still an open question rather than a decision here. Once
+the configs in the wild are clean, the same list can become the error it should
+have been from the start.
+
+Confirm a correction took effect by watching the health report change
 (`peaproxy health` lists the capabilities PeaProxy believes each account has).
+
+**`config validate` reaches the same verdict as `serve`.** It used to print `ok`
+for a config the gateway then refused to start on — a case-mistyped `baseUrl` is
+the common one, since the endpoint silently stays empty. Validate now builds every
+configured account's adapter with the same options the gateway uses, so the two
+cannot drift, and reports the gateway's own error instead of approving the config.
+The unknown-key warning is printed *before* that failure on purpose: the typo is
+the diagnosis, and "baseURL is required" is only its symptom.
 
 #### How the ledger is priced
 
