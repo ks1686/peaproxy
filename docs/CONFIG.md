@@ -225,6 +225,24 @@ What a ceiling is also **not**: a cap on a deployment nobody has priced. A hold 
 
 Off unless both `localAssistant: true` and an endpoint are set. The endpoint **must** resolve to loopback; there is no setting that allows anything else, because a helper described as local that can be pointed at a remote host is not one. Setting an endpoint with `localAssistant: false` is a validation error rather than a silently ignored field.
 
+### Cursor Agent
+
+`adapter: cursor_agent` runs the `cursor-agent` CLI as an upstream. It costs your Cursor subscription, not tokens per million, so it is priced as a flat tier and needs no price quote.
+
+Set `workDir` on the provider:
+
+```yaml
+providers:
+  - id: cursor-sub
+    adapter: cursor_agent
+    tier: paid
+    workDir: /Users/you/cursor-scratch
+```
+
+`cursor-agent` asks for **workspace trust** before it will read anything, and that prompt is interactive — a service cannot answer it. Naming a directory with `workDir` both pins where the agent runs and passes `--trust` for that directory: naming it is the operator stating which directory is trusted. Left unset, no `--trust` is passed and the agent inherits PeaProxy's own working directory, so a run started from an unvetted place is refused with a message naming `workDir` rather than silently granted access.
+
+Two more limits worth knowing before routing to it. It runs one prompt per call, not a message array, so a conversation is flattened into a transcript with roles preserved. And it has no tool calling, so `tools` is reported unsupported rather than unknown, and a request that needs tools will not route here.
+
 ## Request engine
 
 `requestEngine` and `automaticRoutes` are optional. Omitted, they keep the schema-1 path: three attempts, a two-minute deadline, prompt-cache bytes left as the caller sent them, no response cache, and no `pea/*` route.

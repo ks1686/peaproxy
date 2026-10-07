@@ -214,10 +214,12 @@ func retryAfter(h http.Header, now time.Time) time.Duration {
 
 // Options is the generic constructor input for adapters.
 type Options struct {
-	ID           string
-	BaseURL      string
-	APIKey       string
-	SessionID    string
+	ID        string
+	BaseURL   string
+	APIKey    string
+	SessionID string
+	// WorkDir is the directory a local agent subprocess runs in.
+	WorkDir      string
 	Tier         catalog.Tier
 	ExtraHeaders map[string]string
 	OAuth        oauth.Token

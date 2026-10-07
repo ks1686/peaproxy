@@ -123,6 +123,13 @@ type Provider struct {
 	APIKey string `yaml:"apiKey,omitempty"`
 	// SessionID is used by OpenCode Zen (x-session-id). Fragile vs API key.
 	SessionID string `yaml:"sessionId,omitempty"`
+	// WorkDir sets the directory a local agent runs in. cursor-agent asks for
+	// workspace trust before it will read anything, and that prompt is
+	// interactive: left unset it inherits whatever directory PeaProxy was
+	// started from, so the answer changes when the service is restarted from
+	// somewhere else. Setting it here pins the choice to somewhere the user
+	// can trust once.
+	WorkDir string `yaml:"workDir,omitempty"`
 	// Label is a user-facing tier override (free|freemium|paid|local).
 	Label    string `yaml:"label,omitempty"`
 	Disabled bool   `yaml:"disabled,omitempty"`
