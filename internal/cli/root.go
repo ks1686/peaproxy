@@ -86,6 +86,7 @@ func loadCfg(path string) (config.Config, string, error) {
 }
 
 func serveCmd(configPath *string) *cobra.Command {
+	var strictConfig bool
 	bind := config.DefaultBind
 	port := config.DefaultPort
 	allowLAN := false
@@ -131,12 +132,23 @@ Examples:
 			// Warned here as well as in validate, because serve is where the
 			// setting actually takes effect. A person who never runs validate
 			// would otherwise lose it with nothing said at all.
-			if err := warnUnknownKeys(cmd.ErrOrStderr(), path); err != nil {
+			//
+			// --strict-config turns this into the error. The warning prints
+			// before the refusal on purpose: the typo is the diagnosis, and
+			// "refusing to start" with no key named is just a dead end.
+			check := warnUnknownKeys
+			if strictConfig {
+				check = strictUnknownKeys
+			}
+			if err := check(cmd.ErrOrStderr(), path); err != nil {
 				return err
 			}
 			return runServe(cmd.OutOrStdout(), cfg, path, created)
 		},
 	}
+	cmd.Flags().BoolVar(&strictConfig, "strict-config", false,
+		"Refuse to start when the config carries keys this version does not read "+
+			"(default: warn and ignore)")
 	cmd.Flags().StringVar(&bind, "bind", config.DefaultBind, "Listen address (loopback default)")
 	cmd.Flags().IntVar(&port, "port", config.DefaultPort, "Listen port")
 	cmd.Flags().BoolVar(&allowLAN, "allow-lan", false, "Permit non-loopback bind (also requires --admin-token)")
@@ -349,7 +361,8 @@ func configCmd(configPath *string) *cobra.Command {
 			return nil
 		},
 	})
-	cmd.AddCommand(&cobra.Command{
+	var validateStrict bool
+	validateCmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Exit non-zero if config is invalid",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -368,7 +381,11 @@ func configCmd(configPath *string) *cobra.Command {
 			// are two different messages, and the one that helps is the typo.
 			// "baseURL is required" tells a user what is missing; "you wrote
 			// baseUrl" tells them what to change.
-			if err := warnUnknownKeys(cmd.ErrOrStderr(), path); err != nil {
+			check := warnUnknownKeys
+			if validateStrict {
+				check = strictUnknownKeys
+			}
+			if err := check(cmd.ErrOrStderr(), path); err != nil {
 				return err
 			}
 			// Validate has to reach the verdict serve reaches. Reporting "ok"
@@ -387,7 +404,10 @@ func configCmd(configPath *string) *cobra.Command {
 				path, cfg.Addr(), config.IsLoopback(cfg.Bind), cfg.RequestLog, len(cfg.Catalog.Pin), len(cfg.Catalog.Rename), cfg.FailoverPolicy(), len(cfg.Providers), backend)
 			return nil
 		},
-	})
+	}
+	validateCmd.Flags().BoolVar(&validateStrict, "strict-config", false,
+		"Fail when the config carries keys this version does not read (default: warn and continue)")
+	cmd.AddCommand(validateCmd)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "init",
 		Short: "Write the default config file if missing",
@@ -622,6 +642,40 @@ func checkAdaptersBuild(cfg config.Config, w io.Writer) error {
 // running deployment over a spelling, so this names the key, names the key it
 // probably meant, and leaves the exit code alone.
 func warnUnknownKeys(w io.Writer, path string) error {
+	return reportUnknownKeys(w, path, false)
+}
+
+// strictUnknownKeys turns the same list into the error it should have been from
+// the start, for anyone who has cleaned their config and wants the guarantee.
+//
+// This is opt-in because refusing is a breaking change: a typo that has been
+// sitting in a running config, quietly ignored, would stop that proxy booting.
+// That is the right behaviour for a config that has never worked and the wrong
+// behaviour for one that has been serving all along, and PeaProxy cannot tell
+// them apart from the text alone. So the default stays a warning and the
+// guarantee is a flag the operator turns on once their config is clean.
+//
+// --strict-config also makes `config validate` fail, which is the useful half:
+// it turns "does this config still have a typo in it" into a thing a CI job or
+// a pre-commit hook can ask.
+func strictUnknownKeys(w io.Writer, path string) error {
+	return reportUnknownKeys(w, path, true)
+}
+
+// describeUnknown names one unreadable key, and what it was probably meant to
+// be, because the typo is the diagnosis.
+func describeUnknown(u config.UnknownKey) string {
+	where := u.Path
+	if where == "" {
+		where = "top level"
+	}
+	if u.Nearest != "" {
+		return fmt.Sprintf("%s.%s -- did you mean %q?", where, u.Key, u.Nearest)
+	}
+	return fmt.Sprintf("%s.%s", where, u.Key)
+}
+
+func reportUnknownKeys(w io.Writer, path string, strict bool) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil // loadCfg already reported a missing or unreadable file
@@ -630,17 +684,17 @@ func warnUnknownKeys(w io.Writer, path string) error {
 	if err != nil || len(unknown) == 0 {
 		return nil
 	}
+	if strict {
+		fmt.Fprintf(w, "\n%d config key(s) are not read by this version, and --strict-config is set:\n", len(unknown))
+		for _, u := range unknown {
+			fmt.Fprintf(w, "  %s\n", describeUnknown(u))
+		}
+		return fmt.Errorf("refusing to start: %d config key(s) are not read by this version "+
+			"(strict mode). Fix them, or drop --strict-config to warn instead", len(unknown))
+	}
 	fmt.Fprintf(w, "\nwarning: %d config key(s) are not read by this version and are ignored:\n", len(unknown))
 	for _, u := range unknown {
-		where := u.Path
-		if where == "" {
-			where = "top level"
-		}
-		if u.Nearest != "" {
-			fmt.Fprintf(w, "  %s.%s -- did you mean %q?\n", where, u.Key, u.Nearest)
-			continue
-		}
-		fmt.Fprintf(w, "  %s.%s\n", where, u.Key)
+		fmt.Fprintf(w, "  %s\n", describeUnknown(u))
 	}
 	fmt.Fprintf(w, "  ignored keys keep their default, so the setting stays whatever it was\n")
 	return nil

@@ -139,15 +139,30 @@ func walkUnknown(t reflect.Type, node any, path string, out *[]UnknownKey) {
 // enough that naming it helps. Pairing a typo with something unrelated would be
 // worse than admitting there is no match.
 func nearestField(fields map[string]int, key string) string {
-	best, bestScore := "", 0
+	best, bestScore, tied := "", 0, false
 	for name := range fields {
-		if s := similarity(key, name); s > bestScore {
-			best, bestScore = name, s
+		s := similarity(key, name)
+		switch {
+		case s > bestScore:
+			best, bestScore, tied = name, s, false
+		case s == bestScore && s > 0 && name != best:
+			// Two fields are equally close, so neither is an answer.
+			tied = true
 		}
 	}
 	// Three shared characters in a row, or the whole shorter key, is enough to
 	// be a real hint; below that the resemblance is imagined.
 	if bestScore < 3 {
+		return ""
+	}
+	// A tie gets no suggestion. "maxRounds" scores the same against
+	// "maxAttempts" and "maxInFlight", and the old tie-break picked whichever
+	// came first in the struct -- so the tool confidently suggested a field the
+	// author did not mean. Following it leaves the config just as broken, and
+	// now with the typo corrected, which is worse than a typo: it looks right.
+	// Withdrawing the guess costs one line of output and removes the false
+	// lead; the key itself is still named either way.
+	if tied {
 		return ""
 	}
 	return best
