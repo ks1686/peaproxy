@@ -41,6 +41,13 @@ type Mutation struct {
 	AlsoFile string
 	AlsoFrom string
 	AlsoTo   string
+	// ThirdFile/ThirdFrom/ThirdTo break a third guard. One promise here depends
+	// on three stacked defences; breaking two leaves the third standing, and the
+	// scenario then passes with its protection intact -- which reads as coverage
+	// and is not.
+	ThirdFile string
+	ThirdFrom string
+	ThirdTo   string
 	// Why states what this proves, so a failure here is legible.
 	Why string
 }
@@ -66,10 +73,24 @@ var notYetBroken = map[string]string{
 		"promise are covered elsewhere -- the parser by TestPartialUsageIsNotPriced in internal/usage, " +
 		"and the priced-versus-total accounting by the mutation on w.Priced above. Making it " +
 		"breakable needs a harness that prices events, which is a server-level test",
-	"an unknown price never wins over a known one": "three guards stand in the way -- automaticKind filters an unpriced deployment out of economy " +
-		"candidacy, cheapest skips it while ranking, and Cheaper refuses both an unpriced challenger and " +
-		"an unpriced incumbent. Breaking the first two still leaves the promise intact, which is defence " +
-		"in depth rather than a weak promise; showing it would need all three broken at once",
+}
+
+// readSource reads a file for mutation with line endings normalised to LF.
+//
+// Windows checks out with CRLF, so a multi-line anchor written with \n matches
+// nothing there and the gate reported "0 occurrences, want exactly 1" -- which
+// reads as the code having moved, and is not. Every mutation that had passed on
+// Windows so far had a single-line anchor, so the gap stayed invisible until a
+// stacked guard needed a block of code.
+//
+// Only the sandbox copy is touched, and Go builds a CRLF source file perfectly
+// well, so writing the normalised bytes back costs nothing.
+func readSource(root, rel string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		return nil, err
+	}
+	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), nil
 }
 
 func assertEveryPromiseIsBroken(t *testing.T, mutations []Mutation) {
@@ -206,6 +227,26 @@ func routingMutations() []Mutation {
 				"routing leaves an operator's capabilities.tools: false unenforced the moment they name a model",
 		},
 		{
+			// Three guards, one mutation. automaticKind keeps an unpriced
+			// deployment out of economy, cheapest skips it while ranking, and
+			// Cheaper refuses it as both challenger and incumbent. This promise
+			// was recorded as unbreakable for want of a mutation that could
+			// break all three at once; that is now expressible, and the debt is
+			// paid rather than described.
+			Scenario:  "an unknown price never wins over a known one",
+			File:      "internal/gateway/engine_route.go",
+			From:      "\t\tp := priceForDeployment(g, m.AccountID, m.ID)\n\t\treturn p.Input != nil || p.Output != nil",
+			To:        "\t\treturn true",
+			AlsoFile:  "internal/gateway/engine_route.go",
+			AlsoFrom:  "\t\tif price.Input == nil && price.Output == nil {\n\t\t\tcontinue\n\t\t}",
+			AlsoTo:    "\t\tif false {\n\t\t\tcontinue\n\t\t}",
+			ThirdFile: "internal/catalog/pricing.go",
+			ThirdFrom: "\tif b.Input == nil || !b.Verified {\n\t\treturn true\n\t}",
+			ThirdTo:   "\tif false {\n\t\treturn true\n\t}",
+			Why: "breaking one guard leaves the other two standing and the promise intact, which reads as " +
+				"coverage; all three at once is the only edit that shows the scenario can actually fail",
+		},
+		{
 			Scenario: "an undeclared capability is not treated as a refusal",
 			File:     "internal/catalog/capabilities.go",
 			From:     "return c.State(requirement) == SupportNo",
@@ -328,19 +369,25 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 		if _, seen := original[m.File]; seen {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, m.File))
+		b, err := readSource(root, m.File)
 		if err != nil {
 			t.Fatalf("reading %s: %v", m.File, err)
 		}
 		original[m.File] = b
 		restored = append(restored, m.File)
-		if m.AlsoFile != "" && m.AlsoFile != m.File {
-			extra, err := os.ReadFile(filepath.Join(root, m.AlsoFile))
-			if err != nil {
-				t.Fatalf("reading %s: %v", m.AlsoFile, err)
+		for _, extra := range []string{m.AlsoFile, m.ThirdFile} {
+			if extra == "" || extra == m.File {
+				continue
 			}
-			original[m.AlsoFile] = extra
-			restored = append(restored, m.AlsoFile)
+			if _, seen := original[extra]; seen {
+				continue
+			}
+			b, err := readSource(root, extra)
+			if err != nil {
+				t.Fatalf("reading %s: %v", extra, err)
+			}
+			original[extra] = b
+			restored = append(restored, extra)
 		}
 	}
 	defer func() {
@@ -376,12 +423,49 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 						m.AlsoFile, n, m.AlsoFrom)
 				}
 				alsoPath = filepath.Join(root, m.AlsoFile)
-				b, rerr := os.ReadFile(alsoPath)
+				b, rerr := readSource(root, m.AlsoFile)
 				if rerr != nil {
 					t.Fatal(rerr)
 				}
 				alsoBefore = b
-				alsoMutated = bytes.Replace(alsoBefore, []byte(m.AlsoFrom), []byte(m.AlsoTo), 1)
+				// When both edits land in one file the second must build on the
+				// first. Reading from disk here would use pre-mutation text and
+				// the second write would overwrite the first, so a stacked pair
+				// in one file silently applies only one edit -- and the gate
+				// would report a two-guard mutation that broke one.
+				alsoBase := alsoBefore
+				if m.AlsoFile == m.File {
+					alsoBase = mutated
+				}
+				alsoMutated = bytes.Replace(alsoBase, []byte(m.AlsoFrom), []byte(m.AlsoTo), 1)
+			}
+
+			// Which text the third edit builds on depends on whether an earlier
+			// edit touched the same file. Applying the edits in sequence to one
+			// buffer is the only way all of them survive to the write: building
+			// each from disk would let a later write overwrite an earlier edit.
+			var thirdPath string
+			var thirdMutated []byte
+			if m.ThirdFile != "" {
+				thirdPath = filepath.Join(root, m.ThirdFile)
+				var thirdBase []byte
+				switch m.ThirdFile {
+				case m.File:
+					thirdBase = mutated
+				case m.AlsoFile:
+					thirdBase = alsoMutated
+				default:
+					b, rerr := readSource(root, m.ThirdFile)
+					if rerr != nil {
+						t.Fatal(rerr)
+					}
+					thirdBase = b
+				}
+				if n := bytes.Count(thirdBase, []byte(m.ThirdFrom)); n != 1 {
+					t.Fatalf("%s contains %d occurrences of the third anchor, want exactly 1:\nanchor: %s",
+						m.ThirdFile, n, m.ThirdFrom)
+				}
+				thirdMutated = bytes.Replace(thirdBase, []byte(m.ThirdFrom), []byte(m.ThirdTo), 1)
 			}
 
 			if err := os.WriteFile(path, mutated, 0o644); err != nil {
@@ -389,6 +473,11 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 			}
 			if alsoPath != "" {
 				if err := os.WriteFile(alsoPath, alsoMutated, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if thirdPath != "" {
+				if err := os.WriteFile(thirdPath, thirdMutated, 0o644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -401,6 +490,18 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 						t.Fatalf("restoring %s: %v", m.AlsoFile, err)
 					}
 				}
+				// The third file too. Relying on the outer defer left
+				// internal/catalog/pricing.go mutated for every subtest that
+				// followed and for the final back-to-green run, so later
+				// scenarios were being judged against a tree that was not the
+				// one they were written against. A gate that inspects a dirty
+				// tree does not report on the code.
+				if thirdPath != "" {
+					if err := os.WriteFile(thirdPath, original[m.ThirdFile], 0o644); err != nil {
+						t.Fatalf("restoring %s: %v", m.ThirdFile, err)
+					}
+				}
+
 			}()
 
 			// A mutation that does not compile proves nothing: the scenario

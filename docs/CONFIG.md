@@ -192,9 +192,27 @@ Map entries are not field names and are never reported this way, so `routes:` an
 
 It warns rather than refuses because a config carrying an unknown key is a working
 config today, and failing on it would break a running deployment over a spelling.
-That is why refusing is still an open question rather than a decision here. Once
-the configs in the wild are clean, the same list can become the error it should
-have been from the start.
+
+**`--strict-config` makes it the error.** `peaproxy serve --strict-config` and
+`peaproxy config validate --strict-config` refuse to continue, name the keys, and
+say so. That is the half a CI job or a pre-commit hook needs:
+
+```bash
+peaproxy config validate --config peaproxy.yaml --strict-config
+```
+
+It is a flag rather than the default for the reason above: a config that has been
+serving for months, carrying a typo nobody noticed, has to keep booting. Clean
+your config, then turn the flag on and keep it on.
+
+The warning appears **before** any failure the typo caused, in both modes. The
+typo is the diagnosis; "baseURL is required" is only its symptom, and a message
+that names the symptom sends you looking for the wrong thing.
+
+**A suggestion is only offered when one field is clearly closest.** `maxRounds`
+resembles `maxAttempts` and `maxInFlight` equally, so no guess is offered — the
+key is named on its own. A wrong suggestion is worse than none: you fix the
+spelling and the setting stays broken, now looking correct.
 
 Confirm a correction took effect by watching the health report change
 (`peaproxy health` lists the capabilities PeaProxy believes each account has).
