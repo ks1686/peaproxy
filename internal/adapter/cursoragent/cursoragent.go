@@ -96,9 +96,19 @@ func (a *Adapter) ID() string { return a.id }
 // real call: the CLI's presence is knowable without spending anything, and a
 // usage-quota failure is the operator's to fix, not a reason to reject the
 // account at startup.
+//
+// It checks the binary the adapter will actually run -- the absolute path
+// resolved once at construction -- rather than looking the name up on PATH
+// again. The two can disagree: PATH can gain or lose cursor-agent after the
+// account is configured, and the call goes to a.binary either way. Searching
+// PATH here would report an adapter sound while every call fails, or reject one
+// that still runs.
 func (a *Adapter) Validate(context.Context) error {
-	if _, err := exec.LookPath(Binary); err != nil {
-		return ErrNoBinary
+	// No empty-path guard: New returns ErrNoBinary when the lookup fails, so
+	// a.binary is never empty, and os.Stat("") already errors anyway. An
+	// unreachable branch here would be a claim nothing can test.
+	if _, err := os.Stat(a.binary); err != nil {
+		return fmt.Errorf("cursor_agent: %s is not runnable: %w", a.binary, err)
 	}
 	return nil
 }

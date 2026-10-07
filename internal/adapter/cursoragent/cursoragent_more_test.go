@@ -41,7 +41,7 @@ exit 1`)
 // thing: the CLI can be uninstalled after the account is configured, and the
 // check still has to keep answering.
 func TestValidationReportsAMissingBinaryEvenAfterTheAdapterWasBuilt(t *testing.T) {
-	fakeCLI(t, `echo ok`)
+	dir := fakeCLI(t, `echo ok`)
 	a, err := New(adapter.Options{ID: "cursor-test"})
 	if err != nil {
 		t.Fatal(err)
@@ -49,11 +49,41 @@ func TestValidationReportsAMissingBinaryEvenAfterTheAdapterWasBuilt(t *testing.T
 	if err := a.Validate(context.Background()); err != nil {
 		t.Fatalf("validation failed while the CLI was present: %v", err)
 	}
-	// The binary is gone now, but the adapter already exists.
-	t.Setenv("PATH", t.TempDir())
+	// The binary is gone now, but the adapter already exists and will keep
+	// trying to exec that exact path. Validation checks the binary the adapter
+	// runs, so removing it from PATH alone must not make a dead account look
+	// sound -- and conversely, a *different* cursor-agent appearing on PATH
+	// must not make a working adapter look broken.
+	if err := os.Remove(filepath.Join(dir, Binary)); err != nil {
+		t.Fatal(err)
+	}
 	if err := a.Validate(context.Background()); err == nil {
-		t.Fatal("validation passed with no cursor-agent on PATH: an account that can never " +
-			"work was reported as sound")
+		t.Fatalf("validation passed after the executable was removed: an account whose every " +
+			"call would fail with exec error was reported as sound")
+	}
+}
+
+// A different cursor-agent appearing on PATH later must not change the verdict
+// either. The adapter execs the path it resolved at construction, so that is the
+// path whose existence decides whether calls work.
+func TestValidationIgnoresALaterPathEntryForADifferentBinary(t *testing.T) {
+	dir := fakeCLI(t, `echo ok`)
+	a, err := New(adapter.Options{ID: "cursor-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Remove the resolved binary, then put a different one on PATH.
+	if err := os.Remove(filepath.Join(dir, Binary)); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	if err := os.WriteFile(filepath.Join(other, Binary), []byte("#!/bin/sh\necho other\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", other)
+	if err := a.Validate(context.Background()); err == nil {
+		t.Fatalf("validation passed because some other cursor-agent is on PATH, while every " +
+			"call would still fail exec on the path this adapter captured")
 	}
 }
 

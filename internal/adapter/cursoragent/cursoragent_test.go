@@ -76,13 +76,14 @@ func TestAnEmptyModelListIsAFailureRatherThanAnEmptyCatalog(t *testing.T) {
 // be flattened. Roles are the part that has to survive: an agent that cannot see
 // which turn was the user's answers a different question.
 func TestAConversationIsFlattenedWithItsRolesIntact(t *testing.T) {
-	var got string
-	fakeCLI(t, `printf '%s' "$*" > "`+t.TempDir()+`/seen" 2>/dev/null || true
-echo '{"result":"ok"}'`)
-	// Capture via a script that writes the last argument to a known file.
+	// Capture the last argument with a portable loop. ${!#} is a bash
+	// indirect expansion, and fakeCLI writes a /bin/sh script: on a system
+	// where /bin/sh is dash this fails with "bad substitution" before the
+	// fake CLI ever answers, which looks like a broken adapter rather than a
+	// broken test.
 	dir := t.TempDir()
 	out := filepath.Join(dir, "prompt.txt")
-	fakeCLI(t, "for a in \"$@\"; do :; done; printf '%s' \"${!#}\" > "+out+"; echo '{\"result\":\"ok\"}'")
+	fakeCLI(t, "last=\"\"; for a in \"$@\"; do last=\"$a\"; done; printf '%s' \"$last\" > "+out+"; echo '{\"result\":\"ok\"}'")
 
 	a, err := New(adapter.Options{ID: "cursor-test"})
 	if err != nil {
@@ -113,8 +114,6 @@ echo '{"result":"ok"}'`)
 	if !strings.Contains(prompt, "User:") || !strings.Contains(prompt, "System instructions:") {
 		t.Fatalf("the flattened prompt does not mark roles:\n%s", prompt)
 	}
-	_ = got
-	_ = dir
 }
 
 // Tool calls cannot be honoured: the CLI runs in --mode ask, which is read-only
