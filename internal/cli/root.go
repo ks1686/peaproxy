@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/clients"
@@ -125,6 +126,12 @@ Examples:
 				return err
 			}
 			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
+				return err
+			}
+			// Warned here as well as in validate, because serve is where the
+			// setting actually takes effect. A person who never runs validate
+			// would otherwise lose it with nothing said at all.
+			if err := warnUnknownKeys(cmd.ErrOrStderr(), path); err != nil {
 				return err
 			}
 			return runServe(cmd.OutOrStdout(), cfg, path, created)
@@ -357,6 +364,20 @@ func configCmd(configPath *string) *cobra.Command {
 			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
 				return err
 			}
+			// Named before the build check, not after: a typo and its symptom
+			// are two different messages, and the one that helps is the typo.
+			// "baseURL is required" tells a user what is missing; "you wrote
+			// baseUrl" tells them what to change.
+			if err := warnUnknownKeys(cmd.ErrOrStderr(), path); err != nil {
+				return err
+			}
+			// Validate has to reach the verdict serve reaches. Reporting "ok"
+			// for a config that refuses to start is worse than saying nothing:
+			// it is a false assurance from the one command whose entire job is
+			// to catch this before the gateway does.
+			if err := checkAdaptersBuild(cfg); err != nil {
+				return err
+			}
 			store, _ := config.OpenStore(path)
 			backend := "file"
 			if store != nil {
@@ -538,4 +559,59 @@ func ExecuteWithArgs(args []string, out *bytes.Buffer) error {
 	cmd.SetErr(out)
 	cmd.SetIn(os.Stdin)
 	return cmd.Execute()
+}
+
+// checkAdaptersBuild opens every configured account's adapter, which is the
+// same check the gateway performs before it listens. Running the real
+// constructor rather than restating its rules is the point: a mirrored rule
+// drifts, and then validate once again approves a config that will not start.
+func checkAdaptersBuild(cfg config.Config) error {
+	reg := adapters.DefaultRegistry()
+	for _, p := range cfg.Providers {
+		if p.Adapter == "" {
+			continue
+		}
+		if _, err := reg.Open(p.Adapter, adapter.Options{
+			ID:        p.ID,
+			BaseURL:   p.BaseURL,
+			APIKey:    p.ResolveKey(),
+			SessionID: p.SessionID,
+			Tier:      catalog.Tier(p.Tier),
+		}); err != nil {
+			return fmt.Errorf("account %q: %w", p.ID, err)
+		}
+	}
+	return nil
+}
+
+// warnUnknownKeys reports config keys the loader does not read.
+//
+// It warns rather than refuses on purpose. A config carrying one works today,
+// and a typo does not stop it working -- it stops the setting from being what
+// the author wrote, which is quieter and worse. Failing here would break a
+// running deployment over a spelling, so this names the key, names the key it
+// probably meant, and leaves the exit code alone.
+func warnUnknownKeys(w io.Writer, path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil // loadCfg already reported a missing or unreadable file
+	}
+	unknown, err := config.UnknownKeys(raw)
+	if err != nil || len(unknown) == 0 {
+		return nil
+	}
+	fmt.Fprintf(w, "\nwarning: %d config key(s) are not read by this version and are ignored:\n", len(unknown))
+	for _, u := range unknown {
+		where := u.Path
+		if where == "" {
+			where = "top level"
+		}
+		if u.Nearest != "" {
+			fmt.Fprintf(w, "  %s.%s -- did you mean %q?\n", where, u.Key, u.Nearest)
+			continue
+		}
+		fmt.Fprintf(w, "  %s.%s\n", where, u.Key)
+	}
+	fmt.Fprintf(w, "  ignored keys keep their default, so the setting stays whatever it was\n")
+	return nil
 }
