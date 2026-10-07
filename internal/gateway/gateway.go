@@ -170,6 +170,7 @@ func (g *Gateway) rebuild() error {
 			BaseURL:   p.BaseURL,
 			APIKey:    p.ResolveKey(),
 			SessionID: p.SessionID,
+			WorkDir:   p.WorkDir,
 			Tier:      catalog.Tier(p.Tier),
 		}
 		accountID := p.ID
