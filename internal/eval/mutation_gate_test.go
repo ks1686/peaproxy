@@ -192,9 +192,26 @@ func routingMutations() []Mutation {
 		{
 			Scenario: "a request needing tools is not served by a tool-less deployment",
 			File:     "internal/gateway/engine_route.go",
-			From:     "if !eligibleForAutomaticRoute(evidenceFor(inst), req.Requirements) {",
-			To:       "if false {",
-			Why:      "a tool call sent to an endpoint that cannot run it is lost work; this regressed as D9",
+			From:     "if requirement, refused := blocks(evidenceFor(inst), req.Requirements); refused {",
+			To:       "if requirement, refused := blocks(evidenceFor(inst), req.Requirements); false && refused {",
+			Why: "a tool call sent to an endpoint that cannot run it is lost work; this regressed as D9, " +
+				"then again as #126 when unknown started counting as a refusal",
+		},
+		{
+			Scenario: "naming a model outright is not a way around a stated capability",
+			File:     "internal/gateway/engine_route.go",
+			From:     "if requirement, refused := blocks(evidence, req.Requirements); refused {",
+			To:       "if requirement, refused := blocks(evidence, req.Requirements); false && refused {",
+			Why: "the exact-model path is where #126 happened: a filter that only guards automatic " +
+				"routing leaves an operator's capabilities.tools: false unenforced the moment they name a model",
+		},
+		{
+			Scenario: "an undeclared capability is not treated as a refusal",
+			File:     "internal/catalog/capabilities.go",
+			From:     "return c.State(requirement) == SupportNo",
+			To:       "return c.State(requirement) != SupportYes",
+			Why: "requiring positive evidence is what made every strict tool call unroutable; nothing observes " +
+				"strict-schema support, so no deployment could ever satisfy it",
 		},
 		{
 			Scenario: "warmth never beats a cheaper deployment",

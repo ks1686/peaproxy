@@ -66,8 +66,15 @@ func TestRequiredToolsFilterCandidates(t *testing.T) {
 	}
 }
 
-// noTools is a deployment that cannot run tool calls.
+// noTools is a deployment that cannot run tool calls. It states the refusal
+// through UnsupportedRequirements rather than only setting Tools: false, because
+// a false bool and an omitted field are the same value -- see
+// adapter.UnsupportedRequirements.
 type noTools struct{ adapter.Adapter }
+
+func (n noTools) UnsupportedRequirements() []catalog.Requirement {
+	return []catalog.Requirement{catalog.RequirementTools}
+}
 
 func (n noTools) Capabilities() adapter.Capabilities {
 	c := n.Adapter.Capabilities()

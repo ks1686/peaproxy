@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,12 @@ func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (
 		if err != nil {
 			return model, nil, session, err
 		}
+		// Requirements are read from the body here rather than trusted from
+		// context alone. pickAutomatic already did this; the exact path did
+		// not, so any caller that reached Chat without requestmeta set --
+		// the eval harness, and anything embedding the gateway -- skipped
+		// capability filtering entirely while appearing to have run it.
+		ctx = withMergedRequirements(ctx, raw)
 		cands, err = g.requirementsFiltered(ctx, cands, model)
 		if err != nil {
 			return model, nil, session, err
@@ -83,30 +90,34 @@ func (g *Gateway) requirementsFiltered(ctx context.Context, cands []instance, mo
 	}
 	allowed := make([]instance, 0, len(cands))
 	var unmet []string
+	var blockers []string
 	for _, inst := range cands {
-		if eligibleForAutomaticRoute(evidenceFor(inst), req.Requirements) {
-			allowed = append(allowed, inst)
-			continue
-		}
-		for requirement, needed := range map[catalog.Requirement]bool{
-			catalog.RequirementTools:         req.Requirements.Tools,
-			catalog.RequirementParallelTools: req.Requirements.ParallelTools,
-			catalog.RequirementStrictSchema:  req.Requirements.StrictSchema,
-			catalog.RequirementVision:        req.Requirements.Vision,
-			catalog.RequirementContinuation:  req.Requirements.Continuation,
-		} {
-			if needed && !unmetSatisfied(unmet, requirement) {
+		evidence := evidenceFor(inst)
+		if requirement, refused := blocks(evidence, req.Requirements); refused {
+			if !unmetSatisfied(unmet, requirement) {
 				unmet = append(unmet, string(requirement))
 			}
+			if !slices.Contains(blockers, inst.Provider.ID) {
+				blockers = append(blockers, inst.Provider.ID)
+			}
+			continue
 		}
+		allowed = append(allowed, inst)
 	}
 	if len(allowed) > 0 {
 		return allowed, nil
 	}
+	sort.Strings(unmet)
+	// Named providers, not generic advice. A message telling someone to
+	// declare capabilities cannot be acted on when the requirement has no such
+	// field, and the refusal now only happens when a provider was actually
+	// told it cannot do this -- so those providers are the way out.
 	return nil, fmt.Errorf(
-		"model %q has no deployment here that can do what this request needs (%s). "+
-			"Declare what your endpoints do under each provider's capabilities block",
-		model, strings.Join(unmet, ", "))
+		"model %q is deployed here only by %s, and %s configured %s says it cannot do what this "+
+			"request needs (%s). Either point at a model another provider serves, or clear that "+
+			"declaration if the endpoint does in fact support it",
+		model, strings.Join(blockers, ", "), strings.Join(blockers, ", "),
+		"capabilities", strings.Join(unmet, ", "))
 }
 
 // unmetSatisfied keeps the refusal message from naming the same requirement twice.
@@ -200,6 +211,17 @@ func (g *Gateway) deploymentFor(account, model string) catalog.Model {
 		}
 	}
 	return catalog.Model{}
+}
+
+// withMergedRequirements folds what the body asks for into the request already
+// in context, so a caller that set only some of them cannot under-report.
+func withMergedRequirements(ctx context.Context, raw []byte) context.Context {
+	req, ok := requestmeta.FromContext(ctx)
+	if !ok {
+		req = requestmeta.Request{Wire: requestmeta.WireChat}
+	}
+	req.Requirements = mergeRequirements(req.Requirements, requestmeta.RequirementsFromBody(req.Wire, raw))
+	return requestmeta.WithRequest(ctx, req)
 }
 
 func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName string) (string, []instance, string, error) {
@@ -309,18 +331,8 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		if inst.Adapter == nil {
 			continue
 		}
-		if !eligibleForAutomaticRoute(evidenceFor(inst), req.Requirements) {
-			for requirement, needed := range map[catalog.Requirement]bool{
-				catalog.RequirementTools:         req.Requirements.Tools,
-				catalog.RequirementParallelTools: req.Requirements.ParallelTools,
-				catalog.RequirementStrictSchema:  req.Requirements.StrictSchema,
-				catalog.RequirementVision:        req.Requirements.Vision,
-				catalog.RequirementContinuation:  req.Requirements.Continuation,
-			} {
-				if needed {
-					unmet[requirement] = true
-				}
-			}
+		if requirement, refused := blocks(evidenceFor(inst), req.Requirements); refused {
+			unmet[requirement] = true
 			continue
 		}
 		inst.upstreamModel = m.ID
@@ -546,6 +558,17 @@ func evidenceFor(inst instance) catalog.CapabilityEvidence {
 		evidence.Vision = catalog.SupportYes
 	} else if inst.Provider.Capabilities.VisionIn != nil {
 		evidence.Vision = catalog.SupportNo
+	}
+	// A stated refusal, which Capabilities() cannot carry. See
+	// adapter.UnsupportedRequirements: a false bool and an omitted field are
+	// the same value, and reading the second as the first would refuse the
+	// adapters that support tools without declaring it.
+	if denying, ok := inst.Adapter.(adapter.UnsupportedRequirements); ok {
+		for _, requirement := range denying.UnsupportedRequirements() {
+			if evidence.State(requirement) == "" {
+				evidence.Set(requirement, catalog.SupportNo)
+			}
+		}
 	}
 	return catalog.FillUnknown(promptcache.ProfileForAdapter(inst.Provider.Adapter), evidence)
 }
