@@ -375,7 +375,7 @@ func configCmd(configPath *string) *cobra.Command {
 			// for a config that refuses to start is worse than saying nothing:
 			// it is a false assurance from the one command whose entire job is
 			// to catch this before the gateway does.
-			if err := checkAdaptersBuild(cfg); err != nil {
+			if err := checkAdaptersBuild(cfg, cmd.ErrOrStderr()); err != nil {
 				return err
 			}
 			store, _ := config.OpenStore(path)
@@ -561,12 +561,24 @@ func ExecuteWithArgs(args []string, out *bytes.Buffer) error {
 	return cmd.Execute()
 }
 
-// checkAdaptersBuild opens every configured account's adapter, which is the
-// same check the gateway performs before it listens. Running the real
-// constructor rather than restating its rules is the point: a mirrored rule
-// drifts, and then validate once again approves a config that will not start.
-func checkAdaptersBuild(cfg config.Config) error {
+// checkAdaptersBuild opens every enabled account's adapter, which is the same
+// check the gateway performs before it listens. Running the real constructor
+// rather than restating its rules is the point: a mirrored rule drifts, and then
+// validate once again approves a config that will not start.
+//
+// It also mirrors what the gateway does about a failure. rebuild collects the
+// first error and carries on, and only returns it when no account at all could
+// be built -- one account that cannot start takes itself out of service, but it
+// does not stop the gateway while another account still works. Returning on the
+// first error here would refuse configs serve starts without complaint, which is
+// the same false assurance this check was added to remove.
+//
+// A partial failure is reported as a warning rather than an exit code, because
+// the gateway genuinely starts in that state.
+func checkAdaptersBuild(cfg config.Config, w io.Writer) error {
 	reg := adapters.DefaultRegistry()
+	var first error
+	built := 0
 	for _, p := range cfg.Providers {
 		if p.Adapter == "" {
 			continue
@@ -585,8 +597,19 @@ func checkAdaptersBuild(cfg config.Config) error {
 			SessionID: p.SessionID,
 			Tier:      catalog.Tier(p.Tier),
 		}); err != nil {
-			return fmt.Errorf("account %q: %w", p.ID, err)
+			if first == nil {
+				first = fmt.Errorf("account %q: %w", p.ID, err)
+			}
+			continue
 		}
+		built++
+	}
+	if built == 0 && first != nil {
+		return first
+	}
+	if first != nil && w != nil {
+		fmt.Fprintf(w, "\nwarning: %v\n  the gateway will start without that account; every model only it\n"+
+			"  serves becomes unavailable until it is fixed.\n", first)
 	}
 	return nil
 }
