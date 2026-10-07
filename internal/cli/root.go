@@ -571,6 +571,13 @@ func checkAdaptersBuild(cfg config.Config) error {
 		if p.Adapter == "" {
 			continue
 		}
+		// Disabled accounts are never constructed by the gateway, so
+		// constructing one here would fail validation for a config serve
+		// starts without complaint. The check has to match startup, and
+		// startup is the gateway's behaviour, not a stricter one.
+		if p.Disabled {
+			continue
+		}
 		if _, err := reg.Open(p.Adapter, adapter.Options{
 			ID:        p.ID,
 			BaseURL:   p.BaseURL,

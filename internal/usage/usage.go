@@ -537,6 +537,7 @@ func (s *Store) ByAccount() []AccountRollup {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	idx := map[string]int{}
+	unpriced := map[int]bool{}
 	var out []AccountRollup
 	for _, e := range s.events {
 		i, ok := idx[e.AccountID]
@@ -571,14 +572,22 @@ func (s *Store) ByAccount() []AccountRollup {
 				}
 				*out[i].DiscardedEstimatedUSD += *e.EstimatedUSD
 			default:
-				// A discarded round nobody could price. The counts above stay
-				// true, but any money total for this account is now unknown,
-				// and an unknown that reads as zero is the failure this file
-				// exists to prevent.
-				out[i].DiscardedUSD = nil
-				out[i].DiscardedEstimatedUSD = nil
+				// A discarded round nobody could price. Cleared again after
+				// the loop, because clearing here alone makes the answer
+				// depend on the order the rounds happened to arrive in: a
+				// priced round after this one would re-initialise the
+				// pointers and report a total for an account that has an
+				// unpriced round in it.
+				unpriced[i] = true
 			}
 		}
+	}
+	// Order-independent: one unpriced round makes the money unknown however
+	// the events were ordered, and a partial sum that reads as a smaller
+	// total is the failure this file exists to prevent.
+	for i := range unpriced {
+		out[i].DiscardedUSD = nil
+		out[i].DiscardedEstimatedUSD = nil
 	}
 	return out
 }

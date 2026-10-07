@@ -102,6 +102,35 @@ func walkUnknown(t reflect.Type, node any, path string, out *[]UnknownKey) {
 			for i, item := range items {
 				walkUnknown(elem, item, fmt.Sprintf("%s[%d]", joinPath(path, k), i), out)
 			}
+		case reflect.Map:
+			// A map has two kinds of key and only one of them is a field
+			// name. routes and catalog.rename map a model name to a model
+			// name; those keys are arbitrary and are never reported.
+			//
+			// The *value* is different. automaticRoutes.prices maps a
+			// deployment name to a PriceQuote, and a typo inside that quote
+			// (cacheWrit for cacheWrite) is a rate that silently stays unset,
+			// which prices every cache write as an ordinary input token.
+			// So the key is walked past and the value is checked.
+			elem := ft.Elem()
+			for elem.Kind() == reflect.Pointer {
+				elem = elem.Elem()
+			}
+			if elem.Kind() != reflect.Struct {
+				continue
+			}
+			entries, ok := v.(map[string]any)
+			if !ok {
+				continue
+			}
+			names := make([]string, 0, len(entries))
+			for name := range entries {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				walkUnknown(elem, entries[name], joinPath(path, k), out)
+			}
 		}
 	}
 }

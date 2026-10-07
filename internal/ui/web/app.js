@@ -166,12 +166,15 @@ function discardedCell(a) {
   const n = a.discarded || 0;
   if (!n) return "—";
   const tokens = a.discardedTokens || 0;
-  const bill = a.discardedUSD;
-  const est = a.discardedEstimatedUSD;
-  let money;
-  if (bill != null) money = `$${Number(bill).toFixed(6)}`;
-  else if (est != null) money = `$${Number(est).toFixed(6)} est`;
-  else money = "cost unknown";
+  // Both figures can be present at once, because a provider figure and an
+  // estimate come from different rounds. Showing only the bill while counting
+  // every round understates what retrieval cost.
+  const parts = [];
+  if (a.discardedUSD != null) parts.push(`$${Number(a.discardedUSD).toFixed(6)}`);
+  if (a.discardedEstimatedUSD != null) {
+    parts.push(`$${Number(a.discardedEstimatedUSD).toFixed(6)} est`);
+  }
+  const money = parts.length ? parts.join(" + ") : "cost unknown";
   return `${n} round${n === 1 ? "" : "s"}, ${tokens} tokens, ${money}`;
 }
 
