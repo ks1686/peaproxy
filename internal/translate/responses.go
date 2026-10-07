@@ -31,6 +31,23 @@ type responsesOutput struct {
 	Model             string                      `json:"model"`
 	Output            []responsesOutMsg           `json:"output"`
 	OutputText        string                      `json:"output_text"`
+	// Usage is the token accounting for the turn.
+	//
+	// It was missing, which cost twice over: a Responses client could not see
+	// what it spent, and PeaProxy's ledger recorded no tokens for a streamed
+	// Responses call -- leaving it unpriced, which makes the spend window
+	// unmeasurable, which makes the ceiling refuse everything. The Messages wire
+	// has always reported usage here; this is the same field in the same place.
+	Usage *responsesUsage `json:"usage,omitempty"`
+}
+
+// responsesUsage is the Responses shape of token counts. The upstream chat
+// frames report prompt_tokens/completion_tokens; both this shape and every
+// Responses client expect input_tokens/output_tokens.
+type responsesUsage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 }
 
 type responsesIncompleteDetails struct {
@@ -553,4 +570,20 @@ func responsesContentText(raw json.RawMessage) (string, error) {
 		b.WriteString(bl.Text)
 	}
 	return b.String(), nil
+}
+
+// responsesUsageFor builds the terminal usage, or nil when the provider
+// published none.
+//
+// A zero-valued usage block would read as "zero tokens" rather than "nobody
+// said", which is the difference between a measured zero and an unknown one.
+func responsesUsageFor(prompt, completion int) *responsesUsage {
+	if prompt <= 0 && completion <= 0 {
+		return nil
+	}
+	return &responsesUsage{
+		InputTokens:  prompt,
+		OutputTokens: completion,
+		TotalTokens:  prompt + completion,
+	}
 }

@@ -671,6 +671,8 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	}
 
 	var text strings.Builder
+	// Token counts from the upstream stream, carried into the terminal event.
+	promptTokens, completionTokens := 0, 0
 	type pendingCall struct {
 		ID, Name, Arguments string
 		Started             bool
@@ -738,9 +740,19 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				} `json:"delta"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			Usage struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			continue
+		}
+		// Providers report usage on the final chunk, but not always the last
+		// one, so it is taken as the last non-zero reading rather than only on
+		// the terminal frame.
+		if u := chunk.Usage; u.PromptTokens > 0 || u.CompletionTokens > 0 {
+			promptTokens, completionTokens = u.PromptTokens, u.CompletionTokens
 		}
 		if chunk.ID != "" {
 			id = chunk.ID
@@ -1030,6 +1042,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			Model:             model,
 			Output:            output,
 			OutputText:        text.String(),
+			Usage:             responsesUsageFor(promptTokens, completionTokens),
 		},
 	}
 	raw, err := json.Marshal(terminal)
