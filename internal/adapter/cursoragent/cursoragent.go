@@ -24,6 +24,13 @@
 // it is sent, and tool calls are not representable: the CLI runs in `--mode
 // ask`, which is read-only Q&A. Capabilities below say so rather than implying
 // parity with the hosted providers.
+//
+// # Platform
+//
+// cursor-agent ships as a POSIX program -- a shell script on macOS -- so this
+// adapter is only usable where that binary runs, and its tests are skipped on
+// Windows for the same reason. New rejects the account when the binary is
+// absent, rather than failing every call with an exec error later.
 package cursoragent
 
 import (

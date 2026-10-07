@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,8 +16,17 @@ import (
 // the test. The adapter shells out to a real binary, so testing it any other
 // way would prove nothing about the thing most likely to break: the boundary
 // with a subprocess.
+//
+// It is POSIX-only. cursor-agent is itself a shell script, and so is the fake;
+// on Windows LookPath finds neither an extensionless shell script nor runs it,
+// and the whole suite fails there. A .bat fake would exercise batch quoting
+// rather than the boundary under test, which is the opposite of the point.
 func fakeCLI(t *testing.T, script string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("cursor-agent is a POSIX CLI; the fake is a /bin/sh script, and a .bat fake " +
+			"would test batch quoting rather than the subprocess boundary")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, Binary)
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
