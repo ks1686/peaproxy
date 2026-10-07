@@ -25,6 +25,8 @@ func Clone(c Config) Config {
 		for k, q := range c.AutomaticRoutes.Prices {
 			q.Input = clonePtr(q.Input)
 			q.Output = clonePtr(q.Output)
+			q.CacheRead = clonePtr(q.CacheRead)
+			q.CacheWrite = clonePtr(q.CacheWrite)
 			out.AutomaticRoutes.Prices[k] = q
 		}
 	}
@@ -65,6 +67,15 @@ func cloneProvider(p Provider) Provider {
 		tok := *p.OAuth
 		tok.Extra = maps.Clone(p.OAuth.Extra)
 		p.OAuth = &tok
+	}
+	// Capability overrides are pointers like any other nullable setting.
+	// Sharing them between a running config and its clone would let a reload
+	// rewrite the user's statement about their own endpoint in place.
+	p.Capabilities = ProviderCapabilities{
+		Tools:      clonePtr(p.Capabilities.Tools),
+		VisionIn:   clonePtr(p.Capabilities.VisionIn),
+		ImageOut:   clonePtr(p.Capabilities.ImageOut),
+		Embeddings: clonePtr(p.Capabilities.Embeddings),
 	}
 	return p
 }

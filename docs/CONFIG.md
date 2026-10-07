@@ -141,9 +141,61 @@ Booleans are nullable internally so that "you did not say" stays distinct from "
 
 ### Money guards
 
-`freeOnly: true` refuses any deployment that cannot **prove** the call will not be billed. The refusal names the setting, because a silent refusal looks like an outage.
+`freeOnly: true` refuses any deployment that cannot **prove** the call will not be billed. The refusal names the setting, because a silent refusal looks like an outage. A deployment whose provider publishes a non-zero cache rate is not free, however cheap its input and output are; a provider that publishes no cache rate is not treated as charging for one. Local deployments are exempt, because they cost the user nothing.
 
 `spendCeilingUSD` caps spend in a rolling window and **fails closed**. If recorded spend cannot be measured, PeaProxy refuses rather than proceeding — the accounts whose prices are least known are exactly where guessing wrong costs money. The policy panel at `GET /admin/policy` shows the resolved values; an unset ceiling reports `null`, never `0`, and says whether the recorded figure is a sum or a floor.
+
+Both guards apply on every route, including a model the client names outright. Naming a model is not a way around the switch that protects the account.
+
+### Anonymous providers, and what counts as an account
+
+`allowAnonymousProviders` gates **automatic routes only** — the ones that pick the deployment for you. A `pea/*` route or a model you named outright goes where you pointed it, because that choice was yours to make.
+
+The default (`false`, and `false` when the field is absent) refuses a deployment with **no credential of any kind**: no `apiKey`, no `apiKeyEnv`, and no configured OAuth session. Sending a prompt to such an endpoint publishes it to whoever runs that machine, and the refusal names the setting and the two ways out — attach an account, or say you meant it.
+
+Two cases are deliberately not treated as anonymous. A **local** account has no key and never needed one; it is your own machine. An **OAuth** session is an account just as much as a key — Copilot-, Claude- and Codex-hosted endpoints report no API key at all, and refusing them would have been a self-inflicted outage. A configured OAuth session whose token has expired also counts as an account: that failure is a login that needs refreshing, not an anonymous endpoint, and reporting it as the latter would send you looking in the wrong place.
+
+### Correcting what an adapter assumes about your endpoint
+
+An OpenAI-compatible server is a wire shape, not a promise. Plenty of them accept a `tools` array and quietly ignore it, and nothing observable from here says so. A **subscription session is an account**; per-provider `capabilities` is how you state what your machine actually does:
+
+```yaml
+providers:
+  - id: my-llama
+    adapter: openai_compat
+    baseURL: http://127.0.0.1:11434/v1
+    capabilities:
+      tools: false
+      embeddings: false
+```
+
+Every field is optional and unset means "keep the adapter's own declaration" — only `tools`, `visionIn`, `imageOut` and `embeddings` can be corrected, because those are the ones an adapter asserts without being able to check. A declared `false` is believed in both directions: routing will not send a tool call there, and `/v1/models` and the health report say `no` rather than `unknown`, because you already know and PeaProxy has no reason to pretend otherwise.
+
+**A misspelled key here is ignored, not refused.** The loader does not reject
+unknown keys, so `capabilites:` validates as `ok` and the declaration it looks
+like it made is not in effect. That is a property of the whole config format, not
+of this block — turning it around would refuse existing configs that carry an
+unknown key today, which is a breaking change rather than a bug fix. Until that
+is decided, confirm a correction took effect by watching the health report change
+(`peaproxy health` lists the capabilities PeaProxy believes each account has).
+
+#### How the ledger is priced
+
+A provider's own `usage.cost` is the bill and is recorded as-is. Most providers publish none, so PeaProxy prices those calls itself from the published token counts and the deployment's quote, and reports that figure separately as an estimate (`estimatedUSD` on an event, `estimatedLast30DaysUSD` in the policy panel). An estimate is recorded only when the quote covers every component the call touched:
+
+- A call whose usage was published on one side only stays unmeasured. Half a call's tokens are still spend.
+- A call that read or wrote the provider's cache on a quote with no cache rate stays unmeasured.
+- OpenAI counts cached tokens inside the prompt total; they are charged once, at the cache rate. Anthropic counts them beside it and nothing is subtracted.
+
+`automaticRoutes.prices` accepts optional `cacheRead` and `cacheWrite` rates. A configured quote without them can price calls that never touch the cache.
+
+#### Reservations, and what a ceiling is not
+
+Before a request goes upstream, PeaProxy holds what that request's input can cost — bounded by the request's byte length, since every token is at least one byte — so a burst of concurrent requests cannot all read the same total and all decide the request is affordable. The hold is taken against the ceiling in the same locked step as the reading, and released when the call finishes; the completed call's measured cost is what the ledger keeps.
+
+What a ceiling is **not**: a hard cap on concurrent output. Output length is unknowable before the model answers, so output spend from requests that are in flight at the same time is reconciled after the fact rather than prevented. The overshoot is bounded by `requestEngine.maxInFlight`.
+
+What a ceiling is also **not**: a cap on a deployment nobody has priced. A hold is computed from a published rate; without one there is nothing to hold, and inventing a figure would charge a ceiling for a number PeaProxy made up. A priced deployment refusing a large request while an unpriced one still accepts it is the consequence of that, and it persists until the deployment is priced. Routing still checks unpriced deployments against the ceiling before selecting them — they are never treated as free — so the gap is the concurrency burst, not the ordinary single request.
 
 ### Local assistant
 
@@ -169,6 +221,8 @@ automaticRoutes:
 `preludeTimeout` (default 30s; 5s before v2.0.7) is how long a stream may wait for its first event. When it expires, the request moves to the next matching account only when another one can take the request. It never retries the same account and never starts a cooldown. The last account a request can reach is never cut off by it; only `deadline` bounds that attempt.
 
 `promptCache: optimize` adds one Anthropic `cache_control` breakpoint only for a known profile and only when the caller is under that profile's limit. `off` does not strip caller breakpoints. Response caching is exact, in-memory, and skips tools, images, and continuation ids. `pea/auto`, `pea/economy`, `pea/local`, and `pea/free` are rejected as `routes` names. They select a live model only when `automaticRoutes.enabled` is true. Unknown prices are not free and do not win economy. An exact local model does not fail over to a cloud account that happens to advertise the same id.
+
+Economy ranks on both halves of a price. A deployment that is not worse on input or output wins outright; where the rates cross — cheap to prompt with, expensive to read from — they are compared on a 3:1 input:output blend, because ranking on the input rate alone picks the more expensive answer for every conversation that produces an answer worth reading.
 
 `maxInFlight: 0` is unlimited. A non-zero value caps the requests in flight **per account across every path** — chat, the native Responses and Messages wires, both stream and non-stream, and image, edit and embedding calls. A request that finds its account at the cap is treated the way a cooled account is treated, with one difference: it moves to the next candidate and is **not** left as a failure when another account can take the request, and it never starts a cooldown. The cap is a load guard, not a health signal, so a busy account is never marked broken because of it. If every candidate is busy, the client gets a busy error rather than a `cooldown` error.
 

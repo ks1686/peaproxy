@@ -165,3 +165,25 @@ func TestWarmDeploymentActuallyReceivesTheRequest(t *testing.T) {
 		t.Fatalf("the warm deployment was never used (cold=%d warm=%d)", coldHits, warmHits)
 	}
 }
+
+// Warmth compared input rates only, so a deployment that was cheap to prompt
+// with but expensive to read from beat the one that actually costs less. That is
+// the same trap as ranking economy on input alone, in a place where it looks
+// like a saving: the cache read is discounted, the long answer is not.
+func TestWarmthNeverBeatsACheaperOutput(t *testing.T) {
+	warmIn, warmOut := 1.0, 60.0
+	coldIn, coldOut := 20.0, 2.0
+	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
+	gw.models = []catalog.Model{
+		{ID: "cold", AccountID: "acct-a", Price: catalog.Price{Input: &coldIn, Output: &coldOut, Currency: "USD", Source: "openrouter", Verified: true}},
+		{ID: "warm", AccountID: "acct-a", Price: catalog.Price{Input: &warmIn, Output: &warmOut, Currency: "USD", Source: "openrouter", Verified: true}},
+	}
+	ranked := []instance{
+		{Provider: config.Provider{ID: "acct-a"}, upstreamModel: "cold"},
+		{Provider: config.Provider{ID: "acct-a"}, upstreamModel: "warm"},
+	}
+
+	if pick := gw.preferWarm(ranked, map[string]bool{"acct-a\x00warm": true}); pick != 0 {
+		t.Fatalf("warmth overrode the cheaper deployment: pick %d", pick)
+	}
+}

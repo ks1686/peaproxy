@@ -13,10 +13,19 @@ type counters struct {
 	cacheRead  *int
 	cacheWrite *int
 	cost       *float64
+	// total is the provider's own all-in count for the call. It exists to tell
+	// "this call produced no output tokens" apart from "this provider did not
+	// say": OpenAI's embedding usage publishes prompt_tokens and total_tokens
+	// and has no completion_tokens field at all.
+	total *int
+	// cacheReadNested marks a provider that counts cached tokens inside the
+	// prompt total rather than beside it.
+	cacheReadNested bool
 }
 
 func (c counters) empty() bool {
-	return c.prompt == nil && c.completion == nil && c.cacheRead == nil && c.cacheWrite == nil && c.cost == nil
+	return c.prompt == nil && c.completion == nil && c.cacheRead == nil && c.cacheWrite == nil &&
+		c.cost == nil && c.total == nil
 }
 
 // merge keeps the highest value seen for each counter.
@@ -35,6 +44,14 @@ func (c *counters) merge(o counters) {
 	c.completion = maxInt(c.completion, o.completion)
 	c.cacheRead = maxInt(c.cacheRead, o.cacheRead)
 	c.cacheWrite = maxInt(c.cacheWrite, o.cacheWrite)
+	c.total = maxInt(c.total, o.total)
+	// Nesting is a property of the provider's shape, not a running total, so it
+	// is only set once a counter that carries it has actually been seen. Two
+	// providers in one stream are not a case that occurs, and guessing here
+	// would misprice one of them.
+	if o.cacheReadNested {
+		c.cacheReadNested = true
+	}
 	if o.cost != nil {
 		c.cost = o.cost
 	}
@@ -80,11 +97,30 @@ func ApplyPublishedUsage(e *Event, body []byte, cacheHit bool) {
 	if c.cacheWrite != nil {
 		e.CacheWrite = *c.cacheWrite
 	}
+	e.CacheReadNested = c.cacheReadNested
 	// Token counts are known only when the provider published them. Cache
 	// counters alone do not say how many tokens a call consumed, and recording
 	// that as a known zero-token call would invent a number.
 	if c.prompt != nil || c.completion != nil {
 		e.TokensKnown = true
+	}
+	// A cost can only be stated for a call whose usage is complete on both
+	// sides. One half alone leaves real spend out of the total, and a total that
+	// omits spend is the direction that spends the user's money.
+	//
+	// Embeddings are the exception that has to be named. OpenAI's embedding
+	// usage publishes prompt_tokens and total_tokens and has no completion_tokens
+	// field at all, because an embedding call produces no output tokens. Reading
+	// that as an incomplete call priced nothing for money that was spent, and a
+	// ceiling that fails closed on unmeasured calls then refused every request
+	// after the first embedding. A missing completion counter is a zero when the
+	// wire shape says the call cannot have one.
+	if c.prompt != nil && c.completion == nil && c.total != nil && *c.total == *c.prompt {
+		zero := 0
+		e.Costable = true
+		c.completion = &zero
+	} else {
+		e.Costable = c.prompt != nil && c.completion != nil
 	}
 	e.CostUSD = c.cost
 }
@@ -152,6 +188,7 @@ type usageBody struct {
 	Input      *int     `json:"input_tokens"`
 	Completion *int     `json:"completion_tokens"`
 	Output     *int     `json:"output_tokens"`
+	Total      *int     `json:"total_tokens"`
 	Cost       *float64 `json:"cost"`
 
 	// Anthropic splits its cache counters out of the prompt total.
@@ -190,7 +227,7 @@ func nested(n *nestedUsage) *usageBody {
 }
 
 func (u *usageBody) counters() counters {
-	c := counters{cost: u.Cost}
+	c := counters{cost: u.Cost, total: u.Total}
 	switch {
 	case u.Prompt != nil:
 		c.prompt = u.Prompt
@@ -205,13 +242,18 @@ func (u *usageBody) counters() counters {
 	}
 	switch {
 	case u.CacheReadInput != nil:
+		// Anthropic reports cache reads beside the prompt total.
 		c.cacheRead = u.CacheReadInput
 	case u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens != nil:
+		// OpenAI reports them as a detail of the prompt total.
 		c.cacheRead = u.PromptTokensDetails.CachedTokens
+		c.cacheReadNested = true
 	case u.InputTokensDetails != nil && u.InputTokensDetails.CachedTokens != nil:
 		c.cacheRead = u.InputTokensDetails.CachedTokens
+		c.cacheReadNested = true
 	case u.CachedTokens != nil:
 		c.cacheRead = u.CachedTokens
+		c.cacheReadNested = true
 	}
 	if u.CacheCreationInput != nil {
 		c.cacheWrite = u.CacheCreationInput

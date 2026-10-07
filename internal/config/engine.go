@@ -26,9 +26,15 @@ type RequestEnginePrefs struct {
 
 // PriceQuote is an optional verified price. Nil amounts stay unknown.
 type PriceQuote struct {
-	Input    *float64 `yaml:"input,omitempty" json:"input,omitempty"`
-	Output   *float64 `yaml:"output,omitempty" json:"output,omitempty"`
-	Verified bool     `yaml:"verified,omitempty" json:"verified,omitempty"`
+	Input  *float64 `yaml:"input,omitempty" json:"input,omitempty"`
+	Output *float64 `yaml:"output,omitempty" json:"output,omitempty"`
+	// CacheRead and CacheWrite are the rates this deployment publishes for
+	// cached tokens. They are optional because most providers document only
+	// input and output -- and a quote without them cannot price a call that
+	// touched the cache, which is most calls once prompt caching is on.
+	CacheRead  *float64 `yaml:"cacheRead,omitempty" json:"cacheRead,omitempty"`
+	CacheWrite *float64 `yaml:"cacheWrite,omitempty" json:"cacheWrite,omitempty"`
+	Verified   bool     `yaml:"verified,omitempty" json:"verified,omitempty"`
 }
 
 // AutomaticRoutePrefs enables the explicit pea/* routes. Disabled is the default.

@@ -25,6 +25,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/clients"
 	"github.com/ks1686/peaproxy/internal/config"
+	"github.com/ks1686/peaproxy/internal/economics"
 	"github.com/ks1686/peaproxy/internal/gateway"
 	"github.com/ks1686/peaproxy/internal/jsonx"
 	"github.com/ks1686/peaproxy/internal/oauth"
@@ -1031,6 +1032,7 @@ func (s *Server) recordCall(account, model, proto, path string, stream bool, sta
 		DurationMS: time.Since(started).Milliseconds(),
 	}
 	usage.ApplyPublishedUsage(&e, body, cacheHit)
+	s.priceEvent(&e, account, model)
 	if terminal != "" {
 		e.StreamTerminal = terminal
 	}
@@ -1039,11 +1041,41 @@ func (s *Server) recordCall(account, model, proto, path string, stream bool, sta
 		if e.Status == 0 {
 			e.Status = statusOf(err)
 		}
+		// The gateway refused before anything upstream was called. Counting
+		// this as a call would make PeaProxy's own refusal look like
+		// unmeasurable spend -- and a refusal costs the user nothing.
+		e.NotDispatched = usage.IsNotDispatched(err)
 	}
 	if snap, ok := s.gw.QuotaSnapshot(account); ok && snap.Reported() && snap.CapturedAt != nil && !snap.CapturedAt.Before(started) {
 		e.QuotaHint = snap.Compact()
 	}
 	s.gw.Usage.Add(e)
+}
+
+// priceEvent attaches PeaProxy's own cost figure to a call the provider priced
+// only in tokens.
+//
+// A provider that publishes a cost has already said what the call cost, so
+// nothing is added: two figures for one call would count the same tokens twice
+// against the ceiling. Otherwise the published token counts are priced against
+// the deployment's quote, which is the best measurement available for most
+// providers -- they publish tokens and no cost, so without this the ledger would
+// read every such call as unmeasurable and a ceiling would refuse forever.
+//
+// An estimate is only recorded when the quote can state a complete cost. A call
+// that touched a component the provider does not publish a rate for stays
+// unmeasured, which is the direction that refuses to spend rather than the one
+// that understates a bill.
+func (s *Server) priceEvent(e *usage.Event, account, model string) {
+	if e == nil || e.CostUSD != nil || !e.Costable {
+		return
+	}
+	q := s.gw.QuoteFor(account, model)
+	cost, ok := economics.EstimateCost(q, e.PromptTokens, e.CompletionTokens, e.CacheRead, e.CacheWrite, e.CacheReadNested)
+	if !ok {
+		return
+	}
+	e.EstimatedUSD = &cost
 }
 
 func (s *Server) providerOf(accountID string) string {

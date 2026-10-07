@@ -190,6 +190,36 @@ const (
 	ReasonFastestEligible Reason = "fastest-eligible"
 )
 
+// NewUsage builds a Usage from a provider's published token counts.
+//
+// cacheReadNested says the provider counts cached tokens inside the prompt
+// total, which is how OpenAI reports cached_tokens. Those tokens are billed at
+// the cache-read rate instead of the input rate, so they are taken out of the
+// uncached input here rather than being charged twice. Anthropic reports them
+// beside the prompt total and needs nothing removed.
+//
+// The subtraction is floored at zero: a provider reporting more cached tokens
+// than prompt tokens is not something to reconcile by guessing, and a negative
+// input count would price as though input were free.
+func NewUsage(input, output, cacheRead, cacheWrite int, cacheReadNested bool) Usage {
+	if cacheReadNested {
+		if input -= cacheRead; input < 0 {
+			input = 0
+		}
+	}
+	return Usage{Input: input, Output: output, CacheRead: cacheRead, CacheWrite: cacheWrite}
+}
+
+// EstimateCost prices a provider's published token counts against a quote.
+//
+// It is the one place that turns counts into money, so the ledger and every
+// caller that needs a figure agree by construction. ok is false whenever a
+// complete cost cannot be stated, and the returned figure is then a partial sum
+// that must not be used as a total.
+func EstimateCost(q Quote, input, output, cacheRead, cacheWrite int, cacheReadNested bool) (cost float64, ok bool) {
+	return q.ExpectedCost(NewUsage(input, output, cacheRead, cacheWrite, cacheReadNested))
+}
+
 // IsFree reports whether this usage provably costs nothing.
 //
 // It is the one question the spend ceiling may ask without a price: whether a

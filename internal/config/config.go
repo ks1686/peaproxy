@@ -126,9 +126,30 @@ type Provider struct {
 	// Label is a user-facing tier override (free|freemium|paid|local).
 	Label    string `yaml:"label,omitempty"`
 	Disabled bool   `yaml:"disabled,omitempty"`
+	// Capabilities corrects what the adapter assumes about an endpoint it cannot
+	// introspect. An OpenAI-compatible server is a wire shape, not a promise:
+	// plenty of them accept a `tools` array and quietly ignore it, and nothing
+	// PeaProxy can observe says so. A field left unset keeps the adapter's
+	// declaration; a field set here is the user's statement about their own
+	// endpoint, and it wins.
+	Capabilities ProviderCapabilities `yaml:"capabilities,omitempty"`
 	// OAuth holds subscription tokens in memory. Save writes tokens to the
 	// secret store and keeps only non-secret metadata in YAML.
 	OAuth *OAuthToken `yaml:"oauth,omitempty"`
+}
+
+// ProviderCapabilities is a user correction to what an adapter assumes it can
+// do with a particular endpoint.
+//
+// Nullable throughout, so "nobody said" stays distinguishable from "said no".
+// That distinction is the point: an unset field keeps the adapter's own
+// declaration, and a false one is a statement about this endpoint that PeaProxy
+// has no way to check and therefore has to believe.
+type ProviderCapabilities struct {
+	Tools      *bool `yaml:"tools,omitempty" json:"tools,omitempty"`
+	VisionIn   *bool `yaml:"visionIn,omitempty" json:"visionIn,omitempty"`
+	ImageOut   *bool `yaml:"imageOut,omitempty" json:"imageOut,omitempty"`
+	Embeddings *bool `yaml:"embeddings,omitempty" json:"embeddings,omitempty"`
 }
 
 // OAuthToken is persisted next to the provider. Never log these fields.

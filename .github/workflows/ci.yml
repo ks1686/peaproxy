@@ -31,7 +31,12 @@ jobs:
       # claim that only the release notes assert is not a claim. This step
       # fails the build when a change breaks one.
       - name: Routing promises
-        run: go test ./internal/eval -run 'TestRoutingPromises|TestCheaperChoiceReallyIsCheaper' -v -count=1
+        # The self-breaking gate is named here rather than swept in by accident.
+        # -run matches substrings, so TestRoutingPromises was already selecting
+        # TestRoutingPromisesWouldNoticeTheirOwnRegression -- a gate that runs
+        # because of a name collision is a gate one rename away from not running,
+        # and the step would stay green.
+        run: go test ./internal/eval -run 'TestRoutingPromises$|TestRoutingPromisesWouldNoticeTheirOwnRegression$|TestCheaperChoiceReallyIsCheaper$' -v -count=1
       - name: Build
         run: go build ./...
   race:
@@ -46,7 +51,11 @@ jobs:
       - name: Race
         env:
           PEAPROXY_SECRET_BACKEND: file
-        run: go test -race ./internal/gateway ./internal/router ./internal/responsecache ./internal/oauth ./internal/streamguard ./internal/server ./internal/secretstore ./internal/config ./internal/fslock
+        # internal/usage is here because 3.0.4 put the spend reservations in it.
+        # Reserve, Settle and Held are taken and released from concurrent request
+        # goroutines and are guarded by the store's own lock; a race in that code
+        # is a race in the code that decides whether a user's ceiling was passed.
+        run: go test -race ./internal/gateway ./internal/router ./internal/responsecache ./internal/oauth ./internal/streamguard ./internal/server ./internal/secretstore ./internal/config ./internal/fslock ./internal/usage
       - name: GoReleaser check
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

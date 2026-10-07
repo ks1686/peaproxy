@@ -269,3 +269,19 @@ func flushWriter(w io.Writer) error {
 	}
 	return f.Flush()
 }
+
+// flushAfter drains whatever the destination is still holding, without masking
+// the call's own error.
+//
+// Every streaming wire ends here. The route rewriter holds bytes that could
+// still turn out to be a model name, so a stream that ends inside one loses its
+// tail unless somebody drains it -- and a stream that quietly stops a little
+// early is the same failure D1 was about, wearing a different hat. Only Chat
+// Completions used to do this, which left Responses and Messages dropping the
+// tail of any stream that ended mid-name.
+func flushAfter(w io.Writer, err error) error {
+	if flushErr := flushWriter(w); err == nil {
+		err = flushErr
+	}
+	return err
+}

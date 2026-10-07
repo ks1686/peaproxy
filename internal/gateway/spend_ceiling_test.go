@@ -5,6 +5,7 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/economics"
+	"github.com/ks1686/peaproxy/internal/usage"
 )
 
 // A ceiling set to zero means no ceiling. It must never be read as "you have
@@ -37,7 +38,7 @@ func TestCeilingAllowsSpendBelowTheLimit(t *testing.T) {
 func TestCeilingRefusesPaidRouteAtTheLimit(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.cfg.Optimization.SpendCeilingUSD = 5
-	gw.spendWindow = spendWindow(func(int) (float64, int, int) { return 5.0, 10, 10 })
+	gw.spendWindow = spendWindow(constant(measured(5.0, 10)))
 
 	blocked, reason := gw.ceilingBlocks(paidUsage())
 	if !blocked {
@@ -53,7 +54,7 @@ func TestCeilingRefusesPaidRouteAtTheLimit(t *testing.T) {
 func TestCeilingNeverRefusesAFreeDeployment(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.cfg.Optimization.SpendCeilingUSD = 1
-	gw.spendWindow = spendWindow(func(int) (float64, int, int) { return 500.0, 500, 500 })
+	gw.spendWindow = spendWindow(constant(measured(500.0, 500)))
 
 	zero := 0.0
 	free := catalog.Model{ID: "free", AccountID: "acct-a", Tier: catalog.TierFree,
@@ -74,7 +75,7 @@ func TestCeilingRefusesWhenSpendCannotBeMeasured(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.cfg.Optimization.SpendCeilingUSD = 100
 	// Recorded spend is far below the ceiling, but half the calls were unpriced.
-	gw.spendWindow = spendWindow(func(int) (float64, int, int) { return 1.0, 5, 8 })
+	gw.spendWindow = spendWindow(constant(measured(1.0, 8, 5)))
 
 	blocked, reason := gw.ceilingBlocks(paidUsage())
 	if !blocked {
@@ -90,19 +91,30 @@ func TestCeilingRefusesWhenSpendCannotBeMeasured(t *testing.T) {
 func TestCeilingRecoversWhenSpendIsMeasurable(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.cfg.Optimization.SpendCeilingUSD = 100
-	gw.spendWindow = spendWindow(func(int) (float64, int, int) { return 1.0, 5, 8 })
+	gw.spendWindow = spendWindow(constant(measured(1.0, 8, 5)))
 
 	blocked, _ := gw.ceilingBlocks(paidUsage())
 	if !blocked {
 		t.Fatal("expected the unmeasurable case to block")
 	}
-	gw.spendWindow = spendWindow(func(int) (float64, int, int) { return 1.0, 8, 8 })
+	gw.spendWindow = spendWindow(constant(measured(1.0, 8)))
 
 	blocked, _ = gw.ceilingBlocks(paidUsage())
 	if blocked {
 		t.Fatal("ceiling stayed shut after spend became measurable")
 	}
 }
+
+// measured is a window where every call could be measured.
+func measured(usd float64, total int, unpriced ...int) usage.SpendWindow {
+	upriced := 0
+	for _, n := range unpriced {
+		upriced += n
+	}
+	return usage.SpendWindow{USD: usd, Priced: total - upriced, Total: total}
+}
+
+func constant(w usage.SpendWindow) spendWindow { return func(int) usage.SpendWindow { return w } }
 
 func paidUsage() economics.Usage { return economics.Usage{Input: 1000, Output: 500} }
 func freeUsage() economics.Usage { return economics.Usage{Input: 0, Output: 0} }

@@ -254,6 +254,35 @@ func (g *Gateway) Query() catalog.Query {
 	return g.queryLocked()
 }
 
+// effectiveCapabilities is what the routing actually knows about an endpoint: the
+// adapter's own declaration, corrected by whatever the user said about this
+// specific endpoint in their config.
+//
+// The correction is the point. An OpenAI-compatible endpoint is a wire shape, not
+// a promise -- plenty of them accept a `tools` array and quietly ignore it --
+// and PeaProxy has no way to observe the difference. The user does, about their
+// own machine, so their answer wins over the adapter's assumption.
+func effectiveCapabilities(inst instance) adapter.Capabilities {
+	if inst.Adapter == nil {
+		return adapter.Capabilities{}
+	}
+	caps := inst.Adapter.Capabilities()
+	c := inst.Provider.Capabilities
+	if c.Tools != nil {
+		caps.Tools = *c.Tools
+	}
+	if c.VisionIn != nil {
+		caps.VisionIn = *c.VisionIn
+	}
+	if c.ImageOut != nil {
+		caps.ImageOut = *c.ImageOut
+	}
+	if c.Embeddings != nil {
+		caps.Embeddings = *c.Embeddings
+	}
+	return caps
+}
+
 func (g *Gateway) queryLocked() catalog.Query {
 	return catalog.Query{
 		HideProviders: g.cfg.Hide.Providers,
@@ -283,7 +312,7 @@ func (g *Gateway) Refresh(ctx context.Context) {
 			Adapter:      inst.Provider.Adapter,
 			LatencyMS:    time.Since(start).Milliseconds(),
 			CheckedAt:    time.Now().UTC(),
-			Capabilities: inst.Adapter.Capabilities(),
+			Capabilities: effectiveCapabilities(inst),
 		}
 		if err != nil {
 			g.observeLatency(inst.Provider.ID, time.Since(start), err)
@@ -465,7 +494,7 @@ func (g *Gateway) stampImageOutReadyLocked(models []catalog.Model) {
 	ready := make(map[string]bool, len(g.inst))
 	for _, inst := range g.inst {
 		_, ok := inst.Adapter.(adapter.ImageGenerator)
-		ready[inst.Provider.ID] = ok && inst.Adapter.Capabilities().ImageOut
+		ready[inst.Provider.ID] = ok && effectiveCapabilities(inst).ImageOut
 	}
 	for i := range models {
 		models[i].ImageOutReady = catalog.HasModality(models[i], "image_out") && ready[models[i].AccountID]
@@ -476,7 +505,7 @@ func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
 	ready := make(map[string]bool, len(g.inst))
 	for _, inst := range g.inst {
 		_, ok := inst.Adapter.(adapter.Embedder)
-		ready[inst.Provider.ID] = ok && inst.Adapter.Capabilities().Embeddings
+		ready[inst.Provider.ID] = ok && effectiveCapabilities(inst).Embeddings
 	}
 	for i := range models {
 		models[i].EmbeddingsReady = catalog.HasModality(models[i], "embeddings") && ready[models[i].AccountID]
@@ -551,9 +580,20 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 					return resp, nil
 				}
 				if !rounds.Take() {
-					// The model kept searching past the limit. Stop here rather
-					// than continuing against a provider that is charging.
-					return resp, nil
+					// The model kept searching past the limit. Returning the
+					// round would hand the client a pea_search call it never
+					// made and cannot answer, so the turn ends here with the
+					// reason instead. A truncated answer presented as a
+					// complete one is the same failure wearing a hat.
+					//
+					// The round was still fetched upstream and still billed, so
+					// its usage is recorded before it goes. Dropping it here
+					// left the one round the client certainly paid for as the
+					// one call the ledger could not see -- and the round that
+					// ends a runaway loop is not a round anyone would notice
+					// going missing.
+					g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
+					return adapter.ChatResponse{}, RoundLimitError{reason: rounds.Stop()}
 				}
 				results := contextopt.RunSearches(g.Artifacts, session, calls)
 				next := contextopt.AppendToolResults(body, calls, results)
@@ -563,6 +603,10 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 					return resp, nil
 				}
 				body = next
+				// This round's response is about to be replaced by the next
+				// one, so its usage has nowhere else to go. The provider billed
+				// it; the ledger has to know it happened.
+				g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
 				first = false
 			}
 		}
@@ -579,7 +623,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, s
 					}
 				}
 				attempted.Store(true)
-				once, onceErr = admitted(g, runCtx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
+				once, onceErr = admitted(g, runCtx, inst.Provider.ID, model, g.bodyFor(body, inst, session), func(c context.Context) (adapter.ChatResponse, error) {
 					return inst.Adapter.Chat(c, chatReq(inst, model, g.bodyFor(body, inst, session), false, budget))
 				})
 				if onceErr == nil || !router.Transient(onceErr) || attempt == 1 {
@@ -700,14 +744,11 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			before := cw.n
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
-			_, callErr = admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+			_, callErr = admitted(g, attemptCtx, inst.Provider.ID, model, g.bodyFor(raw, inst, session), func(c context.Context) (struct{}, error) {
 				// Drain any held partial token before the guard finishes, so the
 				// bytes reach the client in the order they arrived.
 				err := inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest)
-				if flushErr := flushWriter(dest); err == nil {
-					err = flushErr
-				}
-				return struct{}{}, noteStream(guard, err)
+				return struct{}{}, noteStream(guard, flushAfter(dest, err))
 			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
@@ -792,7 +833,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 			model, body = inst.applyModel(model, body)
 		}
 		ed, ok := inst.Adapter.(adapter.ImageEditor)
-		if !ok || !inst.Adapter.Capabilities().ImageOut {
+		if !ok || !effectiveCapabilities(inst).ImageOut {
 			last = adapter.ErrImageOutUnsupported
 			continue
 		}
@@ -884,7 +925,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 		}
 		model, raw := inst.applyModel(model, raw)
 		gen, ok := inst.Adapter.(adapter.ImageGenerator)
-		if !ok || !inst.Adapter.Capabilities().ImageOut {
+		if !ok || !effectiveCapabilities(inst).ImageOut {
 			last = adapter.ErrImageOutUnsupported
 			continue
 		}
@@ -977,7 +1018,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		}
 		model, raw := inst.applyModel(model, raw)
 		emb, ok := inst.Adapter.(adapter.Embedder)
-		if !ok || !inst.Adapter.Capabilities().Embeddings {
+		if !ok || !effectiveCapabilities(inst).Embeddings {
 			last = adapter.ErrEmbeddingsUnsupported
 			continue
 		}
@@ -999,7 +1040,9 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		if g.flight != nil && g.cfg.RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
 			var body []byte
 			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
-				once, err := callUpstream(runCtx)
+				once, err := admitted(g, runCtx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
+					return callUpstream(c)
+				})
 				if err != nil {
 					return nil, err
 				}
@@ -1009,7 +1052,9 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 				resp.Raw = body
 			}
 		} else {
-			resp, callErr = callUpstream(ctx)
+			resp, callErr = admitted(g, ctx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
+				return callUpstream(c)
+			})
 		}
 		if callErr == nil {
 			g.rememberSuccess(session, model, lastAccount)
@@ -1088,7 +1133,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
 			inst.recordAttempt(&lastAccount)
-			out, err := admitted(g, ctx, inst.Provider.ID, func(c context.Context) ([]byte, error) {
+			out, err := admitted(g, ctx, inst.Provider.ID, model, raw, func(c context.Context) ([]byte, error) {
 				return nr.Responses(c, jsonx.SetStream(raw, false))
 			})
 			if err == nil {
@@ -1115,7 +1160,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, string, er
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
 			inst.recordAttempt(&lastAccount)
-			resp, callErr = admitted(g, ctx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
+			resp, callErr = admitted(g, ctx, inst.Provider.ID, oaReq.Model, oaReq.Raw, func(c context.Context) (adapter.ChatResponse, error) {
 				return inst.Adapter.Chat(c, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 			})
 			if callErr == nil || !router.Transient(callErr) || attempt == 1 {
@@ -1207,7 +1252,18 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			}
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
-			err := noteStream(guard, nr.ResponsesStream(attemptCtx, jsonx.SetStream(raw, true), dest))
+			// The hold and the slot are taken around the upstream call, not
+			// around the write to the client: this branch streams straight from
+			// the provider to dest, so calling the adapter directly left the
+			// native Responses stream outside both guards that every other
+			// attempt goes through.
+			streamBody := jsonx.SetStream(raw, true)
+			var streamErr error
+			_, streamErr = admitted(g, attemptCtx, inst.Provider.ID, model, streamBody, func(c context.Context) (struct{}, error) {
+				streamErr = noteStream(guard, flushAfter(dest, nr.ResponsesStream(c, streamBody, dest)))
+				return struct{}{}, streamErr
+			})
+			err := streamErr
 			stop()
 			if err == nil {
 				g.rememberSuccess(session, model, lastAccount)
@@ -1256,7 +1312,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			_ = pr.Close()
 		}()
 		inst.recordAttempt(&lastAccount)
-		_, err := admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+		_, err := admitted(g, attemptCtx, inst.Provider.ID, oaReq.Model, oaReq.Raw, func(c context.Context) (struct{}, error) {
 			return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
 		})
 		stop()
@@ -1341,7 +1397,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 				return nil, lastAccount, errAttemptBudgetExhausted
 			}
 			inst.recordAttempt(&lastAccount)
-			out, err := admitted(g, ctx, inst.Provider.ID, func(c context.Context) ([]byte, error) {
+			out, err := admitted(g, ctx, inst.Provider.ID, model, raw, func(c context.Context) ([]byte, error) {
 				return nm.Messages(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), false))
 			})
 			if err == nil {
@@ -1364,7 +1420,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, string, e
 			return nil, lastAccount, errAttemptBudgetExhausted
 		}
 		inst.recordAttempt(&lastAccount)
-		resp, err := admitted(g, ctx, inst.Provider.ID, func(c context.Context) (adapter.ChatResponse, error) {
+		resp, err := admitted(g, ctx, inst.Provider.ID, oaReq.Model, oaReq.Raw, func(c context.Context) (adapter.ChatResponse, error) {
 			return inst.Adapter.Chat(c, chatReq(inst, oaReq.Model, oaReq.Raw, false, budget))
 		})
 		if err != nil {
@@ -1451,8 +1507,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			}
 			attemptCtx, stop := guard.Bound(ctx)
 			inst.recordAttempt(&lastAccount)
-			_, err := admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
-				return struct{}{}, noteStream(guard, nm.MessagesStream(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest))
+			_, err := admitted(g, attemptCtx, inst.Provider.ID, model, raw, func(c context.Context) (struct{}, error) {
+				err := nm.MessagesStream(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest)
+				return struct{}{}, noteStream(guard, flushAfter(dest, err))
 			})
 			stop()
 			if err == nil {
@@ -1497,7 +1554,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			_ = pr.Close()
 		}()
 		inst.recordAttempt(&lastAccount)
-		_, err := admitted(g, attemptCtx, inst.Provider.ID, func(c context.Context) (struct{}, error) {
+		_, err := admitted(g, attemptCtx, inst.Provider.ID, oaReq.Model, oaReq.Raw, func(c context.Context) (struct{}, error) {
 			return struct{}{}, noteStream(guard, inst.Adapter.ChatStream(c, chatReq(inst, oaReq.Model, oaReq.Raw, true, budget), pw))
 		})
 		stop()
@@ -1710,13 +1767,20 @@ func (g *Gateway) publishAdmissionLimits(cfg config.Config) {
 // take a slot is one edit rather than nine -- which is how streams, Claude,
 // Responses, images and embeddings came to run unbounded while maxInFlight
 // looked like it was working (#74).
-func admitted[T any](g *Gateway, ctx context.Context, account string, f func(context.Context) (T, error)) (T, error) {
+func admitted[T any](g *Gateway, ctx context.Context, account, model string, body []byte, f func(context.Context) (T, error)) (T, error) {
 	var zero T
+	// Both refusals below happen before f runs, so nothing was sent upstream.
+	// Marking them lets the ledger record an outcome without counting it as
+	// spend, which would otherwise read as an unmeasured call and make the
+	// ceiling refuse everything for a reason it cannot fix.
 	release, err := g.admit(ctx, account)
 	if err != nil {
-		return zero, err
+		return zero, usage.MarkNotDispatched(err)
 	}
 	defer release()
+	if err := g.holdSpend(account, model, body); err != nil {
+		return zero, usage.MarkNotDispatched(err)
+	}
 	return f(ctx)
 }
 
@@ -1929,7 +1993,7 @@ func (g *Gateway) Probe(ctx context.Context) []AdapterHealth {
 			Adapter:      inst.Provider.Adapter,
 			LatencyMS:    time.Since(start).Milliseconds(),
 			CheckedAt:    time.Now().UTC(),
-			Capabilities: inst.Adapter.Capabilities(),
+			Capabilities: effectiveCapabilities(inst),
 		}
 		if old, ok := prev[inst.Provider.ID]; ok {
 			h.Models = old.Models

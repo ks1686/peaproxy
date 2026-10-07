@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,7 +28,11 @@ const (
 
 // DayRollup is one UTC day for one account. It outlives the 200-event ring.
 // Token totals count only calls that published a usage object. CostUSD is the
-// sum of published usage.cost values and stays nil when none of the calls had one.
+// sum of published usage.cost values and stays nil when none of the calls had
+// one. EstimatedUSD is PeaProxy's own figure for the calls that published
+// tokens but no cost, priced against the deployment's quote; it is reported
+// separately from the provider's own number because it is an estimate and the
+// two must never be added together silently.
 type DayRollup struct {
 	Day              string   `json:"day"`
 	AccountID        string   `json:"accountId"`
@@ -40,6 +45,8 @@ type DayRollup struct {
 	CacheWrite       int      `json:"cacheWrite,omitempty"`
 	CostUSD          *float64 `json:"costUSD,omitempty"`
 	CostCalls        int      `json:"costCalls,omitempty"`
+	EstimatedUSD     *float64 `json:"estimatedUSD,omitempty"`
+	EstimatedCalls   int      `json:"estimatedCalls,omitempty"`
 }
 
 // Event is one completed (or failed) proxy call. Secrets must never be stored.
@@ -56,19 +63,72 @@ type Event struct {
 	CacheRead        int       `json:"cacheRead,omitempty"`
 	CacheWrite       int       `json:"cacheWrite,omitempty"`
 	TokensKnown      bool      `json:"tokensKnown,omitempty"`
-	CostUSD          *float64  `json:"costUSD,omitempty"`
-	Status           int       `json:"status"`
-	Error            string    `json:"error,omitempty"`
-	Preview          string    `json:"preview,omitempty"`
-	DurationMS       int64     `json:"durationMs,omitempty"`
-	QuotaHint        string    `json:"quotaHint,omitempty"`
-	CacheHit         bool      `json:"cacheHit,omitempty"`
+	// Costable says both halves of the usage were published, so a complete cost
+	// can be stated for this call. One side alone is not enough: the missing
+	// half is real spend, and a total that omits it understates the bill.
+	Costable bool     `json:"costable,omitempty"`
+	CostUSD  *float64 `json:"costUSD,omitempty"`
+	// EstimatedUSD is PeaProxy's own cost for this call, computed from the
+	// published token counts and the deployment quote. It is nil whenever the
+	// quote cannot state a complete cost. CostUSD always wins when a provider
+	// publishes its own figure, because a provider's number is the bill and an
+	// estimate is a reading of it.
+	EstimatedUSD *float64 `json:"estimatedUSD,omitempty"`
+	// CacheReadNested marks a provider that counts cached tokens inside the
+	// prompt total, the way OpenAI reports cached_tokens. Anthropic counts them
+	// beside it. Pricing the prompt total and the cache total without knowing
+	// this bills OpenAI's cached tokens twice.
+	CacheReadNested bool   `json:"cacheReadNested,omitempty"`
+	Status          int    `json:"status"`
+	Error           string `json:"error,omitempty"`
+	Preview         string `json:"preview,omitempty"`
+	DurationMS      int64  `json:"durationMs,omitempty"`
+	QuotaHint       string `json:"quotaHint,omitempty"`
+	CacheHit        bool   `json:"cacheHit,omitempty"`
 	// StreamTerminal names the terminal event a streamed response ended with
 	// ("done", "chat_finish", "responses_completed", "messages_stop") or "none"
 	// when the stream ended without one. A stream that ends with no terminal
 	// event is what makes a client report a missing finish_reason, so it is
 	// recorded rather than counted as an ordinary success. Empty on non-streams.
 	StreamTerminal string `json:"streamTerminal,omitempty"`
+	// NotDispatched marks a request PeaProxy refused before it reached a
+	// provider.
+	//
+	// Such a request cost the user nothing, so it must not appear in the spend
+	// window at all. Recorded as an ordinary call it inflates the denominator
+	// without ever being priced, which flips a ceiling from "over budget" to
+	// "spend cannot be measured" and then advises setting prices that are
+	// already set -- and once the window is unmeasurable the ceiling refuses
+	// everything, forever, for a reason that has nothing to do with the prices.
+	NotDispatched bool `json:"notDispatched,omitempty"`
+}
+
+// NotDispatched marks an error for a request refused before any provider was
+// called.
+//
+// The account alone cannot say this: routing picks the deployment first, and the
+// spend ceiling refuses afterwards, so a refused request carries a real account
+// and only ever reached PeaProxy. Counting it as a call makes a refusal look
+// like unmeasured spend, which flips a ceiling from "over budget" to "spend
+// cannot be measured" and advises setting prices that are already set.
+type notDispatched struct{ err error }
+
+func (n notDispatched) Error() string { return n.err.Error() }
+func (n notDispatched) Unwrap() error { return n.err }
+
+// MarkNotDispatched tags an error as having been refused before dispatch.
+func MarkNotDispatched(err error) error {
+	if err == nil {
+		return nil
+	}
+	return notDispatched{err}
+}
+
+// IsNotDispatched reports whether err came from a request that never left the
+// machine.
+func IsNotDispatched(err error) bool {
+	var n notDispatched
+	return errors.As(err, &n)
 }
 
 // AccountRollup is a per-account summary.
@@ -102,6 +162,14 @@ type Store struct {
 	path       string
 	requestLog string
 	maxLog     int64
+
+	// reserved is spend held by requests that are in flight. It is not
+	// persisted: a restart ends every in-flight request, so a reservation that
+	// outlived the process would refuse requests for money already spent.
+	reserved float64
+	// holds are the in-flight reservations waiting for their events, oldest
+	// first. See consumeHoldLocked for why they are not matched to an event.
+	holds []spendHold
 }
 
 // Open loads events from path if the file exists.
@@ -172,6 +240,19 @@ func (s *Store) Add(e Event) {
 		s.events = append(s.events, e)
 	}
 	s.noteDayLocked(e)
+	// A hold stops counting the moment its call is recorded, not the moment the
+	// gateway returns. Releasing it earlier opened a window in which the
+	// estimate had left reserved and the measured cost had not yet landed: spend
+	// was briefly in neither, and a concurrent request could pass a ceiling that
+	// it should have been refused by.
+	//
+	// Holds are released oldest-first rather than matched to this event. The
+	// reserved total and the ceiling it feeds are both global, so what matters is
+	// that one hold leaves for one event, not which one. Matching would need a
+	// key, and the keys disagree: a hold is taken against the deployment's model
+	// while the event records the name the client sent, which for an automatic
+	// route is the route name.
+	s.consumeHoldLocked()
 	s.flushLocked()
 	s.appendLogLocked(e)
 }
@@ -377,6 +458,11 @@ func bumpDay(row *DayRollup, e Event) {
 	if row.Provider == "" {
 		row.Provider = e.Provider
 	}
+	if e.NotDispatched {
+		// Counted as an outcome, never as spend. It never reached a provider.
+		row.Errors++
+		return
+	}
 	row.Calls++
 	if e.Status >= 400 || e.Error != "" {
 		row.Errors++
@@ -387,13 +473,24 @@ func bumpDay(row *DayRollup, e Event) {
 		row.CacheRead += e.CacheRead
 		row.CacheWrite += e.CacheWrite
 	}
-	if e.CostUSD != nil {
+	// One call has one cost. A provider that publishes its own figure is the
+	// bill; an estimate for the same call is only a reading of it, and adding
+	// both would count the same tokens twice against the ceiling.
+	switch {
+	case e.CostUSD != nil:
 		if row.CostUSD == nil {
 			zero := 0.0
 			row.CostUSD = &zero
 		}
 		*row.CostUSD += *e.CostUSD
 		row.CostCalls++
+	case e.EstimatedUSD != nil:
+		if row.EstimatedUSD == nil {
+			zero := 0.0
+			row.EstimatedUSD = &zero
+		}
+		*row.EstimatedUSD += *e.EstimatedUSD
+		row.EstimatedCalls++
 	}
 }
 
@@ -515,6 +612,91 @@ func clip(s string, n int) string {
 	return string(rs[:n]) + "…"
 }
 
+// SpendWindow is what a spend ceiling measures over a window.
+//
+// USD is the best total the ledger can state: the provider's own figures where
+// they exist, plus PeaProxy's estimates for the calls that published tokens and
+// no cost. EstimatedUSD is the part of USD that is PeaProxy's reading rather
+// than a provider's number, kept separate so a surface can say which it is
+// showing.
+//
+// Priced and Total separate "nothing spent" from "spent, but some of it could
+// not be measured". When they differ the total is a floor, and a caller relying
+// on this needs to be able to tell the two apart.
+type SpendWindow struct {
+	USD          float64
+	EstimatedUSD float64
+	Priced       int
+	Total        int
+}
+
+// HoldSpend runs decide against the window total while the ledger is locked and,
+// when decide allows it, takes the reservation in the same critical section.
+//
+// The decision and the hold cannot be separated. Read the total, release the
+// lock, then reserve, and a burst of requests all read the same total and all
+// reserve against it -- which is the ceiling this exists to enforce.
+//
+// decide must not call back into the store: it runs under the ledger lock.
+func (s *Store) HoldSpend(days int, decide func(SpendWindow) bool, usd float64) (SpendWindow, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := s.windowLocked(days)
+	if !decide(w) {
+		return w, false
+	}
+	w.USD += usd
+	s.reserved += usd
+	s.holds = append(s.holds, spendHold{usd: usd, at: time.Now()})
+	s.sweepHoldsLocked()
+	return w, true
+}
+
+// spendHold is one in-flight request's reservation, waiting for the event that
+// records what it actually cost.
+type spendHold struct {
+	usd float64
+	at  time.Time
+}
+
+// holdExpiry bounds how long a hold can outlive the call that took it.
+//
+// Normally a hold is released by the event for its call. Some calls never record
+// one -- a request rejected after admission, or an embedder using the gateway
+// directly -- and a hold that waited forever would make the ceiling refuse
+// forever, which fails closed into a broken proxy rather than an expensive one.
+const holdExpiry = 2 * time.Minute
+
+// consumeHoldLocked releases the oldest hold, which the newest event has paid
+// for.
+func (s *Store) consumeHoldLocked() {
+	if len(s.holds) == 0 {
+		return
+	}
+	s.reserved -= s.holds[0].usd
+	s.holds = s.holds[1:]
+	if s.reserved < 0 {
+		s.reserved = 0
+	}
+}
+
+// sweepHoldsLocked releases holds whose call never recorded an event.
+func (s *Store) sweepHoldsLocked() {
+	cutoff := time.Now().Add(-holdExpiry)
+	kept := s.holds[:0]
+	for _, h := range s.holds {
+		if h.at.Before(cutoff) {
+			s.reserved -= h.usd
+			continue
+		}
+		kept = append(kept, h)
+	}
+	s.holds = kept
+	if s.reserved < 0 {
+		s.reserved = 0
+	}
+}
+
 // SpentInLastDays reports recorded spend over the last n calendar days,
 // counting today.
 //
@@ -525,19 +707,25 @@ func clip(s string, n int) string {
 // falling back to the ring and undercounting when the ring does not reach back
 // far enough. Undercounting a ceiling fails open, which spends the user's money.
 //
-// priced counts only the calls whose cost was known, and total counts every
-// call. A caller can compare the two to tell "nothing spent" from "spent, but
-// some of it could not be measured". A call with no published
-// price is real spend that cannot be measured here, and is deliberately absent
-// from the total rather than folded in as zero: a caller relying on this needs
-// to be able to tell "nothing spent" from "nothing could be measured".
-func (s *Store) SpentInLastDays(n int) (usd float64, priced, total int) {
-	if n <= 0 {
-		return 0, 0, 0
-	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -(n - 1)).Format("2006-01-02")
+// Priced counts the calls whose cost could be measured, whether the provider
+// published it or PeaProxy priced it from published tokens. Total counts every
+// call. A call whose cost could not be established is real spend that is
+// deliberately absent from the total rather than folded in as zero: a caller
+// relying on this needs to be able to tell "nothing spent" from "nothing could
+// be measured".
+func (s *Store) SpentInLastDays(n int) SpendWindow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.windowLocked(n)
+}
+
+// windowLocked computes the window. The caller holds the lock.
+func (s *Store) windowLocked(n int) SpendWindow {
+	var w SpendWindow
+	if n <= 0 {
+		return w
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -(n - 1)).Format("2006-01-02")
 	for _, d := range s.days {
 		// Day strings are YYYY-MM-DD, so they order lexicographically.
 		if d.Day < cutoff {
@@ -548,13 +736,35 @@ func (s *Store) SpentInLastDays(n int) (usd float64, priced, total int) {
 		// unpriced day look like a day with no calls at all, so priced equalled
 		// total and a spend ceiling read it as measurably nothing spent --
 		// failing open exactly when the ledger knows least.
-		total += d.Calls
-		priced += d.CostCalls
+		w.Total += d.Calls
+		w.Priced += d.CostCalls + d.EstimatedCalls
 		if d.CostUSD != nil {
-			usd += *d.CostUSD
+			w.USD += *d.CostUSD
+		}
+		if d.EstimatedUSD != nil {
+			w.USD += *d.EstimatedUSD
+			w.EstimatedUSD += *d.EstimatedUSD
 		}
 	}
-	return usd, priced, total
+	// Reservations are spend that has been committed upstream but not yet
+	// billed. They belong in the total while they are held: a request that has
+	// already been sent is money leaving the account whether or not the
+	// response has come back yet.
+	w.USD += s.reserved
+	return w
+}
+
+// Settle releases a reservation taken by HoldSpend. An over-release cannot go
+// negative: a settled request that measured more than it reserved is recorded by
+// its event, and clamping here keeps a stale settlement from creating credit the
+// next request would happily spend.
+//
+// Reserved reports the spend currently held by in-flight requests.
+func (s *Store) Reserved() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepHoldsLocked()
+	return s.reserved
 }
 
 // CacheWarmSince reports which account/model pairs showed a cache read within

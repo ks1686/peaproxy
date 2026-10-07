@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -21,11 +22,11 @@ func TestSpentInLastDaysComesFromDurableRollups(t *testing.T) {
 		s.Add(Event{Time: today, CostUSD: f64(1.0)})
 	}
 
-	if got, priced, total := s.SpentInLastDays(1); priced != 3 || total != 3 || got != 3.0 {
-		t.Fatalf("today = %v, %d priced of %d calls; want 3.0, 3 of 3", got, priced, total)
+	if w := s.SpentInLastDays(1); w.Priced != 3 || w.Total != 3 || w.USD != 3.0 {
+		t.Fatalf("today = %v, %d priced of %d calls; want 3.0, 3 of 3", w.USD, w.Priced, w.Total)
 	}
-	if _, _, total := s.SpentInLastDays(3); total != 3 {
-		t.Fatalf("a three-day window lost calls: %d", total)
+	if w := s.SpentInLastDays(3); w.Total != 3 {
+		t.Fatalf("a three-day window lost calls: %d", w.Total)
 	}
 }
 
@@ -37,12 +38,12 @@ func TestSpentInLastDaysIgnoresOlderDays(t *testing.T) {
 	s.Add(Event{Time: today, CostUSD: f64(2.0)})
 	s.Add(Event{Time: today.AddDate(0, 0, -5), CostUSD: f64(100.0)})
 
-	if got, priced, total := s.SpentInLastDays(1); priced != 1 || total != 1 || got != 2.0 {
-		t.Fatalf("older spend leaked into the window: %v, %d priced of %d", got, priced, total)
+	if w := s.SpentInLastDays(1); w.Priced != 1 || w.Total != 1 || w.USD != 2.0 {
+		t.Fatalf("older spend leaked into the window: %v, %d priced of %d", w.USD, w.Priced, w.Total)
 	}
 	// A wider window legitimately sees it.
-	if got, _, _ := s.SpentInLastDays(7); got != 102.0 {
-		t.Fatalf("seven-day window = %v, want 102", got)
+	if w := s.SpentInLastDays(7); w.USD != 102.0 {
+		t.Fatalf("seven-day window = %v, want 102", w.USD)
 	}
 }
 
@@ -56,14 +57,14 @@ func TestSpentInLastDaysCountsOnlyPricedCalls(t *testing.T) {
 	s.Add(Event{Time: now, CostUSD: f64(3.0)})
 	s.Add(Event{Time: now}) // no price published
 
-	got, priced, total := s.SpentInLastDays(1)
-	if got != 3.0 {
-		t.Fatalf("known spend = %v, want 3", got)
+	w := s.SpentInLastDays(1)
+	if w.USD != 3.0 {
+		t.Fatalf("known spend = %v, want 3", w.USD)
 	}
 	// The unpriced call is invisible in the total but visible in the count, and
 	// that difference is what tells a caller the total is a floor.
-	if priced != 1 || total != 2 {
-		t.Fatalf("priced=%d total=%d, want 1 of 2", priced, total)
+	if w.Priced != 1 || w.Total != 2 {
+		t.Fatalf("priced=%d total=%d, want 1 of 2", w.Priced, w.Total)
 	}
 }
 
@@ -73,15 +74,15 @@ func TestSpentInLastDaysIgnoresFailedUncostedCalls(t *testing.T) {
 	s := Open("")
 	s.Add(Event{Time: time.Now(), Status: 500, Error: "upstream refused"})
 
-	if got, priced, _ := s.SpentInLastDays(1); got != 0 || priced != 0 {
-		t.Fatalf("a failed uncosted call counted as spend: %v, %d priced", got, priced)
+	if w := s.SpentInLastDays(1); w.USD != 0 || w.Priced != 0 {
+		t.Fatalf("a failed uncosted call counted as spend: %v, %d priced", w.USD, w.Priced)
 	}
 }
 
 func TestSpentInLastDaysEmptyIsZero(t *testing.T) {
 	s := Open("")
-	if got, priced, total := s.SpentInLastDays(7); got != 0 || priced != 0 || total != 0 {
-		t.Fatalf("empty store reported %v, %d of %d", got, priced, total)
+	if w := s.SpentInLastDays(7); w.USD != 0 || w.Priced != 0 || w.Total != 0 {
+		t.Fatalf("empty store reported %v, %d of %d", w.USD, w.Priced, w.Total)
 	}
 }
 
@@ -91,8 +92,8 @@ func TestSpentInLastDaysRejectsNonPositiveWindows(t *testing.T) {
 	s := Open("")
 	s.Add(Event{Time: time.Now(), CostUSD: f64(5.0)})
 	for _, n := range []int{0, -1} {
-		if got, priced, total := s.SpentInLastDays(n); got != 0 || priced != 0 || total != 0 {
-			t.Fatalf("window %d returned %v, %d of %d", n, got, priced, total)
+		if w := s.SpentInLastDays(n); w.USD != 0 || w.Priced != 0 || w.Total != 0 {
+			t.Fatalf("window %d returned %v, %d of %d", n, w.USD, w.Priced, w.Total)
 		}
 	}
 }
@@ -111,15 +112,15 @@ func TestUnpricedDayStillCountsItsCalls(t *testing.T) {
 		{Day: today, Calls: 5, CostCalls: 0},
 	}}
 
-	usd, priced, total := s.SpentInLastDays(1)
-	if total != 5 {
-		t.Errorf("total calls = %d, want 5; unpriced calls were dropped entirely", total)
+	w := s.SpentInLastDays(1)
+	if w.Total != 5 {
+		t.Errorf("total calls = %d, want 5; unpriced calls were dropped entirely", w.Total)
 	}
-	if priced == total {
-		t.Errorf("priced (%d) == total (%d); an unmeasured day looks measurably free", priced, total)
+	if w.Priced == w.Total {
+		t.Errorf("priced (%d) == total (%d); an unmeasured day looks measurably free", w.Priced, w.Total)
 	}
-	if usd != 0 {
-		t.Errorf("usd = %v, want 0 for an unpriced day", usd)
+	if w.USD != 0 {
+		t.Errorf("usd = %v, want 0 for an unpriced day", w.USD)
 	}
 }
 
@@ -132,11 +133,88 @@ func TestPartlyPricedDayCountsEveryCall(t *testing.T) {
 		{Day: today, Calls: 10, CostCalls: 4, CostUSD: &cost},
 	}}
 
-	usd, priced, total := s.SpentInLastDays(1)
-	if usd != 1.5 {
-		t.Errorf("usd = %v, want 1.5", usd)
+	w := s.SpentInLastDays(1)
+	if w.USD != 1.5 {
+		t.Errorf("usd = %v, want 1.5", w.USD)
 	}
-	if priced != 4 || total != 10 {
-		t.Errorf("priced/total = %d/%d, want 4/10", priced, total)
+	if w.Priced != 4 || w.Total != 10 {
+		t.Errorf("priced/total = %d/%d, want 4/10", w.Priced, w.Total)
+	}
+}
+
+// The ceiling is checked against measured spend plus what is still held. The
+// window between "the gateway returned" and "the event is recorded" is where a
+// hold released on return leaves the spend in neither total -- so the ceiling
+// reads as untouched and lets the next request through.
+//
+// Asserted on the total, not on the field: a fix that merely moved the dip from
+// reserved to USD would still pass a test watching either one.
+func TestSpendNeverDipsWhileACallIsSettledIntoItsEvent(t *testing.T) {
+	s := Open("")
+
+	// One call in flight, holding 5.00 against a 10.00 ceiling.
+	if _, ok := s.HoldSpend(7, func(SpendWindow) bool { return true }, 5.00); !ok {
+		t.Fatal("the hold was refused")
+	}
+	during := s.SpentInLastDays(7).USD
+	if during != 5.00 {
+		t.Fatalf("during the call the window reads %v, want 5.00", during)
+	}
+
+	cost := 4.80
+	s.Add(Event{
+		AccountID: "acct", Model: "m", TokensKnown: true, Costable: true, CostUSD: &cost,
+	})
+	after := s.SpentInLastDays(7).USD
+
+	// The hold has left and the measured cost has arrived. The total moves by the
+	// difference between the estimate and the truth, and never below the true
+	// cost at any point -- the dip is what a concurrent request would have read.
+	if after < cost {
+		t.Fatalf("the window reads %v after the event, below the %v actually spent: "+
+			"the hold left before the cost arrived", after, cost)
+	}
+	if got := s.Reserved(); got != 0 {
+		t.Fatalf("after the event the reservation still holds %v: a hold that is never released "+
+			"makes the ceiling refuse forever, which costs the user the proxy", got)
+	}
+	if after > 5.00 {
+		t.Fatalf("the window reads %v, above the 5.00 it was holding: the event and the hold both counted", after)
+	}
+}
+
+// A request PeaProxy refused never reached a provider and cost the user
+// nothing.
+//
+// Recorded as an ordinary call it inflates the denominator without ever being
+// priced, which flips a ceiling from "over budget" to "spend cannot be measured"
+// -- and then it refuses everything, for a reason that has nothing to do with
+// the prices it goes on to advise the user to set.
+func TestARefusedRequestIsNotAnUnmeasuredCall(t *testing.T) {
+	s := Open("")
+	cost := 0.02
+	s.Add(Event{
+		AccountID: "acct", Model: "m", Time: time.Now(),
+		TokensKnown: true, Costable: true, CostUSD: &cost,
+	})
+
+	measured := s.SpentInLastDays(1)
+	if measured.Priced != measured.Total {
+		t.Fatalf("a priced call left the window unmeasurable: %+v", measured)
+	}
+
+	// The ceiling refuses, and records the refusal.
+	s.Add(Event{Model: "m", Time: time.Now(), Status: 502, Error: "refusing to spend",
+		NotDispatched: IsNotDispatched(MarkNotDispatched(errors.New("refusing to spend")))})
+
+	after := s.SpentInLastDays(1)
+	if after.Priced != after.Total {
+		t.Fatalf("a refusal that never left the machine made the window unmeasurable: %+v", after)
+	}
+	if after.USD != cost {
+		t.Fatalf("a refusal changed the recorded total to %v, want %v", after.USD, cost)
+	}
+	if after.Total != 1 {
+		t.Fatalf("total calls = %d, want 1: a refused request was counted as a call", after.Total)
 	}
 }

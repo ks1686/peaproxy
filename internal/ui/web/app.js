@@ -166,11 +166,22 @@ function usageTables(data) {
           ? String((d.promptTokens || 0) + (d.completionTokens || 0))
           : "—";
       let price = "—";
-      if (d.costUSD != null) {
-        price = String(d.costUSD);
-        if ((d.costCalls || 0) < (d.calls || 0)) {
-          price += ` (${d.costCalls || 0}/${d.calls || 0} priced)`;
+      // A day's cost is the provider's own figures where they exist plus
+      // PeaProxy's estimates for the calls that published tokens and no cost.
+      // The two are shown together with the estimated part marked, because a
+      // total that silently mixes a bill with an estimate reads as a bill.
+      const measured = d.costUSD != null || d.estimatedUSD != null;
+      const pricedCalls = (d.costCalls || 0) + (d.estimatedCalls || 0);
+      if (measured) {
+        price = String((d.costUSD || 0) + (d.estimatedUSD || 0));
+        if (d.estimatedUSD) {
+          price += ` (incl. $${Number(d.estimatedUSD).toFixed(6)} estimated)`;
         }
+        if (pricedCalls < (d.calls || 0)) {
+          price += ` (${pricedCalls}/${d.calls} priced)`;
+        }
+      } else if (d.calls) {
+        price = `not measurable (${d.calls} call${d.calls === 1 ? "" : "s"})`;
       }
       return `<tr>
         <td>${escapeHtml(d.day || "")}</td>
@@ -1303,6 +1314,16 @@ function policyPage(root) {
       spendRows.push(
         `<tr><td>Spent (30d)</td><td>$${Number(p.spentLast30DaysUSD || 0).toFixed(2)}</td><td class='muted'>${escapeHtml(p.spendNote || "")}</td></tr>`,
       );
+      if (Number(p.estimatedLast30DaysUSD || 0) > 0) {
+        spendRows.push(
+          `<tr><td>of which estimated</td><td>$${Number(p.estimatedLast30DaysUSD).toFixed(4)}</td><td class='muted'>priced by PeaProxy from published token counts, because this provider publishes no cost of its own</td></tr>`,
+        );
+      }
+      if (Number(p.inFlightReservedUSD || 0) > 0) {
+        spendRows.push(
+          `<tr><td>In flight</td><td>$${Number(p.inFlightReservedUSD).toFixed(4)}</td><td class='muted'>held by requests currently at the provider; counted so a burst cannot all pass the same ceiling check</td></tr>`,
+        );
+      }
       if (p.spendMeasurable === false) {
         spendRows.push(
           `<tr><td>Completeness</td><td class='warn'>partial</td><td class='muted'>${p.totalCallsLast30Days - p.pricedCallsLast30Days} call(s) had no published price, so this total is a floor rather than a sum</td></tr>`,
