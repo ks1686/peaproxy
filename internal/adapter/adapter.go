@@ -45,6 +45,22 @@ var ErrModelNotEmbeddings = errors.New("model does not support embeddings")
 // (chat-only or subscription OAuth — use an API-key OpenAI-compat path).
 var ErrEmbeddingsUnsupported = errors.New("embeddings is not supported by this adapter; use an API-key OpenAI, Google, xAI, or OpenAI-compat account")
 
+// UnsupportedRequirements is how an adapter states a capability it does not
+// have.
+//
+// Capabilities() cannot express this. Its fields are flat bools, so a false and
+// an omitted field are the same value, and most adapters omit rather than
+// declare: copilot_oauth, kimi_oauth, meta_oauth and xai_oauth leave Tools unset
+// because they support it and never needed to say so. Reading a missing field as
+// a refusal would exclude four working adapters; ignoring a real false would
+// send tool calls to an endpoint that cannot run them.
+//
+// Absence therefore stays unknown, and this carries the statement. Optional: an
+// adapter implementing nothing here keeps its flat bools.
+type UnsupportedRequirements interface {
+	UnsupportedRequirements() []catalog.Requirement
+}
+
 // Capabilities is advertised per adapter from live data where possible.
 type Capabilities struct {
 	Chat       bool `json:"chat"`

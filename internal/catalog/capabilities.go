@@ -68,6 +68,44 @@ func (c CapabilityEvidence) Supports(requirement Requirement) bool {
 	return c.State(requirement) == SupportYes
 }
 
+// Set records evidence for a requirement, ignoring unknown.
+func (c *CapabilityEvidence) Set(requirement Requirement, support Support) {
+	switch requirement {
+	case RequirementTools:
+		c.Tools = support
+	case RequirementParallelTools:
+		c.ParallelTools = support
+	case RequirementStrictSchema:
+		c.StrictSchema = support
+	case RequirementVision:
+		c.Vision = support
+	case RequirementContinuation:
+		c.Continuation = support
+	case RequirementVerbosity:
+		c.Verbosity = support
+	}
+}
+
+// Disallows reports a stated inability. This is the only negative signal
+// PeaProxy can act on, and it is deliberately the mirror of Supports rather
+// than its negation.
+//
+// The difference matters because most requirements have no evidence to give.
+// Nothing observes whether an endpoint honours a strict JSON schema, because no
+// model-listing API reports it, and no compat profile carries the field. For
+// those, State is always unknown -- so treating unknown as inability refuses
+// every deployment for a request nothing can satisfy, which is what v3.0.4 did
+// to every strict-tools call. Nobody said no; nothing has yet said yes either,
+// and routing is a guess the provider is better placed to settle.
+//
+// Flat bools cannot help here. Several adapters omit Tools entirely, so
+// "declared false" and "never declared" are the same value, and reading a
+// missing field as a statement would refuse adapters that do support tools.
+// SupportNo therefore comes only from an explicit declaration in config.
+func (c CapabilityEvidence) Disallows(requirement Requirement) bool {
+	return c.State(requirement) == SupportNo
+}
+
 // FillUnknown applies a bundled profile only where evidence is still unknown.
 // A profile cannot create catalog models, and known live evidence wins.
 func FillUnknown(profile string, ev CapabilityEvidence) CapabilityEvidence {

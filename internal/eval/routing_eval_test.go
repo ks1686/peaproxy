@@ -17,6 +17,11 @@ func routingPromises() []Scenario {
 	const plain = `{"model":"pea/economy","messages":[{"role":"user","content":"explain the build failure"}]}`
 	const withTools = `{"model":"pea/economy","messages":[{"role":"user","content":"run the tests"}],"tools":[{"type":"function","function":{"name":"lookup"}}]}`
 
+	// Issue #126. A strict tool call against an exact model, which v3.0.4
+	// refused everywhere because strict-schema evidence cannot exist: no
+	// model-listing API reports it and no compat profile carries the field.
+	const exactStrict = `{"model":"exact-model","messages":[{"role":"user","content":"run the tests"}],"tools":[{"type":"function","strict":true,"function":{"name":"lookup"}}]}`
+
 	return []Scenario{
 		{
 			Name:    "economy prefers the cheapest deployment",
@@ -126,6 +131,29 @@ func routingPromises() []Scenario {
 				{ID: "withtools", Input: 2, Output: 2, Tools: Boolp(true)},
 			},
 			WantAccount: "withtools",
+		},
+		{
+			Name: "naming a model outright is not a way around a stated capability",
+			Why: "A provider told tools: false must stay protected when the client names a model instead of " +
+				"asking for pea/*. Eligibility used to guard automatic routes only, so an exact model was a way around it.",
+			Model:   "exact-model",
+			Request: exactStrict,
+			Deployments: []Deployment{
+				{ID: "ignorant", Input: 2, Output: 2, Tools: Boolp(false), Models: []string{"exact-model"}},
+			},
+			WantFailure: true,
+		},
+		{
+			Name: "an undeclared capability is not treated as a refusal",
+			Why: "Nothing observes whether an endpoint honours a strict JSON schema, so that evidence can never " +
+				"be positive. Requiring it made every strict tool call unroutable on every path -- issue #126.",
+			Model:   "exact-model",
+			Request: exactStrict,
+			Deployments: []Deployment{
+				// Tools is deliberately unset: not stated, not denied.
+				{ID: "undeclared", Input: 2, Output: 2, Models: []string{"exact-model"}},
+			},
+			WantAccount: "undeclared",
 		},
 		{
 			Name:    "an unmeasured spend total does not satisfy a ceiling",

@@ -171,6 +171,10 @@ providers:
 
 Every field is optional and unset means "keep the adapter's own declaration" — only `tools`, `visionIn`, `imageOut` and `embeddings` can be corrected, because those are the ones an adapter asserts without being able to check. A declared `false` is believed in both directions: routing will not send a tool call there, and `/v1/models` and the health report say `no` rather than `unknown`, because you already know and PeaProxy has no reason to pretend otherwise.
 
+**Unknown is not a refusal.** Routing refuses a deployment on a *stated* `no`, and permits it when nobody has said. That distinction is not cosmetic: most capabilities have no evidence to offer, because no model-listing API reports whether an endpoint honours a strict JSON schema, accepts parallel tool calls, or carries a continuation. Requiring positive evidence made every strict tool call unroutable on every path, and there was no configuration that could change it — see #126.
+
+So a declaration is a way of saying *no*, never a way of saying *yes you can rely on it*. There is no field for strict schemas and parallel tools, deliberately: there is nothing to assert that PeaProxy could check, and a field nobody can fill truthfully is worse than none.
+
 **An unknown key is reported, not refused.** The loader does not reject unknown
 keys, so `capabilites:` never took effect — but `peaproxy config validate` and
 `peaproxy serve` now name every key the file carries that this version does not

@@ -141,6 +141,17 @@ func (a *Adapter) Validate(context.Context) error {
 // call sent here cannot be honoured, and saying "unknown" would let routing
 // believe otherwise. Vision and the rest are unknown because the CLI decides
 // per model, and this adapter does not guess on its behalf.
+// UnsupportedRequirements states the limits Capabilities() cannot: both are
+// deliberate refusals, not omissions, and PeaProxy must not route tool calls or
+// images here on the strength of a bool it cannot tell apart from unset.
+func (a *Adapter) UnsupportedRequirements() []catalog.Requirement {
+	return []catalog.Requirement{
+		catalog.RequirementTools,
+		catalog.RequirementVision,
+		catalog.RequirementParallelTools,
+	}
+}
+
 func (a *Adapter) Capabilities() adapter.Capabilities {
 	return adapter.Capabilities{
 		Chat:       true,
