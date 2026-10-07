@@ -472,6 +472,17 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 						t.Fatalf("restoring %s: %v", m.AlsoFile, err)
 					}
 				}
+				// The third file too. Relying on the outer defer left
+				// internal/catalog/pricing.go mutated for every subtest that
+				// followed and for the final back-to-green run, so later
+				// scenarios were being judged against a tree that was not the
+				// one they were written against. A gate that inspects a dirty
+				// tree does not report on the code.
+				if thirdPath != "" {
+					if err := os.WriteFile(thirdPath, original[m.ThirdFile], 0o644); err != nil {
+						t.Fatalf("restoring %s: %v", m.ThirdFile, err)
+					}
+				}
 
 			}()
 

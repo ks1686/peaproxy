@@ -107,6 +107,11 @@ Examples:
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
+			// Before EnsureFile, so a typo is named before the load that
+			// validates can fail on it.
+			if err := reportConfigTypos(cmd.ErrOrStderr(), *configPath, strictConfig); err != nil {
+				return err
+			}
 			cfg, path, created, err := config.EnsureFile(*configPath)
 			if err != nil {
 				return err
@@ -127,20 +132,6 @@ Examples:
 				return err
 			}
 			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
-				return err
-			}
-			// Warned here as well as in validate, because serve is where the
-			// setting actually takes effect. A person who never runs validate
-			// would otherwise lose it with nothing said at all.
-			//
-			// --strict-config turns this into the error. The warning prints
-			// before the refusal on purpose: the typo is the diagnosis, and
-			// "refusing to start" with no key named is just a dead end.
-			check := warnUnknownKeys
-			if strictConfig {
-				check = strictUnknownKeys
-			}
-			if err := check(cmd.ErrOrStderr(), path); err != nil {
 				return err
 			}
 			return runServe(cmd.OutOrStdout(), cfg, path, created)
@@ -367,6 +358,10 @@ func configCmd(configPath *string) *cobra.Command {
 		Short: "Exit non-zero if config is invalid",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
+			// Ahead of the load, for the reason in reportConfigTypos.
+			if err := reportConfigTypos(cmd.ErrOrStderr(), *configPath, validateStrict); err != nil {
+				return err
+			}
 			cfg, path, err := loadCfg(*configPath)
 			if err != nil {
 				return err
@@ -375,17 +370,6 @@ func configCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
-				return err
-			}
-			// Named before the build check, not after: a typo and its symptom
-			// are two different messages, and the one that helps is the typo.
-			// "baseURL is required" tells a user what is missing; "you wrote
-			// baseUrl" tells them what to change.
-			check := warnUnknownKeys
-			if validateStrict {
-				check = strictUnknownKeys
-			}
-			if err := check(cmd.ErrOrStderr(), path); err != nil {
 				return err
 			}
 			// Validate has to reach the verdict serve reaches. Reporting "ok"
@@ -662,6 +646,26 @@ func strictUnknownKeys(w io.Writer, path string) error {
 	return reportUnknownKeys(w, path, true)
 }
 
+// reportConfigTypos names unreadable keys before anything validates the file.
+//
+// It has to run before loading, not after. config.Load runs cfg.Validate() on
+// the way out, so a typo whose symptom is a validation failure -- `adaptor` for
+// `adapter` -- produced "provider missing adapter" and returned before the
+// unknown-key check ran at all. The author was told what broke and never what
+// to change. This reads the file directly so the diagnosis comes first.
+func reportConfigTypos(w io.Writer, path string, strict bool) error {
+	if path == "" {
+		path = config.DefaultPath()
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil // missing, unreadable, or not written yet; the caller reports that
+	}
+	if strict {
+		return strictUnknownKeys(w, path)
+	}
+	return warnUnknownKeys(w, path)
+}
+
 // describeUnknown names one unreadable key, and what it was probably meant to
 // be, because the typo is the diagnosis.
 func describeUnknown(u config.UnknownKey) string {
@@ -689,8 +693,10 @@ func reportUnknownKeys(w io.Writer, path string, strict bool) error {
 		for _, u := range unknown {
 			fmt.Fprintf(w, "  %s\n", describeUnknown(u))
 		}
-		return fmt.Errorf("refusing to start: %d config key(s) are not read by this version "+
-			"(strict mode). Fix them, or drop --strict-config to warn instead", len(unknown))
+		// Deliberately not "refusing to start": `config validate` returns this
+		// too, and it starts nothing. The non-zero exit is the refusal there.
+		return fmt.Errorf("%d config key(s) are not read by this version and strict mode is set. "+
+			"Fix them, or drop --strict-config to warn instead", len(unknown))
 	}
 	fmt.Fprintf(w, "\nwarning: %d config key(s) are not read by this version and are ignored:\n", len(unknown))
 	for _, u := range unknown {
