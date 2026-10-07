@@ -60,6 +60,7 @@ var ErrNoBinary = errors.New("cursor_agent: " + Binary + " is not on PATH")
 
 type Adapter struct {
 	id       string
+	tier     catalog.Tier
 	binary   string
 	apiKey   string
 	endpoint string
@@ -81,8 +82,13 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 	if endpoint == "" {
 		endpoint = opts.ExtraHeaders["X-Cursor-Endpoint"]
 	}
+	tier := opts.Tier
+	if tier == "" {
+		tier = catalog.TierPaid
+	}
 	return &Adapter{
 		id:       id,
+		tier:     tier,
 		binary:   bin,
 		apiKey:   strings.TrimSpace(opts.APIKey),
 		endpoint: endpoint,
@@ -161,6 +167,14 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 			continue
 		}
 		models = append(models, catalog.Model{ID: id, Provider: a.id})
+	}
+	for i := range models {
+		// Adapters label their own models. Without the account id the model
+		// appears in the catalog with no owner, which costs it per-account
+		// pricing, the usage rollup and any health report that groups by
+		// account -- all of which key on this field.
+		models[i].AccountID = a.id
+		models[i].Tier = a.tier
 	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("cursor_agent: the CLI listed no models; output was:\n%s", out)

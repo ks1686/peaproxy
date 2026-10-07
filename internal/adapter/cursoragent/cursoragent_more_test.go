@@ -143,3 +143,31 @@ func TestPlainTextOutputIsReturnedAsTheAnswer(t *testing.T) {
 		t.Fatalf("the response lost the requested model: %q", resp.Model)
 	}
 }
+
+// Adapters label their own models. A model with no account id shows in the
+// catalog with no owner, which quietly removes it from per-account pricing, the
+// usage rollup and anything that groups health by account.
+func TestListedModelsCarryTheAccountIDAndTier(t *testing.T) {
+	fakeCLI(t, `cat <<'SCRIPT'
+Available models
+
+auto - Auto (default)
+gpt-5.3-codex - Codex 5.3
+SCRIPT`)
+	a, err := New(adapter.Options{ID: "cursor-sub", Tier: "freemium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	models, err := a.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range models {
+		if m.AccountID != "cursor-sub" {
+			t.Fatalf("model %q has account id %q, want %q", m.ID, m.AccountID, "cursor-sub")
+		}
+		if string(m.Tier) != "freemium" {
+			t.Fatalf("model %q has tier %q, want %q", m.ID, m.Tier, "freemium")
+		}
+	}
+}
