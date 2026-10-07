@@ -8,6 +8,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/antigravity"
 	"github.com/ks1686/peaproxy/internal/adapter/copilot_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/cursoragent"
 	"github.com/ks1686/peaproxy/internal/adapter/factory_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/hosted"
 	"github.com/ks1686/peaproxy/internal/adapter/kimi_oauth"
@@ -31,6 +32,7 @@ func DefaultRegistry() *adapter.Registry {
 	r.Register(openai.Name, openai.New)
 	r.Register(anthropic.Name, anthropic.New)
 	r.Register(openrouter.Name, openrouter.New)
+	r.Register(cursoragent.Name, cursoragent.New)
 	r.Register(opencodezen.Name, opencodezen.New)
 	r.Register(opencodego.Name, opencodego.New)
 	for _, spec := range hosted.All() {
