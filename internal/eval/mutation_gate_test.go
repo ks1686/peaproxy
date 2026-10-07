@@ -75,6 +75,24 @@ var notYetBroken = map[string]string{
 		"breakable needs a harness that prices events, which is a server-level test",
 }
 
+// readSource reads a file for mutation with line endings normalised to LF.
+//
+// Windows checks out with CRLF, so a multi-line anchor written with \n matches
+// nothing there and the gate reported "0 occurrences, want exactly 1" -- which
+// reads as the code having moved, and is not. Every mutation that had passed on
+// Windows so far had a single-line anchor, so the gap stayed invisible until a
+// stacked guard needed a block of code.
+//
+// Only the sandbox copy is touched, and Go builds a CRLF source file perfectly
+// well, so writing the normalised bytes back costs nothing.
+func readSource(root, rel string) ([]byte, error) {
+	b, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		return nil, err
+	}
+	return bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")), nil
+}
+
 func assertEveryPromiseIsBroken(t *testing.T, mutations []Mutation) {
 	t.Helper()
 	scenarios := routingPromises()
@@ -351,7 +369,7 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 		if _, seen := original[m.File]; seen {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, m.File))
+		b, err := readSource(root, m.File)
 		if err != nil {
 			t.Fatalf("reading %s: %v", m.File, err)
 		}
@@ -364,7 +382,7 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 			if _, seen := original[extra]; seen {
 				continue
 			}
-			b, err := os.ReadFile(filepath.Join(root, extra))
+			b, err := readSource(root, extra)
 			if err != nil {
 				t.Fatalf("reading %s: %v", extra, err)
 			}
@@ -405,7 +423,7 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 						m.AlsoFile, n, m.AlsoFrom)
 				}
 				alsoPath = filepath.Join(root, m.AlsoFile)
-				b, rerr := os.ReadFile(alsoPath)
+				b, rerr := readSource(root, m.AlsoFile)
 				if rerr != nil {
 					t.Fatal(rerr)
 				}
@@ -437,7 +455,7 @@ func TestRoutingPromisesWouldNoticeTheirOwnRegression(t *testing.T) {
 				case m.AlsoFile:
 					thirdBase = alsoMutated
 				default:
-					b, rerr := os.ReadFile(thirdPath)
+					b, rerr := readSource(root, m.ThirdFile)
 					if rerr != nil {
 						t.Fatal(rerr)
 					}
