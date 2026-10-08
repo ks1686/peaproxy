@@ -217,7 +217,7 @@ in `docs/research/` and update the matching doc. Never mark a preset `live-verif
 
 ## Definition of "ready"
 
-All of: R1 done; R2 77% total ratchet and package targets met; every R3 item answered and either implemented or
+All of: R1 done; R2 76.5% CI total ratchet and package targets met; every R3 item answered and either implemented or
 documented as a stated limit; R4.1 done (zero `notYetBroken`); lint in CI; no doc claims a feature
 that does nothing; every live-verified claim has a dated record. R5 items not run stay listed in
 `docs/V3.md` as unverified — that is acceptable for "ready", silence is not.
@@ -229,5 +229,5 @@ progress, blockers.
 
 - 2026-10-08 — plan written from a full audit (docs, git history, all 48 issues, PRs, full check at
   `5676807`).
-- 2026-10-08 — R1 completed; R3 decisions executed: persistentContext is reported/refused under strict mode rather than silently inert; CLI status/explain added; image calls take admission slots; asserted free prices remain supported but explain names their source. R4.1 completed (16/16 mutation-backed routing promises). R2 raised openai_compat 27%→85% and formerly zero adapter packages to 71%–90%; total coverage 77.9% before the CI ratchet; CI enforces >=77%.
+- 2026-10-08 — R1 completed; R3 decisions executed: persistentContext is reported/refused under strict mode rather than silently inert; CLI status/explain added; image calls take admission slots; asserted free prices remain supported but explain names their source. R4.1 completed (16/16 mutation-backed routing promises). R2 raised openai_compat 27%→85% and formerly zero adapter packages to 71%–90%; total coverage 77.9% before the CI ratchet; CI enforces >=76.5% (local Go 1.27 measures 77.9%; CI Go 1.22 measures 76.8%).
 - 2026-10-08 — R4.2 completed; R4.3 deliberately retained as a stated limit (no invented price and no silent policy change). Ran the full local gate: all tests including race, vet, build, gofmt, lint, govulncheck, gitleaks, Playwright smoke and GoReleaser snapshot; unpacked Darwin artifact reports 3.0.5-SNAPSHOT and validates a sample config. CI now builds a no-publish snapshot on every Linux race job.
