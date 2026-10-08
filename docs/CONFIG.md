@@ -124,7 +124,7 @@ optimization:
   allowAnonymousProviders: false
   spendCeilingUSD: 0 # 0 means no ceiling configured
   localAssistant: false
-  persistentContext: false
+  persistentContext: false # accepted, but NOT implemented: see below
   localAssistantEndpoint:
     endpoint: http://127.0.0.1:11234/v1
     model: "" # empty uses the endpoint's first model
@@ -132,6 +132,27 @@ optimization:
 ```
 
 Booleans are nullable internally so that "you did not say" stays distinct from "you said no". That distinction is the difference between a default PeaProxy can improve on and one it must respect.
+
+### Settings this version accepts but does not act on
+
+A setting that parses, validates and then does nothing is the same failure as a
+misspelled key, and harder to notice, because the spelling is right. Two keys
+are handled for that reason:
+
+- **Keys this version does not read** are listed by `peaproxy config validate` and
+  `peaproxy serve`, with a suggested key where one is recognisably a typo of
+  another. `--strict-config` turns that list into a refusal.
+- **Keys this version reads but does not act on** are listed the same way, and
+  `--strict-config` refuses them too. There is currently one:
+
+| Setting | What actually happens |
+| --- | --- |
+| `optimization.persistentContext: true` | Stored context artifacts are **memory-only** in this release. The setting is accepted so an existing config keeps loading; it does not write anything to disk. |
+
+Neither list is fatal by default: a config that has carried such a key for
+months keeps serving, because refusing to boot over a documentation problem
+would be a worse surprise than the problem. `validate` still exits 0, and
+`serve` still starts.
 
 `policyVersion` is validated. A file written by a newer PeaProxy is **refused** with a clear message rather than silently misread.
 

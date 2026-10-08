@@ -134,6 +134,9 @@ Examples:
 			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
 				return err
 			}
+			if err := reportInertSettings(cmd.ErrOrStderr(), cfg, strictConfig); err != nil {
+				return err
+			}
 			return runServe(cmd.OutOrStdout(), cfg, path, created)
 		},
 	}
@@ -370,6 +373,9 @@ func configCmd(configPath *string) *cobra.Command {
 				return err
 			}
 			if err := cfg.ValidateKnownAdapters(adapters.Names()); err != nil {
+				return err
+			}
+			if err := reportInertSettings(cmd.ErrOrStderr(), cfg, validateStrict); err != nil {
 				return err
 			}
 			// Validate has to reach the verdict serve reaches. Reporting "ok"
@@ -615,6 +621,35 @@ func checkAdaptersBuild(cfg config.Config, w io.Writer) error {
 		_, _ = fmt.Fprintf(w, "\nwarning: %v\n  the gateway will start without that account; every model only it\n"+
 			"  serves becomes unavailable until it is fixed.\n", first)
 	}
+	return nil
+}
+
+// reportInertSettings names config settings this version reads and accepts but
+// does not act on.
+//
+// The two lists are different problems with the same shape. An unknown key is a
+// spelling mistake; an inert setting is spelled correctly and still does
+// nothing, which is harder to notice and silently wastes the user's effort.
+// Under --strict-config an inert setting is an error, because that mode's whole
+// job is answering "does this config still do what it says".
+func reportInertSettings(w io.Writer, cfg config.Config, strict bool) error {
+	inert := cfg.InertSettings()
+	if len(inert) == 0 {
+		return nil
+	}
+	if strict {
+		_, _ = fmt.Fprintf(w, "\n%d config setting(s) are accepted but not acted on by this version, and --strict-config is set:\n", len(inert))
+		for _, s := range inert {
+			_, _ = fmt.Fprintf(w, "  %s: %s\n", s.Path, s.Detail)
+		}
+		return fmt.Errorf("%d config setting(s) are accepted but not acted on by this version and strict mode is set. "+
+			"Remove them, or drop --strict-config to warn instead", len(inert))
+	}
+	_, _ = fmt.Fprintf(w, "\nwarning: %d config setting(s) are accepted but not acted on by this version:\n", len(inert))
+	for _, s := range inert {
+		_, _ = fmt.Fprintf(w, "  %s: %s\n", s.Path, s.Detail)
+	}
+	_, _ = fmt.Fprintf(w, "  the setting is accepted so an existing config keeps loading; it does not do this\n")
 	return nil
 }
 
