@@ -119,12 +119,7 @@ func (g *Gateway) recordDiscardedRound(account, model string, body []byte) {
 		Discarded: true,
 	}
 	usage.ApplyPublishedUsage(&e, body, false)
-	if e.CostUSD == nil && e.Costable {
-		q := priceForDeployment(g, account, model).Quote()
-		if cost, ok := economics.EstimateCost(q, e.PromptTokens, e.CompletionTokens, e.CacheRead, e.CacheWrite, e.CacheReadNested); ok {
-			e.EstimatedUSD = &cost
-		}
-	}
+	g.PriceUsage(&e, account, model)
 	g.Usage.Add(e)
 }
 

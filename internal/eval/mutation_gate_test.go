@@ -66,14 +66,7 @@ type Mutation struct {
 // nine of fifteen promises unmutated and said nothing, so the gap read as
 // coverage; an explicit list with a reason is a debt someone can close, and it
 // cannot grow by accident.
-var notYetBroken = map[string]string{
-	"spend measured from tokens alone does not satisfy a ceiling": "structurally unbreakable here, not weakly tested: pricing an event is the server's job " +
-		"(priceEvent calls QuoteFor), and the eval harness never does it, so no event in a " +
-		"scenario can ever gain a CostUSD and tokens alone cannot become cost. Both halves of the " +
-		"promise are covered elsewhere -- the parser by TestPartialUsageIsNotPriced in internal/usage, " +
-		"and the priced-versus-total accounting by the mutation on w.Priced above. Making it " +
-		"breakable needs a harness that prices events, which is a server-level test",
-}
+var notYetBroken = map[string]string{}
 
 // readSource reads a file for mutation with line endings normalised to LF.
 //
@@ -131,6 +124,13 @@ func assertEveryPromiseIsBroken(t *testing.T, mutations []Mutation) {
 
 func routingMutations() []Mutation {
 	return []Mutation{
+		{
+			Scenario: "spend measured from tokens alone does not satisfy a ceiling",
+			File:     "internal/gateway/price_usage.go",
+			From:     "if g == nil || e == nil || e.CostUSD != nil || !e.Costable {",
+			To:       "if g == nil || e == nil || e.CostUSD != nil {",
+			Why:      "pricing a partial usage event turns an unmeasured call into a made-up complete bill, so the ceiling must stop refusing it and the promise must fail",
+		},
 		{
 			Scenario: "an explicitly selected model is never substituted",
 			File:     "internal/gateway/engine_route.go",
