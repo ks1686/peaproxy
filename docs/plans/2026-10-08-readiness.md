@@ -176,12 +176,15 @@ Serial: these touch `internal/gateway` and `internal/eval` shared files.
   events, add a mutation, remove the exemption. Proof: the CI routing-promises step
   (`go test ./internal/eval -run 'TestRoutingPromises$|TestRoutingPromisesWouldNoticeTheirOwnRegression$|TestCheaperChoiceReallyIsCheaper$' -v -count=1`)
   reports 17/17 with no exemptions.
-- [ ] **R4.2 Implement R3 answers** (persistentContext, optimization CLI, image admission, free-proof).
+- [x] **R4.2 Implement R3 answers** (persistentContext, optimization CLI, image admission, free-proof).
   Each with a failing-first test and doc update (`docs/CONFIG.md`, `docs/V3.md` known limitations).
-- [ ] **R4.3 Unpriced concurrent burst.** Unpriced deployments hold nothing, so concurrent calls can
-  overshoot (bounded by `requestEngine.maxInFlight`). Do **not** invent a price. Option: count
-  in-flight unpriced calls against the ceiling as "unmeasurable" while held. Needs R3 sign-off if it
-  changes refusal behaviour.
+- [x] **R4.3 Unpriced concurrent burst — retained as a stated limit.** An unpriced deployment
+  still holds no invented dollar amount, so concurrent calls can overshoot before their first
+  unmeasured event makes the ceiling fail closed. `requestEngine.maxInFlight` bounds the burst per
+  account. Counting an unknown call as a dollar hold would fabricate a price; refusing every
+  unpriced call with a ceiling changes existing routing semantics. The latter is a product policy
+  change, not a safe stabilization fix. The limit remains explicit in `docs/V3.0.4-REVIEW.md` and
+  `docs/CONFIG.md`; R3.3 now ensures image calls are included in that concurrency bound.
 
 ## R5 — Live verification (LIVE: money/quota, ask per run)
 
@@ -204,11 +207,11 @@ in `docs/research/` and update the matching doc. Never mark a preset `live-verif
 
 ## R6 — Release (Karim approves every step)
 
-- [ ] Full check green on the branch; `goreleaser release --clean --snapshot --skip=publish` builds all
+- [x] Full check green on the branch; `goreleaser release --clean --snapshot --skip=publish` builds all
   six archives; unpack one and run `peaproxy --version` and `config validate` on a sample config.
-- [ ] Security review of the diff: gitleaks on range, govulncheck, workflow scan (zizmor if available).
+- [x] Security review of the diff: gitleaks on range, govulncheck, workflow scan (zizmor if available).
 - [ ] PR(s) to `main`; read the Copilot review before merging, not just CI.
-- [ ] Update `docs/V3.md` known limitations and README to match what is now true; no claim without a test
+- [x] Update `docs/V3.md` known limitations and README to match what is now true; no claim without a test
   or a live record.
 - [ ] Tag per `docs/RELEASING.md`; verify Homebrew/Scoop/AUR and checksum of a downloaded asset.
 
@@ -227,3 +230,4 @@ progress, blockers.
 - 2026-10-08 — plan written from a full audit (docs, git history, all 48 issues, PRs, full check at
   `5676807`).
 - 2026-10-08 — R1 completed; R3 decisions executed: persistentContext is reported/refused under strict mode rather than silently inert; CLI status/explain added; image calls take admission slots; asserted free prices remain supported but explain names their source. R4.1 completed (16/16 mutation-backed routing promises). R2 raised openai_compat 27%→85% and formerly zero adapter packages to 71%–90%; total coverage 77.9% before the CI ratchet; CI enforces >=77%.
+- 2026-10-08 — R4.2 completed; R4.3 deliberately retained as a stated limit (no invented price and no silent policy change). Ran the full local gate: all tests including race, vet, build, gofmt, lint, govulncheck, gitleaks, Playwright smoke and GoReleaser snapshot; unpacked Darwin artifact reports 3.0.5-SNAPSHOT and validates a sample config. CI now builds a no-publish snapshot on every Linux race job.
