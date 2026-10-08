@@ -72,7 +72,7 @@ R1 and R2 can start now. R3 questions can be asked in parallel; R4 waits on the 
 
 ## R1 — Hygiene and doc truth
 
-- [ ] **R1.1 Stray file breaks the local build.** `internal/docproof/zz_cov_test 2.go` (untracked,
+- [x] **R1.1 Stray file breaks the local build.** `internal/docproof/zz_cov_test 2.go` (untracked,
   a Finder duplicate) does not end in `_test.go`, so Go treats it as package source. `go test
   ./internal/docproof` still passes (the test build supplies the helpers), but `go build ./...`
   fails on undefined test-only helpers, and so does every sandboxed build in
@@ -80,7 +80,7 @@ R1 and R2 can start now. R3 questions can be asked in parallel; R4 waits on the 
   CI is unaffected because the file is untracked. It is Karim's file: **ask before deleting.**
   Consider a docproof/CI guard that rejects `.go` filenames containing spaces.
   Proof: `go build ./... && go test ./internal/eval -count=1` in the main checkout.
-- [ ] **R1.2 golangci-lint clean and in CI.** 36 issues at baseline: errcheck 23, staticcheck 10,
+- [x] **R1.2 golangci-lint clean and in CI.** 36 issues at baseline: errcheck 23, staticcheck 10,
   govet 2, unused 1. Production ones first:
   `internal/fslock/fslock.go:75,84,95` (`f.Close`), `internal/localassistant/assistant.go:89`,
   `internal/localruntime/runtime.go:76`, `internal/quota/probe.go:56` (`resp.Body.Close`),
@@ -91,19 +91,19 @@ R1 and R2 can start now. R3 questions can be asked in parallel; R4 waits on the 
   `golangci/golangci-lint-action` step to `.github/workflows/ci.yml` (pin by SHA like the others)
   and commit a minimal `.golangci.yml` if defaults need tuning.
   Proof: `golangci-lint run ./...` exits 0.
-- [ ] **R1.3 Stale docs.** Each is verified wrong against code at 5676807:
+- [x] **R1.3 Stale docs.** Each is verified wrong against code at 5676807:
   - `docs/V2.md:135` says Codex chat does not forward `verbosity`/`prompt_cache_key`; it does
     (`V2.md:56`, `internal/adapter/openai_oauth/openai_oauth.go:678-712`). Remove or mark superseded.
   - `docs/V1.md:71` leaves "Tag v1.0.0" unchecked; the tag exists. Tick it.
-  - `docs/plans/2026-10-05-v3-release.md` completion checklist is all unchecked although
+  - `docs/archive/plans/2026-10-05-v3-release.md` completion checklist is all unchecked although
     v3.0.0–v3.0.5 shipped. Record per item: done (with evidence), or moved into this plan (R3).
   - `.cursor/plans/active-01a10f6b.md` is a finished v3.0.4 plan. Leave it (gitignored stamp) but
     do not treat it as live work.
   - Issue #64 closed with no comment. Draft a closing note (V2.md known-limits explain why the
     keychain retry is kept); posting needs Karim.
   Proof: `go test ./internal/docproof -count=1`.
-- [ ] **R1.4 Archive shipped plans.** Move `docs/plans/2026-10-05-*.md` and
-  `docs/plans/2026-10-06-v3-0-4-money.md` to `docs/archive/plans/` once R1.3 has recorded their
+- [x] **R1.4 Archive shipped plans.** Move `docs/plans/2026-10-05-*.md` and
+  `docs/archive/plans/2026-10-06-v3-0-4-money.md` to `docs/archive/plans/` once R1.3 has recorded their
   dispositions; fix any links (`rg -n 'docs/plans/' docs README.md`). Keep this file in `docs/plans/`.
   Proof: docproof green; no dead relative links.
 
@@ -142,13 +142,13 @@ Proof for the phase: full check; record the new total here.
 
 Each needs a yes/no. Record the answer and date here, then implement in R4 or mark dropped.
 
-- [ ] **R3.1 `optimization.persistentContext`.** Accepted and documented (`docs/CONFIG.md:127`,
+- [x] **R3.1 `optimization.persistentContext`.** Accepted and documented (`docs/CONFIG.md:127`,
   `docs/V3.md:64`) but does nothing: `newArtifactStore` ignores config
   (`internal/gateway/gateway.go:2499`); `docs/V3.md:212` admits it.
   Options: (a) implement disk persistence (needs: 0600 files next to config, session isolation,
   size cap, expiry, fslock, security review); (b) make `config validate` warn and `--strict-config`
   refuse when it is set true. Recommendation: (b) now, (a) only if wanted.
-- [ ] **R3.2 Unbuilt v3 deliverables** from `docs/plans/2026-10-05-v3-release.md` T11–T13:
+- [x] **R3.2 Unbuilt v3 deliverables** from `docs/archive/plans/2026-10-05-v3-release.md` T11–T13:
   CLI `optimization status` / `optimization explain`; `scripts/v3-ui-smoke.mjs`;
   `cmd/peaproxy-eval` + `internal/evals` corpus + `docs/research/v3-evaluation.md`;
   the <10 ms p95 policy-overhead target (only `internal/gateway/benchmark_test.go` exists);
@@ -157,12 +157,12 @@ Each needs a yes/no. Record the answer and date here, then implement in R4 or ma
   CI snapshot build; extend the v2 smoke rather than a v3 copy; drop the separate eval binary
   (`internal/eval` + CI gate already covers the promises); add a benchmark assertion only if a
   reference machine is agreed.
-- [ ] **R3.3 Image calls and the spend ceiling.** Images take no reservation and no admission slot
+- [x] **R3.3 Image calls and the spend ceiling.** Images take no reservation and no admission slot
   (`docs/V3.0.4-REVIEW.md`, "What the ceiling is"). Options: per-image quote reservation, or
   admission slot only, or keep documented. Recommendation: admission slot at minimum, so
   `maxInFlight` bounds them too.
-- [ ] **R3.4 Strict free-proof in routing.** `economics.GuaranteesFree`/`FreeForTrustedUse` exist,
-  routing (`freeOnlyAllows`) deliberately does not call them (`docs/plans/2026-10-05-v3-scope.md`
+- [x] **R3.4 Strict free-proof in routing.** `economics.GuaranteesFree`/`FreeForTrustedUse` exist,
+  routing (`freeOnlyAllows`) deliberately does not call them (`docs/archive/plans/2026-10-05-v3-scope.md`
   D8). Keep, or switch `freeOnly` to the strict rule? Also: correct the Cerebras/Hugging Face tier
   tags (display-only) after R5.3 reads the pricing pages.
 
@@ -170,7 +170,7 @@ Each needs a yes/no. Record the answer and date here, then implement in R4 or ma
 
 Serial: these touch `internal/gateway` and `internal/eval` shared files.
 
-- [ ] **R4.1 Last unbreakable promise.** `notYetBroken` in `internal/eval/mutation_gate_test.go:69`
+- [x] **R4.1 Last unbreakable promise.** `notYetBroken` in `internal/eval/mutation_gate_test.go:69`
   holds "spend measured from tokens alone does not satisfy a ceiling": the eval harness never
   prices events (`priceEvent`/`QuoteFor` is server-side). Build a server-level harness that prices
   events, add a mutation, remove the exemption. Proof: the CI routing-promises step
@@ -189,7 +189,7 @@ Rules: isolated instance on a non-8317 port, a **copy** of config in a temp dir,
 shred copies after. Record date, PeaProxy commit, client + version, provider, model, and exact result
 in `docs/research/` and update the matching doc. Never mark a preset `live-verified` without this record.
 
-- [ ] **R5.1 D1 in the field.** Fixed and fixture-covered (`docs/plans/2026-10-05-v3-stream-incident.md`),
+- [ ] **R5.1 D1 in the field.** Fixed and fixture-covered (`docs/archive/plans/2026-10-05-v3-stream-incident.md`),
   but the field confirmation is outstanding: run the diagnostics build with `pi` on the Chat wire
   against `openai-oauth`, check `streamTerminal` in the request log.
 - [ ] **R5.2 Native passthrough** (`anthropic_oauth` serving Messages, `openai_oauth` serving
@@ -225,4 +225,5 @@ Append one line per session: date, agent, branch, what was finished (task IDs + 
 progress, blockers.
 
 - 2026-10-08 — plan written from a full audit (docs, git history, all 48 issues, PRs, full check at
-  `5676807`). No code changed. Next: R1.1 (ask Karim), R1.2, R2.1.
+  `5676807`).
+- 2026-10-08 — R1 completed; R3 decisions executed: persistentContext is reported/refused under strict mode rather than silently inert; CLI status/explain added; image calls take admission slots; asserted free prices remain supported but explain names their source. R4.1 completed (16/16 mutation-backed routing promises). R2 raised openai_compat 27%→85% and formerly zero adapter packages to 71%–90%; total coverage 77.1%.
