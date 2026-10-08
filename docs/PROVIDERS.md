@@ -18,6 +18,14 @@ Adapters in this repo today (2.0.x):
 | `groq` | Thin OpenAI-compat wrapper | API key | `https://api.groq.com/openai/v1` |
 | `cerebras` | Thin OpenAI-compat wrapper | API key | `https://api.cerebras.ai/v1` |
 | `google` / `gemini` | Thin OpenAI-compat wrapper | API key | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `alibabacoding` | Hosted OpenAI-compat: Alibaba Cloud Coding Plan. Chat completions only; not the general Model Studio endpoint. Not live-verified by PeaProxy | API key (`DASHSCOPE_API_KEY`) | `https://coding-intl.dashscope.aliyuncs.com/v1` |
+| `deepseek` | Hosted OpenAI-compat: DeepSeek OpenAI-compatible API. Not live-verified by PeaProxy | API key (`DEEPSEEK_API_KEY`) | `https://api.deepseek.com/v1` |
+| `mistral` | Hosted OpenAI-compat: Mistral La Plateforme. Distinct from the Claude subscription OAuth adapter. Not live-verified by PeaProxy | API key (`MISTRAL_API_KEY`) | `https://api.mistral.ai/v1` |
+| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
+| `minimax` | Hosted OpenAI-compat: MiniMax OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`MINIMAX_API_KEY`) | `https://api.minimax.io/v1` |
+| `together` | Hosted OpenAI-compat: Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy | API key (`TOGETHER_API_KEY`) | `https://api.together.xyz/v1` |
+| `fireworks` | Hosted OpenAI-compat: Fireworks AI inference. Pay per token. Not live-verified by PeaProxy | API key (`FIREWORKS_API_KEY`) | `https://api.fireworks.ai/inference/v1` |
+| `cohere` | Hosted OpenAI-compat: Cohere OpenAI compatibility layer. Trial keys are rate limited. Live-verified 2026-10-05: listing, chat, streaming termination and streaming tool calls | API key (`COHERE_API_KEY`) | `https://api.cohere.ai/compatibility/v1` |
 | `xai` | Thin OpenAI-compat wrapper | API key | `https://api.x.ai/v1` |
 | `huggingface` | Thin OpenAI-compat wrapper | token | `https://router.huggingface.co/v1` |
 | `nim` | Thin OpenAI-compat wrapper | API key | `https://integrate.api.nvidia.com/v1` |
@@ -139,6 +147,14 @@ PeaProxy never invents remaining counts. Unknown remaining is **omitted** (JSON 
 | `groq`, `sambanova` | documented `x-ratelimit-*` headers | none |
 | `cerebras`, `xai`, `huggingface`, `nim`, `workers_ai`, generic `openai_compat` | capture `x-ratelimit-*` **if** the upstream sends them | none |
 | `google` / `gemini` | none documented on the OpenAI-compat endpoint | none |
+| `alibabacoding` | Hosted OpenAI-compat: Alibaba Cloud Coding Plan. Chat completions only; not the general Model Studio endpoint. Not live-verified by PeaProxy | API key (`DASHSCOPE_API_KEY`) | `https://coding-intl.dashscope.aliyuncs.com/v1` |
+| `deepseek` | Hosted OpenAI-compat: DeepSeek OpenAI-compatible API. Not live-verified by PeaProxy | API key (`DEEPSEEK_API_KEY`) | `https://api.deepseek.com/v1` |
+| `mistral` | Hosted OpenAI-compat: Mistral La Plateforme. Distinct from the Claude subscription OAuth adapter. Not live-verified by PeaProxy | API key (`MISTRAL_API_KEY`) | `https://api.mistral.ai/v1` |
+| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
+| `minimax` | Hosted OpenAI-compat: MiniMax OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`MINIMAX_API_KEY`) | `https://api.minimax.io/v1` |
+| `together` | Hosted OpenAI-compat: Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy | API key (`TOGETHER_API_KEY`) | `https://api.together.xyz/v1` |
+| `fireworks` | Hosted OpenAI-compat: Fireworks AI inference. Pay per token. Not live-verified by PeaProxy | API key (`FIREWORKS_API_KEY`) | `https://api.fireworks.ai/inference/v1` |
+| `cohere` | Hosted OpenAI-compat: Cohere OpenAI compatibility layer. Trial keys are rate limited. Live-verified 2026-10-05: listing, chat, streaming termination and streaming tool calls | API key (`COHERE_API_KEY`) | `https://api.cohere.ai/compatibility/v1` |
 | `openrouter` | `X-RateLimit-*` on **429** only | **`GET /api/v1/key`** on Health refresh / probe (`limit_remaining`) |
 | `ollama_cloud`, `opencode_zen`, `opencode_go` | headers if sent | none |
 | Local (`ollama`, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | none | none |

@@ -190,10 +190,10 @@ func hostedSpecNames(t *testing.T, dir string) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range regexp.MustCompile(`Adapter:\s*"([a-z_0-9]+)"`).FindAllStringSubmatch(string(src), -1) {
-			out = append(out, m[1])
-		}
-		for _, m := range regexp.MustCompile(`Register\(\s*"([a-z_0-9]+)"`).FindAllStringSubmatch(string(src), -1) {
+		// The spec struct's field is `Name:`, not `Adapter:` -- reading the
+		// wrong one silently returned an empty set, which left every hosted
+		// adapter (groq, workers_ai, cerebras, ...) outside the check.
+		for _, m := range regexp.MustCompile(`\bName:\s*"([a-z_0-9]+)"`).FindAllStringSubmatch(string(src), -1) {
 			out = append(out, m[1])
 		}
 	}
