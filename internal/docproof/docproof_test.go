@@ -88,36 +88,43 @@ func TestEveryRegisteredAdapterIsDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var names []string
 	providers, err := os.ReadFile(filepath.Join(root, "docs", "PROVIDERS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := string(providers)
+	// "Documented" means a row in the table, not a mention somewhere in the
+	// prose: a name can appear in a sentence and still be missing every cell a
+	// reader needs (auth mode, endpoint, ToS risk). So the table's first column
+	// is read, and aliases sharing a row -- `antigravity` / `gemini_oauth` --
+	// each count.
+	tabled := map[string]bool{}
+	for _, line := range strings.Split(string(providers), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "|") {
+			continue
+		}
+		rest := strings.TrimSpace(line)
+		end := strings.Index(rest[1:], "|")
+		if end < 0 {
+			continue
+		}
+		for _, m := range regexp.MustCompile("`([a-z_0-9]+)`").FindAllStringSubmatch(rest[1:end+1], -1) {
+			tabled[m[1]] = true
+		}
+	}
+	if len(tabled) < 16 {
+		t.Fatalf("only %d name(s) found in the PROVIDERS.md table; the parse has stopped working", len(tabled))
+	}
 
-	// The name is not always the Go identifier: cursoragent.Name is
-	// "cursor_agent", and two adapters register a hosted constant. So the
-	// constant's value is read from the adapter package, which is what the
-	// registry actually looks up.
-	adaptersDir := filepath.Join(root, "internal", "adapter")
-	entries, err := os.ReadDir(adaptersDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// specs are the data-driven hosted wrappers, registered in a loop.
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "hosted" {
-			continue
-		}
-		name := declaredAdapterName(t, filepath.Join(adaptersDir, e.Name()))
-		if name == "" {
-			continue
-		}
-		names = append(names, name)
-	}
-	names = append(names, hostedSpecNames(t, filepath.Join(adaptersDir, "hosted"))...)
-	if len(register) == 0 {
-		t.Fatal("internal/adapters/register.go is empty; this test has stopped checking anything")
+	// The registered name is not always the Go identifier, and register.go is
+	// the only place that knows: cursoragent.Name is "cursor_agent",
+	// antigravity.AliasGemini is "gemini_oauth", kimi_oauth.NameAI is
+	// "kimi_ai_oauth", and two adapters register a hosted constant in a loop.
+	// So register.go is parsed for the names it passes, and each package
+	// reference is resolved to the constant's value.
+	names := append(literalRegistrations(t, register), hostedSpecNames(t, filepath.Join(root, "internal", "adapter", "hosted"))...)
+	names = append(names, resolvedRegistrations(t, root, register)...)
+	if len(names) == 0 {
+		t.Fatal("no adapter names were resolved from register.go; this test has stopped checking anything")
 	}
 
 	var missing []string
@@ -127,7 +134,7 @@ func TestEveryRegisteredAdapterIsDocumented(t *testing.T) {
 			continue
 		}
 		seen[name] = true
-		if !strings.Contains(doc, "`"+name+"`") {
+		if !tabled[name] {
 			missing = append(missing, name)
 		}
 	}
@@ -189,6 +196,49 @@ func hostedSpecNames(t *testing.T, dir string) []string {
 		for _, m := range regexp.MustCompile(`Register\(\s*"([a-z_0-9]+)"`).FindAllStringSubmatch(string(src), -1) {
 			out = append(out, m[1])
 		}
+	}
+	return out
+}
+
+// resolvedRegistrations reads register.go for `r.Register(pkg.Ident, ...)` and
+// resolves each Ident to the string its package declares. A reference that is
+// not a package -- a loop variable over the hosted specs -- is skipped; the
+// hosted scan covers those.
+func resolvedRegistrations(t *testing.T, root string, register []byte) []string {
+	t.Helper()
+	var out []string
+	for _, m := range regexp.MustCompile(`Register\(\s*([a-z][a-z0-9_]*)\.([A-Za-z0-9_]+)\s*,`).FindAllStringSubmatch(string(register), -1) {
+		pkg, ident := m[1], m[2]
+		dir := filepath.Join(root, "internal", "adapter", pkg)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			src, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			re := regexp.MustCompile(`\b` + ident + `\s*=\s*"([a-z_0-9]+)"`)
+			if v := re.FindSubmatch(src); v != nil {
+				out = append(out, string(v[1]))
+				break
+			}
+		}
+	}
+	return out
+}
+
+// literalRegistrations reads registrations made with a bare string rather than a
+// constant, which the resolver above cannot see.
+func literalRegistrations(t *testing.T, register []byte) []string {
+	t.Helper()
+	var out []string
+	for _, m := range regexp.MustCompile(`Register\(\s*"([a-z_0-9]+)"`).FindAllStringSubmatch(string(register), -1) {
+		out = append(out, m[1])
 	}
 	return out
 }
