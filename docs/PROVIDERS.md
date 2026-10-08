@@ -36,6 +36,7 @@ Adapters in this repo today (2.0.x):
 | `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |
 | `meta_oauth` | Meta Muse device OAuth + minted key. **ToS/ban risk.** | OAuth (`--provider meta`) | `https://api.meta.ai/v1` |
 | `copilot_oauth` | GitHub Copilot subscription device OAuth + Copilot chat (`api.githubcopilot.com`). **ToS/ban risk.** Not GitHub Models. | OAuth (`--provider copilot`) | `https://api.githubcopilot.com` |
+| `cursor_agent` | Cursor subscription as an upstream, run through Cursor's own `cursor-agent` CLI (`--mode ask`, one flattened prompt per call). **No tool calling** — the mode is read-only, so `tools` is reported unsupported rather than unknown. **ToS/ban risk.** POSIX-only upstream: the CLI is a shell script. Set `workDir` (see [CONFIG](CONFIG.md#cursor-agent)) so the interactive workspace-trust prompt is answered for a directory you chose. | `CURSOR_API_KEY` / `CURSOR_API_ENDPOINT`, else the IDE session | n/a — the CLI decides |
 | `qwen_oauth` | Stub: CPA has no Qwen consumer OAuth | n/a | use `openai_compat` + a Qwen key |
 | `factory_oauth` | Stub: no public Factory consumer chat OAuth | n/a | use Droid as a PeaProxy **client** (`peaproxy clients show droid`) |
 

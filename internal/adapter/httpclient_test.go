@@ -49,10 +49,6 @@ func TestHTTPClientKeepsStreamTimeoutAndTLSVerify(t *testing.T) {
 	}
 }
 
-func TestDisconnectCancelsUpstream(t *testing.T) {
-	TestHTTPClientCancelClosesUpstream(t)
-}
-
 func TestLongActiveStreamSurvives(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

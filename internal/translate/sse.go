@@ -957,7 +957,6 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		}
 	}
 	if messageStarted && !messageClosed {
-		messageClosed = true
 		if err := emit("response.output_text.done", fmt.Sprintf(
 			`{"type":"response.output_text.done","item_id":%q,"output_index":%d,"content_index":0,"text":%q}`,
 			messageItemID, messageIndex, text.String())); err != nil {

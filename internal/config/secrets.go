@@ -34,11 +34,6 @@ type secretWriter interface {
 	Prune(ids []string) error
 }
 
-func hydrateSecrets(path string, cfg *Config) error {
-	_, err := hydrateSecretsReporting(path, cfg)
-	return err
-}
-
 // hydrateSecretsReporting is hydrateSecrets plus the set of secrets it could not
 // read back. SaveMerged needs that set to tell a corrupt secret apart from one
 // the user deliberately deleted (#54).

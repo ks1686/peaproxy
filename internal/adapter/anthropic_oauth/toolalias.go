@@ -169,7 +169,10 @@ func (p *aliasParser) parseArray(frame aliasFrame) bool {
 	if p.consume(']') {
 		return true
 	}
-	child := aliasNested
+	// Starts as aliasNested because that is what the default case means; the
+	// earlier version assigned it again in the default branch, which read like
+	// there was a different fallback and was not.
+	var child aliasFrame
 	switch frame {
 	case aliasTools:
 		child = aliasTool
@@ -287,7 +290,7 @@ func (p *aliasParser) parseObject(frame aliasFrame) bool {
 				}
 			}
 		default:
-			child := aliasNested
+			var child aliasFrame
 			switch frame {
 			case aliasTop:
 				switch key {
