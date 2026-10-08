@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapter/anthropic"
@@ -688,4 +689,97 @@ func containsStr(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+type forwardingAdapter struct {
+	imageReq adapter.ImageRequest
+	embedReq adapter.EmbeddingRequest
+}
+
+func (forwardingAdapter) ID() string                                          { return "forward" }
+func (forwardingAdapter) ListModels(context.Context) ([]catalog.Model, error) { return nil, nil }
+func (forwardingAdapter) Chat(context.Context, adapter.ChatRequest) (adapter.ChatResponse, error) {
+	return adapter.ChatResponse{}, nil
+}
+func (forwardingAdapter) ChatStream(context.Context, adapter.ChatRequest, io.Writer) error {
+	return nil
+}
+func (forwardingAdapter) Validate(context.Context) error     { return nil }
+func (forwardingAdapter) Capabilities() adapter.Capabilities { return adapter.Capabilities{} }
+func (a *forwardingAdapter) GenerateImage(_ context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	a.imageReq = req
+	return adapter.ImageResponse{Model: req.Model}, nil
+}
+func (a *forwardingAdapter) EditImage(_ context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {
+	a.imageReq = req
+	return adapter.ImageResponse{Model: req.Model}, nil
+}
+func (a *forwardingAdapter) CreateEmbeddings(_ context.Context, req adapter.EmbeddingRequest) (adapter.EmbeddingResponse, error) {
+	a.embedReq = req
+	return adapter.EmbeddingResponse{Model: req.Model}, nil
+}
+
+func TestAdapterHelpersForwardAndParse(t *testing.T) {
+	inner := &forwardingAdapter{}
+	image := adapter.ImageRequest{Model: "image-model", Prompt: "draw"}
+	if got, err := adapter.GenerateImageFrom(inner, context.Background(), image); err != nil || got.Model != image.Model || inner.imageReq.Model != image.Model || inner.imageReq.Prompt != image.Prompt {
+		t.Fatalf("generate: %#v %v %#v", got, err, inner.imageReq)
+	}
+	if got, err := adapter.EditImageFrom(inner, context.Background(), image); err != nil || got.Model != image.Model || inner.imageReq.Model != image.Model || inner.imageReq.Prompt != image.Prompt {
+		t.Fatalf("edit: %#v %v %#v", got, err, inner.imageReq)
+	}
+	embed := adapter.EmbeddingRequest{Model: "embed-model", Input: "text"}
+	if got, err := adapter.EmbedFrom(inner, context.Background(), embed); err != nil || got.Model != embed.Model || inner.embedReq.Model != embed.Model || inner.embedReq.Input != embed.Input {
+		t.Fatalf("embed: %#v %v %#v", got, err, inner.embedReq)
+	}
+	if _, err := adapter.GenerateImageFrom(forwardingAdapter{}, context.Background(), image); !errors.Is(err, adapter.ErrImageOutUnsupported) {
+		t.Fatalf("generate unsupported: %v", err)
+	}
+	if _, err := adapter.EditImageFrom(forwardingAdapter{}, context.Background(), image); !errors.Is(err, adapter.ErrImageOutUnsupported) {
+		t.Fatalf("edit unsupported: %v", err)
+	}
+	if _, err := adapter.EmbedFrom(forwardingAdapter{}, context.Background(), embed); !errors.Is(err, adapter.ErrEmbeddingsUnsupported) {
+		t.Fatalf("embed unsupported: %v", err)
+	}
+	imageResult := adapter.ParseImageResponse([]byte(`{"created":12,"data":[{"url":"https://image"},{"b64_json":"encoded"},{"url":"also","b64_json":"more"}]}`), "image-model")
+	if imageResult.Created != 12 || strings.Join(imageResult.URLs, ",") != "https://image,also" || strings.Join(imageResult.B64, ",") != "encoded,more" {
+		t.Fatalf("image result: %#v", imageResult)
+	}
+	embedResult := adapter.ParseEmbeddingResponse([]byte(`{"model":"provider-model","data":[{"embedding":[1,2,3]},{"embedding":[]}]}`), "requested")
+	if embedResult.Model != "provider-model" || embedResult.Count != 2 || embedResult.Dimensions != 3 {
+		t.Fatalf("embedding result: %#v", embedResult)
+	}
+	if got := adapter.ParseEmbeddingResponse([]byte(`not-json`), "requested"); got.Model != "requested" || got.Count != 0 || got.Dimensions != 0 {
+		t.Fatalf("bad response: %#v", got)
+	}
+}
+
+func TestHTTPErrorAndRegistry(t *testing.T) {
+	if got := (adapter.HTTPError{Status: 503}).Error(); got != "upstream HTTP 503" {
+		t.Fatalf("error = %q", got)
+	}
+	err := adapter.HTTPError{Status: 429, Body: "upstream secret"}
+	if err.Error() != "upstream HTTP 429: upstream secret" || err.Sanitized() != "upstream HTTP 429" {
+		t.Fatalf("error formatting: %q / %q", err.Error(), err.Sanitized())
+	}
+	response := &http.Response{StatusCode: 429, Header: http.Header{"Retry-After": []string{"5"}, "X-Ratelimit-Scope": []string{"model"}}}
+	got := adapter.NewHTTPError(response, "limited")
+	if got.RetryAfter != 5*time.Second || got.Scope != adapter.ScopeModel || got.Delivery != adapter.DeliveryCompleted {
+		t.Fatalf("HTTP error: %#v", got)
+	}
+	if got := adapter.NewHTTPError(nil, "no response"); got.Scope != adapter.ScopeAccount || got.Delivery != adapter.DeliveryUncertain {
+		t.Fatalf("nil response: %#v", got)
+	}
+	registry := adapter.NewRegistry()
+	registry.Register("z", func(adapter.Options) (adapter.Adapter, error) { return forwardingAdapter{}, nil })
+	registry.Register("a", func(adapter.Options) (adapter.Adapter, error) { return forwardingAdapter{}, nil })
+	if names := registry.Names(); len(names) != 2 || (names[0] != "a" && names[1] != "a") {
+		t.Fatalf("names: %#v", names)
+	}
+	if _, err := registry.Open("missing", adapter.Options{}); err == nil || !strings.Contains(err.Error(), "unknown adapter") {
+		t.Fatalf("missing adapter: %v", err)
+	}
+	if opened, err := registry.Open("a", adapter.Options{}); err != nil || opened.ID() != "forward" {
+		t.Fatalf("open: %#v %v", opened, err)
+	}
 }

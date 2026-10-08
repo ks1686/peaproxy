@@ -3,9 +3,11 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -70,5 +72,67 @@ func TestMessagesForwardsClientBetasWithoutThinkingBudget(t *testing.T) {
 	}
 	if got != "thinking-binding-controls-2026-08-01" {
 		t.Fatalf("anthropic-beta = %q, want only the non-OAuth client beta", got)
+	}
+}
+
+func TestAdapterOperationsAndErrors(t *testing.T) {
+	var gotPath, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotKey = r.URL.Path, r.Header.Get("x-api-key")
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"data":[{"id":"claude-test","display_name":"Claude Test"}]}`)
+		case "/v1/messages":
+			_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","content":[{"type":"text","text":"hello"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	adp, err := New(adapter.Options{ID: "account", BaseURL: srv.URL + "/v1", APIKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := adp.(*Adapter)
+	if a.ID() != "account" || !a.Capabilities().APIKey || !a.Capabilities().Chat || !a.Capabilities().Tools {
+		t.Fatalf("identity/capabilities: %q %#v", a.ID(), a.Capabilities())
+	}
+	models, err := a.ListModels(context.Background())
+	if err != nil || len(models) != 1 || models[0].ID != "claude-test" || models[0].AccountID != "account" || models[0].Provider != Name {
+		t.Fatalf("models: %#v %v", models, err)
+	}
+	if gotPath != "/v1/models" || gotKey != "key" {
+		t.Fatalf("models request: %s key=%q", gotPath, gotKey)
+	}
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{Model: "claude-test", Messages: []adapter.Message{{Role: "user", Content: "hi"}}})
+	if err != nil || resp.Content != "hello" || resp.Model != "claude-test" {
+		t.Fatalf("chat: %#v %v", resp, err)
+	}
+	if err := a.Validate(context.Background()); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestListModelsAndMessagesReturnHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(w, strings.Repeat("x", 300))
+	}))
+	t.Cleanup(srv.Close)
+	adp, err := New(adapter.Options{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := adp.(*Adapter)
+	if _, err := a.ListModels(context.Background()); err == nil {
+		t.Fatal("expected list error")
+	} else {
+		var httpErr adapter.HTTPError
+		if !errors.As(err, &httpErr) || httpErr.Status != http.StatusBadGateway || len(httpErr.Body) != 243 {
+			t.Fatalf("list error: %#v (%v)", httpErr, err)
+		}
+	}
+	if _, err := a.Messages(context.Background(), []byte(`{}`)); err == nil {
+		t.Fatal("expected messages error")
 	}
 }
