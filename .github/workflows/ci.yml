@@ -36,6 +36,23 @@ jobs:
         env:
           PEAPROXY_SECRET_BACKEND: file
         run: go test ./...
+      # Coverage ratchet, Linux only: some files are OS-specific, so the total
+      # differs a little per platform and a floor measured on one is not a floor
+      # on the others. The floor is where the tree is, not where it should be;
+      # raise it when coverage rises, never lower it to make a change pass.
+      - name: Coverage ratchet
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PEAPROXY_SECRET_BACKEND: file
+        run: |
+          go test ./... -coverprofile=coverage.out > /dev/null
+          coverage="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')"
+          echo "statement coverage: ${coverage}%"
+          awk -v c="$coverage" 'BEGIN { exit !(c >= 77) }' || {
+            echo "coverage ${coverage}% is below the 77% ratchet" >&2
+            exit 1
+          }
       # Promotion gate. The routing promises are the product's claims, and a
       # claim that only the release notes assert is not a claim. This step
       # fails the build when a change breaks one.
