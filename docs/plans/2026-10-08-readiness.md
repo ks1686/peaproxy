@@ -1,6 +1,6 @@
 # Readiness: take PeaProxy from v3.0.5 to a stable, "ready" state
 
-Status: **planned, not started** (2026-10-08). Baseline commit: `5676807` (`main`, CI green, tag `v3.0.5`).
+Status: **implementation complete; PR/release review pending** (2026-10-08). Baseline commit: `5676807` (`main`, CI green, tag `v3.0.5`).
 
 This plan is written so any agent can pick it up cold. Read **How to work** first, then take the
 first unchecked task in **Phase order**. Tick a box only after its proof command has run and passed
