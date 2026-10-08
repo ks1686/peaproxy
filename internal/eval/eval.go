@@ -109,11 +109,6 @@ type Result struct {
 func Run(t *testing.T, s Scenario) Result {
 	t.Helper()
 
-	type stub struct {
-		id  string
-		srv *httptest.Server
-	}
-	var stubs []stub
 	var providers []config.Provider
 
 	for i, d := range s.Deployments {
@@ -141,7 +136,6 @@ func Run(t *testing.T, s Scenario) Result {
 			})
 		}))
 		t.Cleanup(srv.Close)
-		stubs = append(stubs, stub{id: d.ID, srv: srv})
 
 		tier := "paid"
 		if d.Free {

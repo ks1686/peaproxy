@@ -103,16 +103,6 @@ func procChild() bool {
 	return true
 }
 
-func upsertProvider(list []Provider, p Provider) []Provider {
-	for i, e := range list {
-		if e.ID == p.ID {
-			list[i] = p
-			return list
-		}
-	}
-	return append(list, p)
-}
-
 // TestTwoProcessesSavingAtOnceKeepBothAccounts runs an "auth login" process and
 // a "serve" process against one config directory simultaneously, and requires
 // that both accounts survive.

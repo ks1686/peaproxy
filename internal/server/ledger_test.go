@@ -14,8 +14,6 @@ import (
 	"github.com/ks1686/peaproxy/internal/usage"
 )
 
-func f64(v float64) *float64 { return &v }
-
 // ledgerServer serves one upstream that publishes token counts and no cost,
 // which is what most providers actually do.
 func ledgerServer(t *testing.T, usageBody string, cache float64) (*Server, *usage.Store) {

@@ -29,7 +29,13 @@ func TestConnectPreservesJSONKeyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(got)
-	if strings.Index(text, `"z"`) < 0 || strings.Index(text, `"z"`) > strings.Index(text, `"theme"`) {
+	// Index returns -1 when absent, which would compare as "before everything"
+	// and pass an ordering assertion on a file that has lost the key entirely.
+	zAt, themeAt := strings.Index(text, `"z"`), strings.Index(text, `"theme"`)
+	if zAt < 0 || themeAt < 0 {
+		t.Fatalf("expected keys are missing: %s", text)
+	}
+	if zAt > themeAt {
 		t.Fatalf("key order changed: %s", text)
 	}
 	var parsed struct {
@@ -669,7 +675,11 @@ func TestClaudeCodeRoundTripKeepsMiddleEnvInPlace(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(connected)
-	if !(strings.Index(text, `"theme"`) < strings.Index(text, `"env"`) && strings.Index(text, `"env"`) < strings.Index(text, `"x"`)) {
+	themeAt, envAt, xAt := strings.Index(text, `"theme"`), strings.Index(text, `"env"`), strings.Index(text, `"x"`)
+	if themeAt < 0 || envAt < 0 || xAt < 0 {
+		t.Fatalf("expected keys are missing: %s", text)
+	}
+	if !(themeAt < envAt && envAt < xAt) {
 		t.Fatalf("connect moved env: %s", text)
 	}
 	if err := layout.Disconnect("claude-code"); err != nil {

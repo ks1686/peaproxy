@@ -16,7 +16,7 @@ func TestParsePublishedUsageReadsDocumentedFields(t *testing.T) {
 		t.Fatalf("explicit zero must count: p=%d c=%d ok=%v cost=%v", p, c, ok, cost)
 	}
 	p, c, cost, ok = ParsePublishedUsage([]byte(`{"usage":{"prompt_tokens":1,"completion_tokens":1,"cost":0.25}}`))
-	if !ok || cost == nil || *cost != 0.25 {
+	if !ok || p != 1 || c != 1 || cost == nil || *cost != 0.25 {
 		t.Fatalf("published cost %v ok=%v", cost, ok)
 	}
 	_, _, cost, ok = ParsePublishedUsage([]byte(`{"id":"x"}`))

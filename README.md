@@ -129,7 +129,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | OS keychain / `secrets.enc` | Shipped. Large OAuth tokens are stored as chunked keychain items |
 | 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; **entitlement failures (402 / exhausted free tier) get 15 minutes, not 30s**; the 503 names the account and cause; a slow first token never starts a cooldown |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
-| Settings, onboarding CTAs, `config validate` | Shipped |
+| Settings, onboarding CTAs, `config validate` | Shipped. `config validate` reaches the verdict `serve` reaches, and reports keys this version does not read. `--strict-config` turns that report into a non-zero exit, for a CI job or a pre-commit hook (`docs/CONFIG.md`) |
 | CLI `catalog` / `health` / `requests` / `accounts add` | Shipped |
 | Homebrew cask + signed/notarized macOS binaries | Shipped (`brew tap ks1686/tap`) |
 | Loopback default; LAN needs token | Shipped |
@@ -263,6 +263,7 @@ What changes, how to upgrade or roll back, and the known limitations:
 ## Security
 
 - Default bind is **loopback**. Binding `0.0.0.0` requires `--allow-lan` **and** a non-empty admin token (`docs/CONFIG.md`).
+- The admin token guards **`/admin/*` only**. `/v1/*`, `/healthz` and the UI stay reachable on a LAN bind, by design: the harnesses that talk to PeaProxy are not configured to send an admin token, and gating them would mean putting the admin token in every client's config. So on a LAN bind the thing that spends your money is reachable by anything that can route to it — put it on a network you trust, or keep it on loopback.
 - A request from a loopback peer must carry a loopback `Host`, for **every** method. That is the DNS-rebinding defence: a page whose DNS points at 127.0.0.1 arrives over the loopback interface with the attacker's `Host`, and without the check the admin reads (`/admin/usage`, `/admin/requests`, `/admin/accounts`, `/admin/settings`) would be readable by it.
 - Never log secrets. Opt-in request log is redacted. OAuth tokens and inline API keys are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) or an AES-GCM file next to the config when no keychain is available. YAML lists accounts without printing those secrets.
 - **ToS:** **Subscription OAuth** (Claude Pro/Max/Team/Enterprise, ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse) may violate a provider’s terms and can result in account bans. PeaProxy authors are **not liable**. Prefer official API keys. OpenCode Zen **free** models may train on prompts — see catalog privacy notes and [OpenCode Zen docs](https://opencode.ai/docs/zen/). Details: [docs/OAUTH.md](docs/OAUTH.md).

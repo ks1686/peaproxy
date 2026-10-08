@@ -57,10 +57,7 @@ type Gateway struct {
 
 	// spendWindow supplies recorded spend for the spend ceiling. It is a field
 	// so the ceiling can be exercised without a usage store.
-	spendWindow spendWindow
-	// allPriced reports whether every call in the window carried a price. A
-	// nil value means unknown, which the ceiling treats as untrustworthy.
-	allPriced     func() bool
+	spendWindow   spendWindow
 	Usage         *usage.Store
 	cool          map[string]cooldownSlots
 	rr            uint64

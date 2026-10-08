@@ -19,7 +19,7 @@ import (
 // rewriter held the tail or the adapter simply never produced it. This one does
 // exactly what the byte level requires, which is the only level this invariant
 // lives on.
-type rawStreamAdapter struct{ tail string }
+type rawStreamAdapter struct{}
 
 func (a *rawStreamAdapter) ID() string { return "raw-responses" }
 
