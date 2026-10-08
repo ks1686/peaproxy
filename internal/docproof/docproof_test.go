@@ -151,29 +151,6 @@ func TestEveryRegisteredAdapterIsDocumented(t *testing.T) {
 	}
 }
 
-// declaredAdapterName reads the value an adapter package registers under.
-func declaredAdapterName(t *testing.T, dir string) string {
-	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if m := regexp.MustCompile(`Name\s*=\s*"([a-z_0-9]+)"`).FindSubmatch(src); m != nil {
-			return string(m[1])
-		}
-	}
-	return ""
-}
-
 // hostedSpecNames reads the adapter names out of the data-driven hosted specs.
 func hostedSpecNames(t *testing.T, dir string) []string {
 	t.Helper()

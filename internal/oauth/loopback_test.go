@@ -23,7 +23,7 @@ func TestLoopbackCapturesCodeAndState(t *testing.T) {
 			t.Errorf("callback get: %v", err)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		_, _ = io.Copy(io.Discard, resp.Body)
 	}()
 

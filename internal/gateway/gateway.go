@@ -837,7 +837,9 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 		}
 		tried = true
 		inst.recordAttempt(&lastAccount)
-		resp, callErr := ed.EditImage(ctx, adapter.ImageRequest{Model: model, Raw: body, ContentType: contentType})
+		resp, callErr := admittedSlot(g, ctx, inst.Provider.ID, func(c context.Context) (adapter.ImageResponse, error) {
+			return ed.EditImage(c, adapter.ImageRequest{Model: model, Raw: body, ContentType: contentType})
+		})
 		if stop := ambiguousDelivery(callErr); stop != nil {
 			return adapter.ImageResponse{}, lastAccount, stop
 		}
@@ -929,7 +931,9 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 		}
 		tried = true
 		inst.recordAttempt(&lastAccount)
-		resp, callErr := gen.GenerateImage(ctx, adapter.ImageRequest{Model: model, Raw: raw})
+		resp, callErr := admittedSlot(g, ctx, inst.Provider.ID, func(c context.Context) (adapter.ImageResponse, error) {
+			return gen.GenerateImage(c, adapter.ImageRequest{Model: model, Raw: raw})
+		})
 		if stop := ambiguousDelivery(callErr); stop != nil {
 			return adapter.ImageResponse{}, lastAccount, stop
 		}
@@ -1779,6 +1783,25 @@ func admitted[T any](g *Gateway, ctx context.Context, account, model string, bod
 	if err := g.holdSpend(account, model, body); err != nil {
 		return zero, usage.MarkNotDispatched(err)
 	}
+	return f(ctx)
+}
+
+// admittedSlot is admitted without the spend hold.
+//
+// Image calls take it. Images are not billed per token, so a hold computed from
+// the request's tokens would be a figure with no relationship to what the call
+// costs -- and a call that a ceiling refuses for an estimate nobody published
+// would be refused for the wrong reason. The capacity slot is the part that
+// applies: an image generation is a long, expensive upstream call, and leaving
+// it unbounded meant maxInFlight bounded every other path while quietly not
+// bounding this one.
+func admittedSlot[T any](g *Gateway, ctx context.Context, account string, f func(context.Context) (T, error)) (T, error) {
+	var zero T
+	release, err := g.admit(ctx, account)
+	if err != nil {
+		return zero, usage.MarkNotDispatched(err)
+	}
+	defer release()
 	return f(ctx)
 }
 

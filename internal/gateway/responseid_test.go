@@ -38,19 +38,19 @@ func TestResponseIDWatcherAcrossChunkBoundaries(t *testing.T) {
 func TestResponseIDWatcherOnlyReadsCompletionEvents(t *testing.T) {
 	var sink bytes.Buffer
 	m := newResponseIDWatcher(&sink)
-	m.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_created\"}}\n\n"))
+	_, _ = m.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_created\"}}\n\n"))
 	if got := m.lastID(); got != "resp_created" {
 		t.Errorf("id = %q, want resp_created", got)
 	}
-	m.Write([]byte("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_other\"}}\n\n"))
+	_, _ = m.Write([]byte("data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_other\"}}\n\n"))
 	if got := m.lastID(); got != "resp_created" {
 		t.Errorf("a non-terminal event changed the id to %q", got)
 	}
-	m.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"))
+	_, _ = m.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n"))
 	if got := m.lastID(); got != "resp_created" {
 		t.Errorf("a delta changed the id to %q", got)
 	}
-	m.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_final\"}}\n\n"))
+	_, _ = m.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_final\"}}\n\n"))
 	if got := m.lastID(); got != "resp_final" {
 		t.Errorf("id = %q, want resp_final", got)
 	}
@@ -60,7 +60,7 @@ func TestResponseIDWatcherOnlyReadsCompletionEvents(t *testing.T) {
 func TestResponseIDWatcherReset(t *testing.T) {
 	var sink bytes.Buffer
 	m := newResponseIDWatcher(&sink)
-	m.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_dead\"}}\n\n"))
+	_, _ = m.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_dead\"}}\n\n"))
 	if m.lastID() == "" {
 		t.Fatal("nothing was captured")
 	}

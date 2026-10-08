@@ -198,7 +198,7 @@ func (a *Adapter) exchangeCopilot(ctx context.Context, githubToken string) (oaut
 	if err != nil {
 		return oauth.Token{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return oauth.Token{}, err
@@ -244,7 +244,7 @@ func (a *Adapter) fetchLogin(ctx context.Context, githubToken string) string {
 	if err != nil {
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil || resp.StatusCode >= 300 {
 		return ""
@@ -305,7 +305,7 @@ func (a *Adapter) postFormStatus(ctx context.Context, endpoint string, form url.
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, resp.StatusCode, resp.Header.Clone(), err
@@ -411,7 +411,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("copilot_oauth list models: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err

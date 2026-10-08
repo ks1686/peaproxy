@@ -41,11 +41,11 @@ func TestTranslatedResponsesStreamReturnsTheClientModelID(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
 		// The upstream names itself here; the client asked for "client-model".
-		w.Write([]byte("data: {\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -70,11 +70,11 @@ func TestTranslatedClaudeStreamReturnsTheClientModelID(t *testing.T) {
 	upstream := fakeOpenAI(t, func(w http.ResponseWriter, r *http.Request) {
 		flusher, _ := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: {\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"upstream-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -104,11 +104,11 @@ func TestStreamedResponsesBindTheContinuation(t *testing.T) {
 	upstream := fakeOpenAI(t, func(w http.ResponseWriter, r *http.Request) {
 		flusher, _ := w.(http.Flusher)
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
 		if flusher != nil {
 			flusher.Flush()
 		}
-		w.Write([]byte("data: [DONE]\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	})
 
 	g := streamGateway(t, upstream.URL)
@@ -163,11 +163,11 @@ func TestStreamedResponsesHonoursPreviousResponseID(t *testing.T) {
 			served = append(served, name)
 			mu.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
-			w.Write([]byte("data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+			_, _ = w.Write([]byte("data: {\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"))
 			if flusher != nil {
 				flusher.Flush()
 			}
-			w.Write([]byte("data: [DONE]\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		}
 	}
 	g := twoAccountGateway(t, hit("a"), hit("b"))

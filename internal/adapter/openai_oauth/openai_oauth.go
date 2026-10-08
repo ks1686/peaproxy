@@ -168,7 +168,7 @@ func (a *Adapter) startDevice(ctx context.Context) (adapter.AuthSession, error) 
 	if err != nil {
 		return adapter.AuthSession{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 300 {
 		return adapter.AuthSession{}, adapter.NewHTTPError(resp, truncate(raw))
@@ -351,7 +351,7 @@ func (a *Adapter) postForm(ctx context.Context, form url.Values) (oauth.Token, e
 	if err != nil {
 		return oauth.Token{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return oauth.Token{}, err
@@ -421,7 +421,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("openai_oauth list models: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err
@@ -529,7 +529,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return adapter.NewHTTPError(resp, truncate(body))
@@ -556,7 +556,7 @@ func (a *Adapter) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return adapter.NewHTTPError(resp, truncate(body))
@@ -570,7 +570,7 @@ func (a *Adapter) postResponses(ctx context.Context, raw []byte, stream bool) ([
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err

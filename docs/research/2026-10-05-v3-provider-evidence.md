@@ -10,7 +10,7 @@ Nothing here is a promise to the user. It is an audit trail, including of the
 places where the audit is incomplete.
 
 Read [PROVIDERS.md](../PROVIDERS.md) for the adapter tier map. Read
-[../plans/2026-10-05-v3-scope.md](../plans/2026-10-05-v3-scope.md) for the
+[../archive/plans/2026-10-05-v3-scope.md](../archive/plans/2026-10-05-v3-scope.md) for the
 issue dispositions this feeds.
 
 ## How to read the tiers
@@ -106,7 +106,7 @@ Stated plainly, because the release notes must not imply these are closed.
    application shell. The base URLs came from documentation; the free-tier
    question did not, and no tier was assigned from inference.
 3. **Cerebras and Hugging Face tags are unverified and probably wrong.** See
-   D8 in [../plans/2026-10-05-v3-scope.md](../plans/2026-10-05-v3-scope.md).
+   D8 in [../archive/plans/2026-10-05-v3-scope.md](../archive/plans/2026-10-05-v3-scope.md).
    Not corrected in this pass, deliberately. Worth being precise about the
    impact: the router never reads the `freemium` tag, so this is a display
    accuracy problem, not a routing one. The routing defect in D8 is the

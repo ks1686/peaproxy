@@ -13,13 +13,13 @@ import (
 func TestVerifyModelsAndChat(t *testing.T) {
 	var chatPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/models":
+		switch r.URL.Path {
+		case "/v1/models":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"object": "list",
 				"data":   []map[string]string{{"id": "llama3.2"}},
 			})
-		case r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/v1/messages" || r.URL.Path == "/v1/responses":
+		case "/v1/chat/completions", "/v1/messages", "/v1/responses":
 			chatPath = r.URL.Path
 			raw, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(raw), `"ping"`) {

@@ -73,7 +73,7 @@ func ProbeLoopback(ctx context.Context, endpoint string, client *http.Client) Sn
 		snap.State = StateOffline
 		return snap
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var buf [512]byte
 	n, _ := resp.Body.Read(buf[:])
 	snap.State = ClassifyOllama(resp.StatusCode, string(buf[:n]))

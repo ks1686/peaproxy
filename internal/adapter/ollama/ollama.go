@@ -95,7 +95,7 @@ func (a *Adapter) listTags(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ollama /api/tags: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err

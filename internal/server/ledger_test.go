@@ -19,12 +19,12 @@ import (
 func ledgerServer(t *testing.T, usageBody string, cache float64) (*Server, *usage.Store) {
 	t.Helper()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/models":
+		switch r.URL.Path {
+		case "/v1/models":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"object": "list", "data": []map[string]string{{"id": "m1"}},
 			})
-		case r.URL.Path == "/v1/chat/completions":
+		case "/v1/chat/completions":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id":    "chatcmpl-test",
 				"model": "m1",

@@ -130,7 +130,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; **entitlement failures (402 / exhausted free tier) get 15 minutes, not 30s**; the 503 names the account and cause; a slow first token never starts a cooldown |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped. `config validate` reaches the verdict `serve` reaches, and reports keys this version does not read. `--strict-config` turns that report into a non-zero exit, for a CI job or a pre-commit hook (`docs/CONFIG.md`) |
-| CLI `catalog` / `health` / `requests` / `accounts add` | Shipped |
+| CLI `catalog` / `health` / `requests` / `optimization` / `accounts add` | Shipped |
 | Homebrew cask + signed/notarized macOS binaries | Shipped (`brew tap ks1686/tap`) |
 | Loopback default; LAN needs token | Shipped |
 | macOS / Windows tray | **No, by design** (CLI + localhost UI) |
@@ -182,6 +182,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `catalog` | Listing overlays (`pin` / `rename` / `hide`) matching the Catalog UI |
 | `requests` | Opt-in inspector (`tail` when `requestLog` is on) |
 | `health` | Adapter health / quota remaining / cooldowns matching `GET /admin/health` |
+| `optimization` | `status` prints the effective optimization policy and what the spend ledger can measure; `explain <model>` prints how a model would route and which accounts are out and why. Both read-only |
 | `status` | Bind / config path / version |
 | `config` | `path` / `show` / `validate` / `init` |
 | `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |

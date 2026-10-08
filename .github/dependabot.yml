@@ -1,0 +1,28 @@
+# Every GitHub Action in this repo is pinned to a full commit SHA, which is the
+# right call and also means nothing moves until someone moves it. Without this
+# file the pins only ever age. Dependabot opens one grouped PR per ecosystem per
+# week, so a bump is reviewed as a change rather than discovered during an
+# incident.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /scripts
+    schedule:
+      interval: weekly
+    groups:
+      smoke-test-tooling:
+        patterns: ["*"]

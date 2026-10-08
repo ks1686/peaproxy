@@ -29,3 +29,26 @@ func TestQwenOAuthIsNotYet(t *testing.T) {
 		t.Fatalf("%#v", adp.Capabilities())
 	}
 }
+
+func TestQwenOAuthStubMethodsAndDefaultID(t *testing.T) {
+	adp, err := New(adapter.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adp.ID() != Name {
+		t.Fatalf("ID = %q", adp.ID())
+	}
+	auth := adp.(adapter.Authenticator)
+	if err := auth.AuthComplete(context.Background(), adapter.AuthSession{}, "code"); err == nil || !strings.Contains(err.Error(), "not yet") {
+		t.Fatalf("complete = %v", err)
+	}
+	if _, err := adp.Chat(context.Background(), adapter.ChatRequest{}); !errors.Is(err, adapter.ErrNotImplemented) {
+		t.Fatalf("chat: %v", err)
+	}
+	if err := adp.ChatStream(context.Background(), adapter.ChatRequest{}, nil); !errors.Is(err, adapter.ErrNotImplemented) {
+		t.Fatalf("stream: %v", err)
+	}
+	if err := adp.Validate(context.Background()); !errors.Is(err, adapter.ErrNotImplemented) {
+		t.Fatalf("validate: %v", err)
+	}
+}

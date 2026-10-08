@@ -21,7 +21,7 @@ func TestAutomaticRoutesRefuseAnAnonymousProviderByDefault(t *testing.T) {
 		gw.cfg.Providers[i].APIKeyEnv = ""
 	}
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"`+router.RouteAuto+`","messages":[{"role":"user","content":"hi"}]}`)); err == nil {
@@ -45,7 +45,7 @@ func TestAnonymousProvidersAreAllowedWhenTheUserSaysSo(t *testing.T) {
 	}
 	gw.cfg.AutomaticRoutes.Enabled = true
 	gw.cfg.Optimization.AllowAnonymousProviders = boolp(true)
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"`+router.RouteAuto+`","messages":[{"role":"user","content":"hi"}]}`)); err != nil {
@@ -68,7 +68,7 @@ func TestLocalProvidersAreNotTreatedAsAnonymous(t *testing.T) {
 		gw.cfg.Providers[i].Tier = "local"
 	}
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"`+router.RouteAuto+`","messages":[{"role":"user","content":"hi"}]}`)); err != nil {
@@ -85,7 +85,7 @@ func TestCredentialedProvidersAreUnaffected(t *testing.T) {
 	for i := range gw.cfg.Providers {
 		gw.cfg.Providers[i].APIKey = "sk-test"
 	}
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"`+router.RouteAuto+`","messages":[{"role":"user","content":"hi"}]}`)); err != nil {

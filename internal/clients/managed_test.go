@@ -679,7 +679,7 @@ func TestClaudeCodeRoundTripKeepsMiddleEnvInPlace(t *testing.T) {
 	if themeAt < 0 || envAt < 0 || xAt < 0 {
 		t.Fatalf("expected keys are missing: %s", text)
 	}
-	if !(themeAt < envAt && envAt < xAt) {
+	if themeAt >= envAt || envAt >= xAt {
 		t.Fatalf("connect moved env: %s", text)
 	}
 	if err := layout.Disconnect("claude-code"); err != nil {

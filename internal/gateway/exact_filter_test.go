@@ -24,7 +24,7 @@ func TestFreeOnlyPrefersTheFreeAccountWhenOneModelHasBoth(t *testing.T) {
 		"acct-b/m": {Input: &zero, Output: &zero, Verified: true},
 	}
 	gw.cfg.Optimization.FreeOnly = boolp(true)
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
@@ -50,7 +50,7 @@ func TestFreeOnlyStillRefusesWhenNoAccountIsFree(t *testing.T) {
 		"acct-b/m": {Input: &one, Output: &one, Verified: true},
 	}
 	gw.cfg.Optimization.FreeOnly = boolp(true)
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)

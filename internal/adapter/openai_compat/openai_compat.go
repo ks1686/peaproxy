@@ -105,7 +105,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s list models: %w", a.provider, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, err
@@ -196,7 +196,7 @@ func (a *Adapter) listWorkersAIModels(ctx context.Context) ([]catalog.Model, err
 			return nil, fmt.Errorf("%s list models: %w", a.provider, err)
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -318,7 +318,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return adapter.ChatResponse{}, err
@@ -345,7 +345,7 @@ func (a *Adapter) Complete(ctx context.Context, model string, raw []byte) (adapt
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return adapter.ChatResponse{}, err
@@ -427,7 +427,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return adapter.NewHTTPError(resp, truncate(body))
@@ -459,7 +459,7 @@ func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (
 	if err != nil {
 		return adapter.ImageResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return adapter.ImageResponse{}, err
@@ -489,7 +489,7 @@ func (a *Adapter) EditImage(ctx context.Context, req adapter.ImageRequest) (adap
 	if err != nil {
 		return adapter.ImageResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return adapter.ImageResponse{}, err
@@ -523,7 +523,7 @@ func (a *Adapter) CreateEmbeddings(ctx context.Context, req adapter.EmbeddingReq
 	if err != nil {
 		return adapter.EmbeddingResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		return adapter.EmbeddingResponse{}, err

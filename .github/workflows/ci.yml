@@ -6,11 +6,20 @@ on:
   pull_request:
   workflow_call:
 
+# Superseded runs are wasted minutes and a source of confusing "why is this red"
+# reports. Keyed on the caller's workflow as well as the ref, so the ci job
+# that `release` invokes through workflow_call gets its own group and can never
+# cancel the run that is building the tag.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   test:
+    name: Test (${{ matrix.os }})
     strategy:
       matrix:
         # Go 1.22 omits LC_UUID. macOS 26 dyld aborts those test binaries.
@@ -27,6 +36,26 @@ jobs:
         env:
           PEAPROXY_SECRET_BACKEND: file
         run: go test ./...
+      # Coverage ratchet, Linux only: some files are OS-specific, so the total
+      # differs a little per platform and a floor measured on one is not a floor
+      # on the others. The floor is where the tree is, not where it should be;
+      # raise it when coverage rises, never lower it to make a change pass.
+      - name: Coverage ratchet
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PEAPROXY_SECRET_BACKEND: file
+        run: |
+          go test ./... -coverprofile=coverage.out > /dev/null
+          coverage="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')"
+          echo "statement coverage: ${coverage}%"
+          # CI uses Go 1.22; local Go 1.27 measures 77.9%, while the
+          # same committed tree measures 76.8% here. Keep the floor below
+          # that reproducible CI baseline, not tied to one developer toolchain.
+          awk -v c="$coverage" 'BEGIN { exit !(c >= 76.5) }' || {
+            echo "coverage ${coverage}% is below the 76.5% CI ratchet" >&2
+            exit 1
+          }
       # Promotion gate. The routing promises are the product's claims, and a
       # claim that only the release notes assert is not a claim. This step
       # fails the build when a change breaks one.
@@ -39,7 +68,16 @@ jobs:
         run: go test ./internal/eval -run 'TestRoutingPromises$|TestRoutingPromisesWouldNoticeTheirOwnRegression$|TestCheaperChoiceReallyIsCheaper$' -v -count=1
       - name: Build
         run: go build ./...
+      # The lint gate. It was not in CI before 2026-10-08, which is how 30
+      # unchecked Close calls and an unused test helper survived several review
+      # passes. Pinned by SHA like every other action here; .golangci.yml caps
+      # the issue counters at 0 so a run cannot hide findings past a limit.
+      - name: Lint
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
+        with:
+          version: v2.14.0
   race:
+    name: Race
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,7 +100,18 @@ jobs:
           distribution: goreleaser
           version: "~> v2"
           args: check
+      # `check` validates YAML; it does not prove every archive still builds,
+      # embeds its assets, or carries a usable binary. A local snapshot caught
+      # three readiness defects in v3.0.4, so this is the no-publish artifact
+      # gate the release plan had called for but never actually wired.
+      - name: GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --snapshot --skip=publish
   ui:
+    name: UI smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

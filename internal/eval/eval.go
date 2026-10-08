@@ -184,10 +184,21 @@ func Run(t *testing.T, s Scenario) Result {
 	// contextOptimize returns before it does anything, so a scenario about
 	// tools surviving routing would never reach the code that could strip them.
 	gw.Artifacts = contextstore.New(contextstore.Options{})
+	// QuoteFor needs the gateway's live catalog for an automatic route. Refresh
+	// before pricing the historical events; doing it after was a subtle no-op:
+	// the event looked as though it had gone through PriceUsage but there was no
+	// route candidate to quote yet, so it could never acquire an estimate.
+	gw.Refresh(context.Background())
 	for _, e := range s.SeedUsage {
+		// Seeded events stand in for calls that happened before this request.
+		// Price them through the same gateway path the HTTP server uses for
+		// completed calls. Adding raw token events used to leave this scenario
+		// structurally unable to see an estimate, so the ceiling promise could
+		// not be mutated: the harness asserted it but never constructed the
+		// condition it was describing.
+		gw.PriceUsage(&e, e.AccountID, s.Model)
 		gw.Usage.Add(e)
 	}
-	gw.Refresh(context.Background())
 
 	_, _, callErr := gw.Chat(context.Background(), []byte(s.Request))
 	res := Result{Name: s.Name, Why: s.Why}
@@ -282,9 +293,9 @@ func RunAll(t *testing.T, scenarios []Scenario) {
 	}
 	if len(broken) > 0 {
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("%d routing promise(s) broken:\n", len(broken)))
+		fmt.Fprintf(&b, "%d routing promise(s) broken:\n", len(broken))
 		for _, r := range broken {
-			b.WriteString(fmt.Sprintf("  - %s: %s\n    why: %s\n", r.Name, r.Detail, r.Why))
+			fmt.Fprintf(&b, "  - %s: %s\n    why: %s\n", r.Name, r.Detail, r.Why)
 		}
 		t.Fatal(b.String())
 	}
