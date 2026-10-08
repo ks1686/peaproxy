@@ -282,9 +282,9 @@ func RunAll(t *testing.T, scenarios []Scenario) {
 	}
 	if len(broken) > 0 {
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("%d routing promise(s) broken:\n", len(broken)))
+		fmt.Fprintf(&b, "%d routing promise(s) broken:\n", len(broken))
 		for _, r := range broken {
-			b.WriteString(fmt.Sprintf("  - %s: %s\n    why: %s\n", r.Name, r.Detail, r.Why))
+			fmt.Fprintf(&b, "  - %s: %s\n    why: %s\n", r.Name, r.Detail, r.Why)
 		}
 		t.Fatal(b.String())
 	}

@@ -337,10 +337,10 @@ func TestResponsesTranslatesToChatCompletions(t *testing.T) {
 	var chatBody []byte
 	gw := twoAccountGateway(t,
 		func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case r.URL.Path == "/v1/models":
+			switch r.URL.Path {
+			case "/v1/models":
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
-			case r.URL.Path == "/v1/chat/completions":
+			case "/v1/chat/completions":
 				chatBody, _ = io.ReadAll(r.Body)
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"id":    "chatcmpl-x",
@@ -512,10 +512,10 @@ func TestResponsesToolsRoundTripViaChat(t *testing.T) {
 	var chatBody []byte
 	gw := twoAccountGateway(t,
 		func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case r.URL.Path == "/v1/models":
+			switch r.URL.Path {
+			case "/v1/models":
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "llama3.2"}}})
-			case r.URL.Path == "/v1/chat/completions":
+			case "/v1/chat/completions":
 				chatBody, _ = io.ReadAll(r.Body)
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"id":    "chatcmpl-tools",

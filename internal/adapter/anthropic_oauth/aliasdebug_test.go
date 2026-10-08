@@ -60,7 +60,7 @@ func TestAliasDebugLoggingIsOffWithoutTheFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	restore := log.Writer()
 	log.SetOutput(file)
 	defer log.SetOutput(restore)
@@ -83,7 +83,7 @@ func TestAliasDebugLoggingIsOnWithTheFlag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	restore := log.Writer()
 	log.SetOutput(file)
 	defer log.SetOutput(restore)
@@ -107,7 +107,7 @@ func TestOnlyClientErrorsAreNoted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	restore := log.Writer()
 	log.SetOutput(file)
 	defer log.SetOutput(restore)

@@ -86,7 +86,7 @@ func (a *Assistant) Ready() (bool, error) {
 		// Not running is an ordinary state, not a failure worth alarming about.
 		return false, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Only a JSON model list counts. Something else on the port is not a model
 	// server, and prompts must not be sent to it on the strength of a 200.

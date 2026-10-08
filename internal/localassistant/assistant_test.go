@@ -51,7 +51,7 @@ func TestDisabledAssistantNeverContactsAnything(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		w.Write([]byte("{}"))
+		_, _ = w.Write([]byte("{}"))
 	}))
 	defer srv.Close()
 
@@ -102,7 +102,7 @@ func TestEnabledButUnreachableIsUnavailableNotBroken(t *testing.T) {
 // listening.
 func TestRunningButUnrecognisedEndpointIsNotReady(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("<html>hello</html>"))
+		_, _ = w.Write([]byte("<html>hello</html>"))
 	}))
 	defer srv.Close()
 

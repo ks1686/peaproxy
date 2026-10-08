@@ -37,7 +37,7 @@ func TestEmbeddingsHoldSpendAndTakeAnAdmissionSlot(t *testing.T) {
 		"acct-b/text-embedding-3-small": {Input: &rate, Output: &rate, Verified: true},
 	}
 	gw.cfg.Optimization.SpendCeilingUSD = 0.000001
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	_, _, err := gw.CreateEmbeddings(context.Background(), []byte(`{"model":"text-embedding-3-small","input":"hello"}`))
@@ -71,7 +71,7 @@ func TestARefusedEmbeddingDoesNotLeakAnAdmissionSlot(t *testing.T) {
 	}
 	gw := twoAccountGateway(t, upstream, upstream)
 	gw.cfg.RequestEngine.MaxInFlight = 1
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	// Sequential calls must not accumulate slots. If each refusal or completion
@@ -101,7 +101,7 @@ func TestEmbeddingsStillWorkWithoutAMoneyGuard(t *testing.T) {
 		}
 	}
 	gw := twoAccountGateway(t, upstream, upstream)
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	if _, _, err := gw.CreateEmbeddings(context.Background(), []byte(`{"model":"text-embedding-3-small","input":"hello"}`)); err != nil {
@@ -141,7 +141,7 @@ func TestEmbeddingReservationIsSizedFromTheRequest(t *testing.T) {
 		"acct-a/text-embedding-3-small": {Input: &rate, Output: &rate, Verified: true},
 		"acct-b/text-embedding-3-small": {Input: &rate, Output: &rate, Verified: true},
 	}
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	// Spend nothing so far, and set a ceiling the large body must exceed but the

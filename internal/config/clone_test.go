@@ -9,7 +9,7 @@ import (
 // and every scalar is non-zero.
 func populate(v reflect.Value) {
 	switch v.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		p := reflect.New(v.Type().Elem())
 		populate(p.Elem())
 		v.Set(p)
@@ -47,7 +47,7 @@ func populate(v reflect.Value) {
 func assertDistinct(t *testing.T, a, b reflect.Value, path string) {
 	t.Helper()
 	switch a.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if a.IsNil() {
 			return
 		}

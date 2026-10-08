@@ -116,7 +116,7 @@ func TestResponsesStreamOpensAndClosesTheMessageItem(t *testing.T) {
 		return -1
 	}
 	added, delta, done := idx("response.output_item.added"), idx("response.output_text.delta"), idx("response.output_item.done")
-	if !(added < delta && delta < done) {
+	if added >= delta || delta >= done {
 		t.Errorf("message item events out of order: added=%d delta=%d done=%d", added, delta, done)
 	}
 }

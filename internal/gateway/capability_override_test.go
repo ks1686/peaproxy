@@ -17,7 +17,7 @@ func TestAUserCanDeclareAnEndpointToolLess(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(&withTools, "liar"), countOK(&withoutTools, "honest"))
 	gw.cfg.Providers[0].Capabilities.Tools = boolp(false)
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"` + router.RouteAuto + `","tools":[{"type":"function","function":{"name":"f"}}],` +
@@ -44,7 +44,7 @@ func TestAToolCallIsRefusedWhenNoEndpointSupportsTools(t *testing.T) {
 	gw.cfg.Providers[0].Capabilities.Tools = boolp(false)
 	gw.cfg.Providers[1].Capabilities.Tools = boolp(false)
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"` + router.RouteAuto + `","tools":[{"type":"function","function":{"name":"f"}}],` +
@@ -67,7 +67,7 @@ func TestToolsAreRoutedNormallyWithoutAnOverride(t *testing.T) {
 	withTools := 0
 	gw := twoAccountGateway(t, countOK(&withTools, "a"), countOK(new(int), "b"))
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"` + router.RouteAuto + `","tools":[{"type":"function","function":{"name":"f"}}],` +
@@ -87,7 +87,7 @@ func TestToolsAreRoutedNormallyWithoutAnOverride(t *testing.T) {
 func TestTheHealthReportShowsWhatTheUserDeclared(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(new(int), "a"), countOK(new(int), "b"))
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	tools := func(id string) bool {
@@ -105,7 +105,7 @@ func TestTheHealthReportShowsWhatTheUserDeclared(t *testing.T) {
 
 	gw.cfg.Providers[0].Capabilities.Tools = boolp(false)
 	gw.cfg.AutomaticRoutes.Enabled = true
-	gw.rebuild()
+	_ = gw.rebuild()
 	gw.Refresh(context.Background())
 
 	if tools("acct-a") {

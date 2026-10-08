@@ -52,12 +52,12 @@ func classifyTerminal(tail []byte) string {
 		if json.Unmarshal(frame, &ev) != nil {
 			continue
 		}
-		switch {
-		case ev.Type == "response.completed":
+		switch ev.Type {
+		case "response.completed":
 			sawResponsesDone = true
-		case ev.Type == "response.incomplete", ev.Type == "response.failed":
+		case "response.incomplete", "response.failed":
 			sawResponsesPartial = true
-		case ev.Type == "message_stop":
+		case "message_stop":
 			sawMessagesStop = true
 		}
 		for _, c := range ev.Choices {

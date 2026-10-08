@@ -47,7 +47,7 @@ func TestNativeResponsesStreamHoldsSpendAndTakesASlot(t *testing.T) {
 	// A ceiling the streaming request's input is priced far above. If the branch
 	// takes no hold, the call goes upstream and the ceiling is never consulted.
 	gw.cfg.Optimization.SpendCeilingUSD = 0.000001
-	gw.rebuild()
+	_ = gw.rebuild()
 
 	var out bytes.Buffer
 	body := []byte(`{"model":"upstream","stream":true,"input":"a prompt long enough that its reservation exceeds a one-micro-dollar ceiling"}`)

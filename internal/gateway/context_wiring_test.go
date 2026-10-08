@@ -30,7 +30,7 @@ func TestStoredContextReachesTheUpstreamRequest(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": "ok"}}}})
 		},
 		func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(`{}`))
+			_, _ = w.Write([]byte(`{}`))
 		},
 	)
 	gw.Artifacts = contextstore.New(contextstore.Options{})

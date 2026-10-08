@@ -72,7 +72,7 @@ func Lock(path string, timeout time.Duration) (unlock func(), err error) {
 	for {
 		ok, err := tryLock(f)
 		if err != nil {
-			f.Close()
+			_ = f.Close()
 			<-sem
 			return nil, err
 		}
@@ -81,7 +81,7 @@ func Lock(path string, timeout time.Duration) (unlock func(), err error) {
 		}
 		wait := time.Until(deadline)
 		if wait <= 0 {
-			f.Close()
+			_ = f.Close()
 			<-sem
 			return nil, ErrBusy
 		}
@@ -92,7 +92,9 @@ func Lock(path string, timeout time.Duration) (unlock func(), err error) {
 	return func() {
 		once.Do(func() {
 			_ = osUnlock(f)
-			f.Close()
+			// A lock file carries no data, so a Close failure here has nothing
+			// to lose and nothing to report. Saying so beats leaving it bare.
+			_ = f.Close()
 			<-sem
 		})
 	}, nil

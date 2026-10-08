@@ -6,11 +6,20 @@ on:
   pull_request:
   workflow_call:
 
+# Superseded runs are wasted minutes and a source of confusing "why is this red"
+# reports. Keyed on the caller's workflow as well as the ref, so the ci job
+# that `release` invokes through workflow_call gets its own group and can never
+# cancel the run that is building the tag.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   test:
+    name: Test (${{ matrix.os }})
     strategy:
       matrix:
         # Go 1.22 omits LC_UUID. macOS 26 dyld aborts those test binaries.
@@ -39,7 +48,16 @@ jobs:
         run: go test ./internal/eval -run 'TestRoutingPromises$|TestRoutingPromisesWouldNoticeTheirOwnRegression$|TestCheaperChoiceReallyIsCheaper$' -v -count=1
       - name: Build
         run: go build ./...
+      # The lint gate. It was not in CI before 2026-10-08, which is how 30
+      # unchecked Close calls and an unused test helper survived several review
+      # passes. Pinned by SHA like every other action here; .golangci.yml caps
+      # the issue counters at 0 so a run cannot hide findings past a limit.
+      - name: Lint
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8.0.0
+        with:
+          version: v2.14.0
   race:
+    name: Race
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -63,6 +81,7 @@ jobs:
           version: "~> v2"
           args: check
   ui:
+    name: UI smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

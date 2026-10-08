@@ -64,7 +64,7 @@ func TestLongActiveStreamSurvives(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	got, err := io.ReadAll(resp.Body)
 	if err != nil || !strings.Contains(string(got), "ok") {
 		t.Fatalf("body %q err %v", got, err)

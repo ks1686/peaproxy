@@ -313,7 +313,7 @@ func TestClaudeSSEToOpenAIEmitsOpaqueBeforeFinish(t *testing.T) {
 		t.Fatalf("thinking streamed as content: %s", got)
 	}
 	payloads := sseDataPayloads(got)
-	var opaqueAt, finishAt, contentAt int = -1, -1, -1
+	opaqueAt, finishAt, contentAt := -1, -1, -1
 	for i, p := range payloads {
 		if strings.Contains(p, `"reasoning_opaque"`) {
 			opaqueAt = i

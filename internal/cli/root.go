@@ -612,7 +612,7 @@ func checkAdaptersBuild(cfg config.Config, w io.Writer) error {
 		return first
 	}
 	if first != nil && w != nil {
-		fmt.Fprintf(w, "\nwarning: %v\n  the gateway will start without that account; every model only it\n"+
+		_, _ = fmt.Fprintf(w, "\nwarning: %v\n  the gateway will start without that account; every model only it\n"+
 			"  serves becomes unavailable until it is fixed.\n", first)
 	}
 	return nil
@@ -689,19 +689,19 @@ func reportUnknownKeys(w io.Writer, path string, strict bool) error {
 		return nil
 	}
 	if strict {
-		fmt.Fprintf(w, "\n%d config key(s) are not read by this version, and --strict-config is set:\n", len(unknown))
+		_, _ = fmt.Fprintf(w, "\n%d config key(s) are not read by this version, and --strict-config is set:\n", len(unknown))
 		for _, u := range unknown {
-			fmt.Fprintf(w, "  %s\n", describeUnknown(u))
+			_, _ = fmt.Fprintf(w, "  %s\n", describeUnknown(u))
 		}
 		// Deliberately not "refusing to start": `config validate` returns this
 		// too, and it starts nothing. The non-zero exit is the refusal there.
 		return fmt.Errorf("%d config key(s) are not read by this version and strict mode is set. "+
 			"Fix them, or drop --strict-config to warn instead", len(unknown))
 	}
-	fmt.Fprintf(w, "\nwarning: %d config key(s) are not read by this version and are ignored:\n", len(unknown))
+	_, _ = fmt.Fprintf(w, "\nwarning: %d config key(s) are not read by this version and are ignored:\n", len(unknown))
 	for _, u := range unknown {
-		fmt.Fprintf(w, "  %s\n", describeUnknown(u))
+		_, _ = fmt.Fprintf(w, "  %s\n", describeUnknown(u))
 	}
-	fmt.Fprintf(w, "  ignored keys keep their default, so the setting stays whatever it was\n")
+	_, _ = fmt.Fprintf(w, "  ignored keys keep their default, so the setting stays whatever it was\n")
 	return nil
 }

@@ -5,16 +5,30 @@ on:
     tags:
       - "v*"
 
+# A tag is cut once. Cancelling a superseded release would leave a half-published
+# set of assets and manifests behind, so runs here are never cancelled, and a
+# second push of the same (moved) tag gets its own group.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The release workflow itself needs no token. Each job below asks for exactly the
+# scope it uses: ci reads the tree, goreleaser writes releases and pushes
+# package-manager manifests.
 permissions: {}
 
 jobs:
   ci:
+    name: CI gate
     uses: ./.github/workflows/ci.yml # zizmor: ignore[self-repository]
     permissions:
       contents: read
   goreleaser:
+    name: Build and publish
     needs: ci
     permissions:
+      # Creates the GitHub Release and, when the cask/bucket secrets are set,
+      # pushes the Homebrew, Scoop and AUR manifests.
       contents: write
     runs-on: ubuntu-latest
     steps:

@@ -1002,9 +1002,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			Arguments: pc.Arguments,
 		})
 	}
-	for _, c := range carried {
-		items = append(items, c)
-	}
+	items = append(items, carried...)
 	if !messageStarted {
 		// No text arrived, so the message item was never opened and no index
 		// was spent on it. It still has to appear, so give it the slot the

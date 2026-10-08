@@ -241,7 +241,7 @@ func TestKeyFileCreatedOnceAcrossProcesses(t *testing.T) {
 			if err != nil {
 				helperExit(err)
 			}
-			fmt.Fprintf(os.Stdout, "key %d %s\n", r, hex.EncodeToString(k))
+			_, _ = fmt.Fprintf(os.Stdout, "key %d %s\n", r, hex.EncodeToString(k))
 		}
 		helperExit(nil)
 	}

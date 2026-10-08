@@ -21,13 +21,13 @@ import (
 func testServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/models":
+		switch r.URL.Path {
+		case "/v1/models":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"object": "list",
 				"data":   []map[string]string{{"id": "llama3.2"}, {"id": "secret-model"}},
 			})
-		case r.URL.Path == "/v1/chat/completions":
+		case "/v1/chat/completions":
 			raw, _ := io.ReadAll(r.Body)
 			var req struct {
 				Model    string `json:"model"`

@@ -373,7 +373,9 @@ func (s *Store) readLogLocked(n int) []Event {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	// Read-only path: a Close failure here has nothing to flush and nothing to
+	// report, and the ledger that owns this file is not going to change its mind.
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return nil

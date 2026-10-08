@@ -1,0 +1,39 @@
+version: "2"
+
+# The tree is golangci-lint clean as of 2026-10-08 (v3.0.5 readiness work).
+# New issues fail CI. This file pins the settings those runs use; it exists to
+# make the bar explicit, not to relax it. Raise the bar deliberately, never by
+# silencing a package.
+#
+# max-issues-per-linter and max-same-issues are 0 on purpose. The defaults (50
+# and 3) hide findings past the cap instead of reporting them, which is how a
+# tree holding 30 unchecked Close calls reads as "3 issues" and looks nearly
+# clean. Every run reports everything or fails.
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+
+# No exclusions, in tests either. A deliberately ignored Close or Write is
+# written as `_ = f.Close()`, which errcheck accepts and which says out loud
+# that the result was dropped on purpose.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
