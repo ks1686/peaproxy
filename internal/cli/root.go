@@ -60,6 +60,7 @@ Examples:
 	root.AddCommand(requestsCmd(&configPath))
 	root.AddCommand(healthCmd(&configPath))
 	root.AddCommand(statusCmd(&configPath))
+	root.AddCommand(optimizationCmd(&configPath))
 	root.AddCommand(configCmd(&configPath))
 	root.AddCommand(clientsCmd())
 	// Replace cobra's default completion command: the scripts are the same, but
