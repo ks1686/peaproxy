@@ -224,3 +224,70 @@ func TestExplainRequiresAModelAndSaysWhichAccountItCannotFind(t *testing.T) {
 		t.Fatalf("explain with an unknown account = %v\n%s", err, out)
 	}
 }
+
+// A zero the user wrote in their own config keeps a free route working; a zero
+// from a published source is a measurement. Both are accepted on purpose and
+// nothing else says which one is carrying the request, so a user whose asserted
+// price is the only thing holding a free route together should be able to see
+// that before the provider changes their terms.
+func TestExplainSaysWhetherAFreeProofIsConfiguredOrPublished(t *testing.T) {
+	srv := modelsServer(t, "upstream-model")
+	body := `schemaVersion: 1
+bind: 127.0.0.1
+port: 8399
+providers:
+  - id: key-one
+    adapter: openai_compat
+    tier: paid
+    baseURL: ` + srv.URL + `/v1
+    apiKeyEnv: PP_EXPLAIN_TEST_KEY
+optimization:
+  freeOnly: true
+automaticRoutes:
+  prices:
+    key-one/upstream-model:
+      input: 0
+      output: 0
+      verified: true
+`
+	path := writeExplainConfig(t, srv.URL+"/v1", body)
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"optimization", "explain", "pea/free", "--config", path}, out); err != nil {
+		t.Fatalf("explain: %v\n%s", err, out)
+	}
+	text := out.String()
+	if !strings.Contains(text, "your own configured price") {
+		t.Errorf("explain did not say the free proof is the user's own price:\n%s", text)
+	}
+	if !strings.Contains(text, "eligible=true") {
+		t.Errorf("a user-asserted zero should still serve a free route:\n%s", text)
+	}
+}
+
+// Without a price the refusal must name that rather than implying the setting is
+// broken.
+func TestExplainSaysWhenNoPriceIsKnownAtAll(t *testing.T) {
+	srv := modelsServer(t, "upstream-model")
+	body := `schemaVersion: 1
+bind: 127.0.0.1
+port: 8399
+providers:
+  - id: key-one
+    adapter: openai_compat
+    tier: paid
+    baseURL: ` + srv.URL + `/v1
+    apiKeyEnv: PP_EXPLAIN_TEST_KEY
+optimization:
+  freeOnly: true
+`
+	path := writeExplainConfig(t, srv.URL+"/v1", body)
+	// pea/auto, because a paid account is outside pea/free's kind and the route
+	// kind is checked first -- which is the same order the request path uses.
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"optimization", "explain", "pea/auto", "--config", path}, out); err != nil {
+		t.Fatalf("explain: %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "no price is known") {
+		t.Errorf("explain did not say the deployment has no price:\n%s", out.String())
+	}
+}

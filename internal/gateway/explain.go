@@ -8,6 +8,7 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/catalog"
+	"github.com/ks1686/peaproxy/internal/economics"
 	"github.com/ks1686/peaproxy/internal/router"
 )
 
@@ -146,7 +147,8 @@ func (g *Gateway) explainAutomatic(ctx context.Context, ex RouteExplanation) Rou
 			continue
 		}
 		if g.cfg.FreeOnly() && !freeOnlyAllows(g, m) {
-			ex.add(m, false, "cannot prove a zero price, and freeOnly refuses rather than falls back")
+			ex.add(m, false, "cannot prove a zero price, and freeOnly refuses rather than falls back"+
+				freeProofDetail(g, m))
 			continue
 		}
 		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
@@ -160,7 +162,7 @@ func (g *Gateway) explainAutomatic(ctx context.Context, ex RouteExplanation) Rou
 				time.Until(c.Until).Round(time.Second)))
 			continue
 		}
-		ex.add(m, true, "eligible for this route")
+		ex.add(m, true, "eligible for this route"+freeProofDetail(g, m))
 	}
 	sort.Slice(ex.Candidates, func(i, j int) bool {
 		if ex.Candidates[i].Eligible != ex.Candidates[j].Eligible {
@@ -185,6 +187,29 @@ func (ex *RouteExplanation) add(m catalog.Model, eligible bool, reason string) {
 		Eligible: eligible,
 		Reason:   reason,
 	})
+}
+
+// freeProofDetail says where a deployment's price came from when freeOnly is on.
+//
+// The distinction matters and nothing else surfaces it: a zero the user wrote
+// in their own config is accepted as free on purpose -- they turned the safety
+// on and stated the fact in the same breath -- while a zero from a published
+// source is a measurement. Both keep the request, for different reasons, and a
+// user whose asserted price is the only thing holding a free route together
+// should be able to see that before the provider changes their terms.
+func freeProofDetail(g *Gateway, m catalog.Model) string {
+	if !g.cfg.FreeOnly() {
+		return ""
+	}
+	p := priceForDeployment(g, m.AccountID, m.ID)
+	switch {
+	case !p.Verified:
+		return " (no price is known for this deployment)"
+	case p.Source == economics.PriceSourceConfig:
+		return " (free by your own configured price, not a published one)"
+	default:
+		return fmt.Sprintf(" (free by published price from %s)", p.Source)
+	}
 }
 
 func anyEligible(cs []CandidateExplanation) bool {
