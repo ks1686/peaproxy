@@ -385,6 +385,21 @@ func removePi(raw []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
+	// Account providers imported by importPi are PeaProxy-owned end to end, so
+	// disconnect drops the whole block, but only when it still carries the owned
+	// key. A provider a user edited into a different shape is left alone.
+	for _, name := range ownedPiProviders(providers) {
+		entry, _ := getJSONKey(providers, name)
+		key, _ := getJSONKey(entry, "apiKey")
+		if string(key) != `"`+ownedAPIKey+`"` {
+			continue
+		}
+		changed = true
+		var err error
+		if providers, err = deleteJSONKey(providers, name); err != nil {
+			return nil, err
+		}
+	}
 	if !changed {
 		return raw, nil
 	}

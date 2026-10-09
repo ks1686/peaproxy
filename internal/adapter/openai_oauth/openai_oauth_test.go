@@ -930,6 +930,13 @@ func TestResponsesStreamFailedIsAnError(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamIncompleteIsAnError(t *testing.T) {
+	sse := `data: {"type":"response.incomplete","response":{"id":"resp_1","status":"incomplete"}}` + "\\n"
+	if _, err := ResponsesStreamToJSON([]byte(sse)); err == nil {
+		t.Fatal("incomplete stream returned success")
+	}
+}
+
 func TestNonStreamAssemblesCodexSSEAndStringInput(t *testing.T) {
 	var gotBody []byte
 	var gotAccept string

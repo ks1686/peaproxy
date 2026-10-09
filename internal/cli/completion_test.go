@@ -92,6 +92,15 @@ func complete(t *testing.T, cmd *cobra.Command, args []string, toComplete string
 }
 
 // Every command that takes a client name should offer the presets.
+// import is Pi-only, so it offers just pi rather than every client.
+func TestImportCompletesPiOnly(t *testing.T) {
+	cmd := findCmd(t, "clients", "import")
+	got := complete(t, cmd, nil, "")
+	if len(got) != 1 || got[0] != "pi" {
+		t.Fatalf("clients import completes %v, want [pi]", got)
+	}
+}
+
 func TestClientNameCompletion(t *testing.T) {
 	want := map[string]bool{}
 	for _, n := range clients.List() {

@@ -486,6 +486,53 @@ func clientsCmd() *cobra.Command {
 	verify.Flags().StringVar(&origin, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted)")
 	cmd.AddCommand(verify)
 	var root string
+	var importAccount string
+	var importOrigin string
+	var importAdminToken string
+	importCmd := &cobra.Command{
+		Use:   "import pi",
+		Short: "Add live models to Pi as a PeaProxy-owned account provider",
+		Long: "Reads the admin catalog from the gateway and writes routable models for the selected account " +
+			"into a PeaProxy-owned Pi provider. Claude and GPT models are skipped because Pi serves them " +
+			"with built-in providers. Re-running is idempotent; disconnect removes only the owned provider.",
+		Args: cobra.ExactArgs(1),
+		ValidArgsFunction: func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+			return []string{"pi"}, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] != "pi" {
+				return fmt.Errorf("import supports only pi (got %q)", args[0])
+			}
+			if importAccount == "" {
+				return errors.New("--account is required, e.g. --account work")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			token := importAdminToken
+			if token == "" {
+				token = os.Getenv("PEAPROXY_ADMIN_TOKEN")
+			}
+			models, err := clients.FetchPiModels(ctx, importOrigin, token)
+			if err != nil {
+				return err
+			}
+			home, _ := os.UserHomeDir()
+			lay := clients.Layout{Root: home}
+			if root != "" {
+				lay = clients.Layout{Root: root}
+			}
+			count, err := lay.ImportPi(importAccount, importOrigin, models)
+			if err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "imported %d model(s) into providers.peaproxy-%s\n", count, importAccount)
+			return nil
+		},
+	}
+	importCmd.Flags().StringVar(&importAccount, "account", "", "Account id; the provider is named peaproxy-<account>")
+	importCmd.Flags().StringVar(&importOrigin, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted)")
+	importCmd.Flags().StringVar(&importAdminToken, "admin-token", "", "Admin API token (defaults to PEAPROXY_ADMIN_TOKEN)")
+	cmd.AddCommand(importCmd)
 	var model string
 	var baseURL string
 	layout := func() clients.Layout {

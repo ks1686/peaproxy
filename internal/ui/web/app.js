@@ -501,6 +501,46 @@ function accountsPage(root) {
       toast(err.message);
     }
   });
+  // #135: one pending login per account. The device code and login link stay
+  // on screen until the login completes or fails, so device-flow providers can
+  // be finished from the UI and not only from the CLI.
+  const oauthPending = new Set();
+  function showOAuthPanel(id, started) {
+    clearOAuthPanel(id);
+    const row = document.querySelector('[data-oauth="' + CSS.escape(id) + '"]');
+    if (!row) return;
+    const panel = document.createElement("div");
+    panel.className = "oauth-panel";
+    panel.dataset.oauthPanel = id;
+    panel.setAttribute("role", "status");
+    const lines = [];
+    if (started.userCode) {
+      const code = document.createElement("strong");
+      code.textContent = "Device code: " + started.userCode;
+      lines.push(code);
+    }
+    if (started.loginURL) {
+      const a = document.createElement("a");
+      a.href = started.loginURL;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.textContent = "Open login page";
+      lines.push(a);
+    }
+    lines.forEach((el) => {
+      panel.appendChild(el);
+      panel.appendChild(document.createTextNode(" "));
+    });
+    const cli = document.createElement("code");
+    cli.textContent = started.cli || "peaproxy auth login";
+    panel.appendChild(document.createElement("br"));
+    panel.appendChild(cli);
+    row.insertAdjacentElement("afterend", panel);
+  }
+  function clearOAuthPanel(id) {
+    document.querySelectorAll('[data-oauth-panel="' + CSS.escape(id) + '"]').forEach((el) => el.remove());
+  }
+
   async function loadAccounts() {
     const host = document.getElementById("acc-list");
     try {
@@ -522,7 +562,7 @@ function accountsPage(root) {
           const oauth = isOAuthAdapter(a.adapter);
           const login = oauth
             ? `<button class="btn" data-oauth="${escapeHtml(a.id)}">OAuth login</button>
-               <button class="btn" data-cli="${escapeHtml(a.adapter)}">Copy CLI</button>`
+               <button class="btn" data-cli="${escapeHtml(a.adapter)}" data-cli-id="${escapeHtml(a.id)}">Copy CLI</button>`
             : "";
           return `<tr>
         <td>${escapeHtml(a.id)}</td><td>${escapeHtml(a.adapter)}</td>
@@ -553,7 +593,8 @@ function accountsPage(root) {
       });
       document.querySelectorAll("[data-cli]").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          const cmd = "peaproxy auth login --provider " + oauthCLIProvider(btn.dataset.cli);
+          const quotedID = "'" + String(btn.dataset.cliId || "").replace(/'/g, "'\\''") + "'";
+          const cmd = "peaproxy auth login --provider " + oauthCLIProvider(btn.dataset.cli) + " --id " + quotedID;
           try {
             await navigator.clipboard.writeText(cmd);
             toast("Copied " + cmd, "ok");
@@ -564,20 +605,36 @@ function accountsPage(root) {
       });
       document.querySelectorAll("[data-oauth]").forEach((btn) => {
         btn.addEventListener("click", async () => {
+          const id = btn.dataset.oauth;
+          if (oauthPending.has(id)) return;
+          oauthPending.add(id);
+          btn.disabled = true;
           try {
-            const started = await sendJSON("/admin/oauth/start", "POST", { id: btn.dataset.oauth });
+            const started = await sendJSON("/admin/oauth/start", "POST", { id });
             if (started.warning) toast(started.warning.slice(0, 180));
+            showOAuthPanel(id, started);
             if (started.loginURL) window.open(started.loginURL, "_blank", "noopener");
-            toast("Complete login in the browser, or run: " + (started.cli || "peaproxy auth login"), "ok");
-            const id = btn.dataset.oauth;
             const poll = async () => {
-              const st = await getJSON("/admin/oauth/status?id=" + encodeURIComponent(id));
+              let st;
+              try {
+                st = await getJSON("/admin/oauth/status?id=" + encodeURIComponent(id));
+              } catch (err) {
+                toast("OAuth status check failed; retrying: " + err.message);
+                setTimeout(poll, 2000);
+                return;
+              }
               if (st.status === "complete") {
+                oauthPending.delete(id);
+                btn.disabled = false;
+                clearOAuthPanel(id);
                 toast("OAuth login saved", "ok");
                 loadAccounts();
                 return;
               }
               if (st.status === "error") {
+                oauthPending.delete(id);
+                btn.disabled = false;
+                clearOAuthPanel(id);
                 toast(st.error || "OAuth failed");
                 return;
               }
@@ -585,6 +642,8 @@ function accountsPage(root) {
             };
             setTimeout(poll, 2000);
           } catch (err) {
+            oauthPending.delete(id);
+            btn.disabled = false;
             toast(err.message);
           }
         });

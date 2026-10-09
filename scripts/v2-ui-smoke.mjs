@@ -159,6 +159,45 @@ try {
   }
   console.log(`accounts dropdown: ${groups.length} groups, ${labels.length} presets`);
 
+  // #135: device-code OAuth must be usable from the UI. Exercise the real
+  // account row while stubbing only the asynchronous OAuth start/status API.
+  await preset.selectOption("copilot-oauth");
+  await page.locator("#acc-id").fill("work-copilot");
+  await page.locator("#acc-add").click();
+  await page.locator('[data-oauth="work-copilot"]').waitFor({ timeout: 10000 });
+  let oauthStarts = 0;
+  await page.route("**/admin/oauth/start", async (route) => {
+    oauthStarts++;
+    await route.fulfill({ json: {
+      status: "pending", id: "work-copilot", loginURL: "https://github.com/login/device",
+      userCode: "ABCD-1234", cli: "peaproxy auth login --provider copilot --id 'work-copilot'",
+    }});
+  });
+  await page.route("**/admin/oauth/status**", (route) =>
+    route.fulfill({ json: { status: "pending", userCode: "ABCD-1234" } }),
+  );
+  const oauthButton = page.locator('[data-oauth="work-copilot"]');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (v) => { window.__copiedCLI = v; } } });
+  });
+  await page.locator('[data-cli-id="work-copilot"]').click();
+  await page.waitForFunction(() => window.__copiedCLI?.includes("--id 'work-copilot'"));
+  await oauthButton.click();
+  await page.getByText("Device code: ABCD-1234").waitFor();
+  const authLink = page.getByRole("link", { name: "Open login page" });
+  if (await authLink.getAttribute("href") !== "https://github.com/login/device") {
+    throw new Error("device login link is missing or incorrect");
+  }
+  await page.getByText("peaproxy auth login --provider copilot --id 'work-copilot'", { exact: true }).waitFor();
+  if (!(await oauthButton.isDisabled())) {
+    throw new Error("OAuth button remained enabled while login is pending");
+  }
+  await new Promise((resolve) => setTimeout(resolve, 2200));
+  if (oauthStarts !== 1) {
+    throw new Error(`OAuth start called ${oauthStarts} times while pending`);
+  }
+  console.log("OAuth device code, manual link, CLI target and pending guard rendered");
+
   // The cost policy panel exists so an opinionated default is visible. A user
   // who cannot see that free-only or a spend ceiling is on has no way to turn
   // it off.

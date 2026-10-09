@@ -810,6 +810,12 @@ type chatChoiceMessage struct {
 	ReasoningOpaque json.RawMessage `json:"reasoning_opaque,omitempty"`
 }
 
+// ChatToResponses converts a Chat Completions request to the native Responses
+// request shape, preserving tools, images, prior assistant turns, and opaque reasoning.
+func ChatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
+	return chatToResponses(raw, model, stream)
+}
+
 func chatToResponses(raw []byte, model string, stream bool) ([]byte, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -908,6 +914,11 @@ func coerceResponsesInput(raw []byte) []byte {
 
 // responsesStreamToJSON turns a Codex SSE body into the completed response
 // object. A JSON object is returned unchanged so a non-stream payload still parses.
+// ResponsesStreamToJSON assembles a Responses SSE body into its final JSON response.
+func ResponsesStreamToJSON(body []byte) ([]byte, error) {
+	return responsesStreamToJSON(body)
+}
+
 func responsesStreamToJSON(body []byte) ([]byte, error) {
 	trimmed := bytes.TrimSpace(body)
 	if len(trimmed) == 0 {
@@ -955,6 +966,9 @@ func responsesStreamToJSON(body []byte) ([]byte, error) {
 	}
 	if completedType == "response.failed" {
 		return nil, fmt.Errorf("responses stream failed")
+	}
+	if completedType == "response.incomplete" {
+		return nil, fmt.Errorf("responses stream incomplete")
 	}
 	if len(completed) > 0 {
 		// Codex often completes with reasoning only. The answer arrived as
@@ -1332,6 +1346,12 @@ func messageContentString(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// ResponsesToChatCompletion converts a completed native Responses body to the
+// Chat Completions JSON shape, preserving tool calls, usage, and finish state.
+func ResponsesToChatCompletion(model string, body []byte) ([]byte, string, error) {
+	return responsesToChatCompletion(model, body)
+}
+
 func responsesToChatCompletion(model string, body []byte) ([]byte, string, error) {
 	var parsed struct {
 		OutputText string `json:"output_text"`
@@ -1448,6 +1468,13 @@ func responsesToChatCompletion(model string, body []byte) ([]byte, string, error
 		return nil, "", err
 	}
 	return raw, content, nil
+}
+
+// ResponsesSSEToOpenAI converts a Responses SSE stream into the Chat
+// Completions SSE stream expected by adapter.ChatStream callers. It is shared
+// with Copilot, whose Responses-only models use the same upstream wire.
+func ResponsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
+	return responsesSSEToOpenAI(r, w, model)
 }
 
 func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {

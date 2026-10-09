@@ -626,8 +626,16 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		"loginURL": sess.LoginURL,
 		"userCode": sess.UserCode,
 		"warning":  oauth.LiabilityWarning(),
-		"cli":      "peaproxy auth login --provider " + s.cliProviderFor(body.ID),
+		"cli":      oauthCLICommand(s.cliProviderFor(body.ID), body.ID),
 	})
+}
+
+// oauthCLICommand is the copyable CLI for one account. The account id is
+// user-chosen, so it is single-quoted for POSIX shells: a copied command then
+// saves to the row the user clicked, and a hostile id cannot inject arguments.
+func oauthCLICommand(provider, accountID string) string {
+	quoted := "'" + strings.ReplaceAll(accountID, "'", `'\''`) + "'"
+	return "peaproxy auth login --provider " + provider + " --id " + quoted
 }
 
 func (s *Server) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {

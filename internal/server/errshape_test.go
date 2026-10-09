@@ -290,3 +290,18 @@ func TestCooldownReachesClientAs503Sanitized(t *testing.T) {
 		t.Fatalf("cooldown message should still name the upstream status: %s", raw)
 	}
 }
+
+// #136: a model refused for its protocol must reach the client as a named
+// refusal, not the opaque "upstream HTTP 400". The upstream body still stays
+// out of the response.
+func TestProtocolRefusalReachesClientNamed(t *testing.T) {
+	const body = `{"error":{"message":"model \"grok-4.7\" is not accessible via the /chat/completions endpoint","code":"unsupported_api_for_model"}}`
+	front := failingServer(t, http.StatusBadRequest, body, nil)
+	_, raw := postJSON(t, front, "/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if bytes.Contains(raw, []byte("grok-4.7")) {
+		t.Fatalf("upstream body leaked: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("does not serve that model on the chat protocol")) {
+		t.Fatalf("refusal not named to the client: %s", raw)
+	}
+}

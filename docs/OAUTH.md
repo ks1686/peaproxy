@@ -68,7 +68,7 @@ curl -s http://127.0.0.1:8317/v1/models
 # then a tiny chat against a listed id (Showcase also works)
 ```
 
-Accounts UI: add a subscription OAuth preset (warning is shown), then **OAuth login** (opens the provider URL and polls) or **Copy CLI**. When a UI login finishes, the catalog is refreshed, so the new account's models list without a restart.
+Accounts UI: add a subscription OAuth preset (warning is shown), then **OAuth login** (shows a clickable provider URL, any device code, and polls) or **Copy CLI**. The copied login command includes the selected account ID. When a UI login finishes, the catalog is refreshed, so the new account's models list without a restart. OpenAI/Codex's choice between loopback and `--device` remains CLI-only; the UI uses the configured adapter flow.
 
 Callback ports (must match the public CLI OAuth clients):
 

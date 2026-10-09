@@ -179,7 +179,9 @@ func assistantOpenAIToClaude(m openAIInMsg) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	blocks := make([]any, 0, 1+len(m.ToolCalls)+len(entries))
+	// Capacity is only a hint. These counts can derive from client input, and
+	// summing them risks integer overflow before make sees the allocation.
+	blocks := make([]any, 0)
 	for _, e := range entries {
 		switch e.Kind {
 		case kindAnthropicThinking:

@@ -44,7 +44,7 @@ func (a *slowOAuth) ChatStream(context.Context, adapter.ChatRequest, io.Writer) 
 func (a *slowOAuth) Validate(context.Context) error     { return nil }
 func (a *slowOAuth) Capabilities() adapter.Capabilities { return adapter.Capabilities{OAuth: true} }
 func (a *slowOAuth) AuthStart(context.Context) (adapter.AuthSession, error) {
-	return adapter.AuthSession{LoginURL: "http://127.0.0.1/login"}, nil
+	return adapter.AuthSession{LoginURL: "http://127.0.0.1/login", UserCode: "ABCD-1234"}, nil
 }
 
 func (a *slowOAuth) AuthComplete(context.Context, adapter.AuthSession, string) error {
@@ -120,5 +120,30 @@ func TestOAuthLoginErrorSkipsRefresh(t *testing.T) {
 	case <-fake.listed:
 		t.Fatal("failed login must not refresh the catalog")
 	default:
+	}
+}
+
+// #135: a device-code login is unusable unless the UI can show the code. The
+// start response must carry it, and the copyable CLI must name the selected
+// account so the command saves to the row the user clicked.
+func TestOAuthStartCarriesDeviceCodeAndAccountCLI(t *testing.T) {
+	fake := &slowOAuth{listed: make(chan context.Context, 1), release: make(chan struct{})}
+	t.Cleanup(func() { close(fake.release) })
+	s := oauthServer(t, fake)
+	got := oauthCall(t, s, http.MethodPost, "/admin/oauth/start", `{"id":"slow"}`)
+	if got["userCode"] != "ABCD-1234" {
+		t.Fatalf("start must return the device code, got %v", got["userCode"])
+	}
+	cli, _ := got["cli"].(string)
+	if !strings.HasSuffix(cli, "--id 'slow'") {
+		t.Fatalf("cli must name the selected account, got %q", cli)
+	}
+}
+
+func TestOAuthCLICommandQuotesHostileAccountID(t *testing.T) {
+	got := oauthCLICommand("codex", "work'; rm -rf ~; echo '")
+	want := `peaproxy auth login --provider codex --id 'work'\''; rm -rf ~; echo '\'''`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
