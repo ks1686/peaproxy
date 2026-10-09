@@ -180,7 +180,9 @@ func layOutObject(value []byte, indent, closing []byte) []byte {
 	if !ok || len(pairs) == 0 {
 		return value
 	}
-	out := make([]byte, 0, len(value)+len(pairs)*(len(indent)+8))
+	// Avoid sizing from attacker-controlled pair counts and indentation widths;
+	// append grows the buffer with checked runtime allocation semantics.
+	out := make([]byte, 0, len(value))
 	out = append(out, '{', '\n')
 	for n, p := range pairs {
 		if n > 0 {
