@@ -59,6 +59,20 @@ func piOwnedProvider(account string) string { return "peaproxy-" + account }
 // importPi adds or replaces the owned provider for account with the importable
 // models. Re-running with the same models yields identical bytes. A provider
 // with that name that PeaProxy does not own is never overwritten.
+func importablePiModels(account string, models []PiImportModel) []PiImportModel {
+	var keep []PiImportModel
+	for _, m := range models {
+		if m.AccountID != "" && m.AccountID != account {
+			continue
+		}
+		if piImportable(m.ID) {
+			m.AccountID = ""
+			keep = append(keep, m)
+		}
+	}
+	return keep
+}
+
 func importPi(raw []byte, account, baseURL string, models []PiImportModel) ([]byte, error) {
 	if account == "" {
 		return nil, errors.New("pi import: account is required")
@@ -82,16 +96,7 @@ func importPi(raw []byte, account, baseURL string, models []PiImportModel) ([]by
 			return nil, fmt.Errorf("pi models: providers.%s exists and is not owned by PeaProxy; refusing to overwrite", name)
 		}
 	}
-	var keep []PiImportModel
-	for _, m := range models {
-		if m.AccountID != "" && m.AccountID != account {
-			continue
-		}
-		if piImportable(m.ID) {
-			m.AccountID = ""
-			keep = append(keep, m)
-		}
-	}
+	keep := importablePiModels(account, models)
 	entry := map[string]any{
 		"baseUrl": strings.TrimRight(baseURL, "/") + "/v1",
 		"api":     "openai-completions",
@@ -115,31 +120,34 @@ func importPi(raw []byte, account, baseURL string, models []PiImportModel) ([]by
 // ImportPi reads the live model list from origin for account and writes the
 // owned provider into Pi's models.json. It uses the same fingerprint and
 // conflict check as Connect, so a concurrent edit is refused, not overwritten.
-func (l Layout) ImportPi(account, origin string, models []PiImportModel) error {
+func (l Layout) ImportPi(account, origin string, models []PiImportModel) (int, error) {
 	path := l.path("pi")
 	if path == "" {
-		return ErrUnknownClient
+		return 0, ErrUnknownClient
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return 0, err
 	}
 	fingerprint := hash(raw)
 	updated, err := importPi(raw, account, NormalizeOrigin(origin), models)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := beforeWrite(path); err != nil {
-		return err
+		return 0, err
 	}
 	current, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return 0, err
 	}
 	if hash(current) != fingerprint {
-		return ErrConflict
+		return 0, ErrConflict
 	}
-	return writeAtomic(path, updated)
+	if err := writeAtomic(path, updated); err != nil {
+		return 0, err
+	}
+	return len(importablePiModels(account, models)), nil
 }
 
 // FetchPiModels reads GET /admin/catalog from origin, retaining account and
@@ -156,7 +164,13 @@ func FetchPiModels(ctx context.Context, origin, adminToken string) ([]PiImportMo
 	if adminToken != "" {
 		req.Header.Set("X-Admin-Token", adminToken)
 	}
-	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	client := &http.Client{
+		Timeout: 8 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("import pi: is peaproxy serve running?\n  %v", err)
 	}
@@ -184,7 +198,7 @@ func FetchPiModels(ctx context.Context, origin, adminToken string) ([]PiImportMo
 		}
 		input := []string{"text"}
 		for _, modality := range m.Modalities {
-			if modality == "image" {
+			if modality == "image" || modality == "image_in" {
 				input = append(input, "image")
 			}
 		}

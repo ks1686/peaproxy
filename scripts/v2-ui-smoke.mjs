@@ -177,6 +177,11 @@ try {
     route.fulfill({ json: { status: "pending", userCode: "ABCD-1234" } }),
   );
   const oauthButton = page.locator('[data-oauth="work-copilot"]');
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (v) => { window.__copiedCLI = v; } } });
+  });
+  await page.locator('[data-cli-id="work-copilot"]').click();
+  await page.waitForFunction(() => window.__copiedCLI?.includes("--id 'work-copilot'"));
   await oauthButton.click();
   await page.getByText("Device code: ABCD-1234").waitFor();
   const authLink = page.getByRole("link", { name: "Open login page" });

@@ -521,10 +521,11 @@ func clientsCmd() *cobra.Command {
 			if root != "" {
 				lay = clients.Layout{Root: root}
 			}
-			if err := lay.ImportPi(importAccount, importOrigin, models); err != nil {
+			count, err := lay.ImportPi(importAccount, importOrigin, models)
+			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "imported %d live model(s) into providers.peaproxy-%s\n", len(models), importAccount)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "imported %d model(s) into providers.peaproxy-%s\n", count, importAccount)
 			return nil
 		},
 	}

@@ -100,7 +100,7 @@ func TestFetchPiModelsUsesAdminCatalogAndPreservesAccountMetadata(t *testing.T) 
 		if r.Header.Get("X-Admin-Token") != "fixture-token" {
 			t.Fatalf("admin token missing")
 		}
-		_, _ = io.WriteString(w, `{"models":[{"id":"gemini-3.8-flash","accountId":"work","modalities":["text","image"],"contextWindow":1048576,"routable":true},{"id":"gemini-hidden","accountId":"work","modalities":["text"],"routable":false},{"id":"claude-sonnet-5","accountId":"work","modalities":["text","image"],"routable":true}]}`)
+		_, _ = io.WriteString(w, `{"models":[{"id":"gemini-3.8-flash","accountId":"work","modalities":["text","image_in"],"contextWindow":1048576,"routable":true},{"id":"gemini-hidden","accountId":"work","modalities":["text"],"routable":false},{"id":"claude-sonnet-5","accountId":"work","modalities":["text","image"],"routable":true}]}`)
 	}))
 	defer server.Close()
 	models, err := FetchPiModels(context.Background(), server.URL, "fixture-token")
@@ -112,6 +112,26 @@ func TestFetchPiModelsUsesAdminCatalogAndPreservesAccountMetadata(t *testing.T) 
 	}
 	if models[1].ID != "claude-sonnet-5" {
 		t.Fatalf("non-routable model was included or model lost: %+v", models)
+	}
+}
+
+func TestFetchPiModelsDoesNotForwardAdminTokenAcrossRedirect(t *testing.T) {
+	var received string
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header.Get("X-Admin-Token")
+		_, _ = io.WriteString(w, `{"models":[]}`)
+	}))
+	defer destination.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/admin/catalog?filter=all", http.StatusFound)
+	}))
+	defer redirect.Close()
+	_, err := FetchPiModels(context.Background(), redirect.URL, "secret-admin")
+	if err == nil || !strings.Contains(err.Error(), "302") {
+		t.Fatalf("expected redirect to be rejected, got %v", err)
+	}
+	if received != "" {
+		t.Fatalf("admin token forwarded to redirect target")
 	}
 }
 

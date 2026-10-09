@@ -562,7 +562,7 @@ function accountsPage(root) {
           const oauth = isOAuthAdapter(a.adapter);
           const login = oauth
             ? `<button class="btn" data-oauth="${escapeHtml(a.id)}">OAuth login</button>
-               <button class="btn" data-cli="${escapeHtml(a.adapter)}">Copy CLI</button>`
+               <button class="btn" data-cli="${escapeHtml(a.adapter)}" data-cli-id="${escapeHtml(a.id)}">Copy CLI</button>`
             : "";
           return `<tr>
         <td>${escapeHtml(a.id)}</td><td>${escapeHtml(a.adapter)}</td>
@@ -593,7 +593,8 @@ function accountsPage(root) {
       });
       document.querySelectorAll("[data-cli]").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          const cmd = "peaproxy auth login --provider " + oauthCLIProvider(btn.dataset.cli);
+          const quotedID = "'" + String(btn.dataset.cliId || "").replace(/'/g, "'\\''") + "'";
+          const cmd = "peaproxy auth login --provider " + oauthCLIProvider(btn.dataset.cli) + " --id " + quotedID;
           try {
             await navigator.clipboard.writeText(cmd);
             toast("Copied " + cmd, "ok");
@@ -614,7 +615,14 @@ function accountsPage(root) {
             showOAuthPanel(id, started);
             if (started.loginURL) window.open(started.loginURL, "_blank", "noopener");
             const poll = async () => {
-              const st = await getJSON("/admin/oauth/status?id=" + encodeURIComponent(id));
+              let st;
+              try {
+                st = await getJSON("/admin/oauth/status?id=" + encodeURIComponent(id));
+              } catch (err) {
+                toast("OAuth status check failed; retrying: " + err.message);
+                setTimeout(poll, 2000);
+                return;
+              }
               if (st.status === "complete") {
                 oauthPending.delete(id);
                 btn.disabled = false;

@@ -32,6 +32,9 @@ func TestClientsImportPiWritesOwnedAccountProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v\n%s", err, out)
 	}
+	if !strings.Contains(out.String(), "imported 1 model(s)") {
+		t.Fatalf("wrong imported count: %s", out)
+	}
 	raw, err := os.ReadFile(filepath.Join(home, "pi", "models.json"))
 	if err != nil {
 		t.Fatal(err)

@@ -51,59 +51,6 @@ func chatBody(req adapter.ChatRequest) ([]byte, error) {
 	}{Model: req.Model, Messages: req.Messages, Stream: req.Stream})
 }
 
-// responsesBody converts chat messages into the Responses input shape.
-func responsesBody(model string, chat []byte, stream bool) ([]byte, error) {
-	var in struct {
-		Messages []struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-	}
-	if err := json.Unmarshal(chat, &in); err != nil {
-		return nil, err
-	}
-	var instructions []string
-	var input []map[string]any
-	for _, m := range in.Messages {
-		text := contentText(m.Content)
-		if m.Role == "system" || m.Role == "developer" {
-			instructions = append(instructions, text)
-			continue
-		}
-		input = append(input, map[string]any{
-			"type": "message", "role": m.Role,
-			"content": []map[string]string{{"type": "input_text", "text": text}},
-		})
-	}
-	body := map[string]any{"model": model, "input": input, "stream": stream, "store": false}
-	if len(instructions) > 0 {
-		body["instructions"] = strings.Join(instructions, "\n\n")
-	}
-	return json.Marshal(body)
-}
-
-// contentText flattens a chat content field (string or parts) to text.
-func contentText(raw json.RawMessage) string {
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) == nil {
-		var b strings.Builder
-		for _, p := range parts {
-			if p.Type == "text" || p.Type == "input_text" {
-				b.WriteString(p.Text)
-			}
-		}
-		return b.String()
-	}
-	return ""
-}
-
 func (a *Adapter) postResponse(ctx context.Context, path string, body []byte) (*http.Response, error) {
 	a.mu.Lock()
 	tok := a.token
@@ -150,7 +97,7 @@ func (a *Adapter) chatViaWire(ctx context.Context, req adapter.ChatRequest) (ada
 	}
 	switch wireOf(req.Model) {
 	case wireResponses:
-		rb, err := responsesBody(req.Model, chat, false)
+		rb, err := openai_oauth.ChatToResponses(chat, req.Model, true)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
@@ -158,12 +105,15 @@ func (a *Adapter) chatViaWire(ctx context.Context, req adapter.ChatRequest) (ada
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
-		text := responsesStreamText(raw)
-		oa, err := translate.FromChatContent("copilot", req.Model, text)
+		body, err := openai_oauth.ResponsesStreamToJSON(raw)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
-		return adapter.ChatResponse{Model: req.Model, Raw: oa, Content: text}, nil
+		oa, content, err := openai_oauth.ResponsesToChatCompletion(req.Model, body)
+		if err != nil {
+			return adapter.ChatResponse{}, err
+		}
+		return adapter.ChatResponse{Model: req.Model, Raw: oa, Content: content}, nil
 	case wireMessages:
 		mb, err := translate.ToClaude(chat, false)
 		if err != nil {
@@ -195,7 +145,7 @@ func (a *Adapter) streamViaWire(ctx context.Context, req adapter.ChatRequest, w 
 	}
 	switch wireOf(req.Model) {
 	case wireResponses:
-		rb, err := responsesBody(req.Model, chat, true)
+		rb, err := openai_oauth.ChatToResponses(chat, req.Model, true)
 		if err != nil {
 			return err
 		}
@@ -219,66 +169,4 @@ func (a *Adapter) streamViaWire(ctx context.Context, req adapter.ChatRequest, w 
 	default:
 		return fmt.Errorf("copilot_oauth: unsupported stream wire")
 	}
-}
-
-// responsesStreamText reads the completed text from a Responses SSE body. It
-// prefers the final response.completed payload and falls back to the deltas.
-func responsesStreamText(raw []byte) string {
-	var deltas strings.Builder
-	var final string
-	for _, line := range strings.Split(string(raw), "\n") {
-		payload, ok := strings.CutPrefix(line, "data: ")
-		if !ok {
-			continue
-		}
-		var ev struct {
-			Type     string          `json:"type"`
-			Delta    string          `json:"delta"`
-			Response json.RawMessage `json:"response"`
-		}
-		if json.Unmarshal([]byte(payload), &ev) != nil {
-			continue
-		}
-		switch ev.Type {
-		case "response.output_text.delta":
-			deltas.WriteString(ev.Delta)
-		case "response.completed":
-			final = responsesText(ev.Response)
-		}
-	}
-	if final != "" {
-		return final
-	}
-	if deltas.Len() > 0 {
-		return deltas.String()
-	}
-	return responsesText(raw)
-}
-
-// responsesText collects output_text parts from a Responses body.
-func responsesText(raw []byte) string {
-	var out struct {
-		OutputText string `json:"output_text"`
-		Output     []struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		} `json:"output"`
-	}
-	if json.Unmarshal(raw, &out) != nil {
-		return ""
-	}
-	if out.OutputText != "" {
-		return out.OutputText
-	}
-	var b strings.Builder
-	for _, o := range out.Output {
-		for _, c := range o.Content {
-			if c.Type == "output_text" {
-				b.WriteString(c.Text)
-			}
-		}
-	}
-	return b.String()
 }
