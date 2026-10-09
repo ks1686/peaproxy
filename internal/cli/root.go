@@ -486,6 +486,47 @@ func clientsCmd() *cobra.Command {
 	verify.Flags().StringVar(&origin, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted)")
 	cmd.AddCommand(verify)
 	var root string
+	var importAccount string
+	var importOrigin string
+	importCmd := &cobra.Command{
+		Use:   "import pi",
+		Short: "Add live models to Pi as a PeaProxy-owned account provider",
+		Long: "Reads GET /v1/models from the gateway and writes a peaproxy-<account> provider " +
+			"into Pi's models.json. Claude and GPT models are skipped because Pi serves them " +
+			"with its built-in providers. Re-running is idempotent; disconnect removes only " +
+			"the owned provider.",
+		Args: cobra.ExactArgs(1),
+		ValidArgsFunction: func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+			return []string{"pi"}, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if args[0] != "pi" {
+				return fmt.Errorf("import supports only pi (got %q)", args[0])
+			}
+			if importAccount == "" {
+				return errors.New("--account is required, e.g. --account work")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+			defer cancel()
+			models, err := clients.FetchPiModels(ctx, importOrigin)
+			if err != nil {
+				return err
+			}
+			home, _ := os.UserHomeDir()
+			lay := clients.Layout{Root: home}
+			if root != "" {
+				lay = clients.Layout{Root: root}
+			}
+			if err := lay.ImportPi(importAccount, importOrigin, models); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "imported %d live model(s) into providers.peaproxy-%s\n", len(models), importAccount)
+			return nil
+		},
+	}
+	importCmd.Flags().StringVar(&importAccount, "account", "", "Account id; the provider is named peaproxy-<account>")
+	importCmd.Flags().StringVar(&importOrigin, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted)")
+	cmd.AddCommand(importCmd)
 	var model string
 	var baseURL string
 	layout := func() clients.Layout {
