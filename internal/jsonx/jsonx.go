@@ -63,7 +63,7 @@ func SetTopLevelRaw(raw []byte, key string, value []byte) []byte {
 		if bytes.Equal(raw[s.valueStart:s.valueEnd], value) {
 			return raw
 		}
-		out := make([]byte, 0, len(raw)-s.valueEnd+s.valueStart+len(value))
+		out := make([]byte, 0)
 		out = append(out, raw[:s.valueStart]...)
 		out = append(out, value...)
 		out = append(out, raw[s.valueEnd:]...)
@@ -105,7 +105,7 @@ func DropKeyInArray(raw []byte, arrayKey, dropKey string) []byte {
 		if bytes.Equal(val, next) {
 			return raw
 		}
-		out := make([]byte, 0, len(raw)-len(val)+len(next))
+		out := make([]byte, 0)
 		out = append(out, raw[:s.valueStart]...)
 		out = append(out, next...)
 		out = append(out, raw[s.valueEnd:]...)
