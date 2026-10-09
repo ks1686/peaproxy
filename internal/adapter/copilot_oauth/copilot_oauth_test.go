@@ -100,8 +100,12 @@ func TestAuthStartPostsGitHubDeviceCode(t *testing.T) {
 		case r.URL.Path == "/responses":
 			chatAuth = r.Header.Get("Authorization")
 			chatIntegration = r.Header.Get("Copilot-Integration-Id")
+			if !strings.Contains(string(raw), `"stream":true`) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"output_text": "hi copilot"})
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi copilot\"}]}]}}\n\ndata: [DONE]\n\n")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi copilot\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi copilot\"}]}]}}\n\ndata: [DONE]\n\n")
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -216,6 +220,40 @@ func TestCopilotOAuthSelectsTheRequiredUpstreamWire(t *testing.T) {
 	wantPaths := []string{"/responses", "/v1/messages", "/chat/completions"}
 	if strings.Join(got, ",") != strings.Join(wantPaths, ",") {
 		t.Fatalf("paths = %v, want %v", got, wantPaths)
+	}
+}
+
+func TestCopilotOAuthStreamsClaudeViaMessages(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		if path != "/v1/messages" {
+			t.Errorf("path = %s", path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `event: message_start
+data: {"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-5"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"claude reply"}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`)
+	}))
+	defer srv.Close()
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "tok", ExpiresAt: time.Now().Add(time.Hour)}
+	var got bytes.Buffer
+	err := a.ChatStream(context.Background(), adapter.ChatRequest{Model: "claude-sonnet-5", Raw: []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}]}`)}, &got)
+	if err != nil || path != "/v1/messages" || !strings.Contains(got.String(), "claude reply") {
+		t.Fatalf("ChatStream path=%s err=%v body=%s", path, err, got.String())
 	}
 }
 

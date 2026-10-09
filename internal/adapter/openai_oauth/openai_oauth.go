@@ -1450,6 +1450,13 @@ func responsesToChatCompletion(model string, body []byte) ([]byte, string, error
 	return raw, content, nil
 }
 
+// ResponsesSSEToOpenAI converts a Responses SSE stream into the Chat
+// Completions SSE stream expected by adapter.ChatStream callers. It is shared
+// with Copilot, whose Responses-only models use the same upstream wire.
+func ResponsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
+	return responsesSSEToOpenAI(r, w, model)
+}
+
 func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
+	"github.com/ks1686/peaproxy/internal/adapter/openai_oauth"
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
@@ -51,7 +52,7 @@ func chatBody(req adapter.ChatRequest) ([]byte, error) {
 }
 
 // responsesBody converts chat messages into the Responses input shape.
-func responsesBody(model string, chat []byte) ([]byte, error) {
+func responsesBody(model string, chat []byte, stream bool) ([]byte, error) {
 	var in struct {
 		Messages []struct {
 			Role    string          `json:"role"`
@@ -74,7 +75,7 @@ func responsesBody(model string, chat []byte) ([]byte, error) {
 			"content": []map[string]string{{"type": "input_text", "text": text}},
 		})
 	}
-	body := map[string]any{"model": model, "input": input, "stream": true, "store": false}
+	body := map[string]any{"model": model, "input": input, "stream": stream, "store": false}
 	if len(instructions) > 0 {
 		body["instructions"] = strings.Join(instructions, "\n\n")
 	}
@@ -103,7 +104,7 @@ func contentText(raw json.RawMessage) string {
 	return ""
 }
 
-func (a *Adapter) post(ctx context.Context, path string, body []byte) ([]byte, error) {
+func (a *Adapter) postResponse(ctx context.Context, path string, body []byte) (*http.Response, error) {
 	a.mu.Lock()
 	tok := a.token
 	base := a.apiBase
@@ -120,15 +121,24 @@ func (a *Adapter) post(ctx context.Context, path string, body []byte) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if resp.StatusCode >= 300 {
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		return nil, adapter.NewHTTPError(resp, truncate(raw))
+	}
+	return resp, nil
+}
+
+func (a *Adapter) post(ctx context.Context, path string, body []byte) ([]byte, error) {
+	resp, err := a.postResponse(ctx, path, body)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 300 {
-		return nil, adapter.NewHTTPError(resp, truncate(raw))
-	}
-	return raw, nil
+	defer func() { _ = resp.Body.Close() }()
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
 // chatViaWire sends a non-streaming chat to the endpoint the model needs and
@@ -140,7 +150,7 @@ func (a *Adapter) chatViaWire(ctx context.Context, req adapter.ChatRequest) (ada
 	}
 	switch wireOf(req.Model) {
 	case wireResponses:
-		rb, err := responsesBody(req.Model, chat)
+		rb, err := responsesBody(req.Model, chat, false)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
@@ -174,6 +184,42 @@ func (a *Adapter) chatViaWire(ctx context.Context, req adapter.ChatRequest) (ada
 }
 
 var errChatWire = fmt.Errorf("copilot_oauth: chat wire")
+
+// streamViaWire preserves upstream SSE and converts it to the Chat Completions
+// stream consumed by the gateway. Tool/reasoning semantics are handled by the
+// existing Responses and Messages translators rather than a local parser.
+func (a *Adapter) streamViaWire(ctx context.Context, req adapter.ChatRequest, w io.Writer) error {
+	chat, err := chatBody(req)
+	if err != nil {
+		return err
+	}
+	switch wireOf(req.Model) {
+	case wireResponses:
+		rb, err := responsesBody(req.Model, chat, true)
+		if err != nil {
+			return err
+		}
+		resp, err := a.postResponse(ctx, "/responses", rb)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return openai_oauth.ResponsesSSEToOpenAI(resp.Body, w, req.Model)
+	case wireMessages:
+		mb, err := translate.ToClaude(chat, true)
+		if err != nil {
+			return err
+		}
+		resp, err := a.postResponse(ctx, "/v1/messages", mb)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		return translate.ClaudeSSEToOpenAI(resp.Body, w)
+	default:
+		return fmt.Errorf("copilot_oauth: unsupported stream wire")
+	}
+}
 
 // responsesStreamText reads the completed text from a Responses SSE body. It
 // prefers the final response.completed payload and falls back to the deltas.
@@ -212,7 +258,8 @@ func responsesStreamText(raw []byte) string {
 // responsesText collects output_text parts from a Responses body.
 func responsesText(raw []byte) string {
 	var out struct {
-		Output []struct {
+		OutputText string `json:"output_text"`
+		Output     []struct {
 			Content []struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -221,6 +268,9 @@ func responsesText(raw []byte) string {
 	}
 	if json.Unmarshal(raw, &out) != nil {
 		return ""
+	}
+	if out.OutputText != "" {
+		return out.OutputText
 	}
 	var b strings.Builder
 	for _, o := range out.Output {

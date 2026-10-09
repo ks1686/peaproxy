@@ -19,6 +19,9 @@ concurrency:
 jobs:
   analyze:
     name: Analyze Go
+    # Fork pull requests do not receive security-events: write. Pushes and
+    # scheduled scans still cover the default branch; trusted PRs get analysis.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       actions: read # CodeQL downloads workflow metadata.

@@ -1,7 +1,11 @@
 package clients
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -23,9 +27,10 @@ func a(s string) []byte { return []byte(s) }
 
 func TestPiImportAddsOwnedAccountProvider(t *testing.T) {
 	models := []PiImportModel{
-		{ID: "gemini-3.8-flash", Reasoning: true, Input: []string{"text", "image"}, ContextWindow: 1048576, MaxTokens: 65536},
-		{ID: "claude-sonnet-5"}, // built-in Anthropic: must be skipped
-		{ID: "gpt-5.5"},         // built-in OpenAI: must be skipped
+		{ID: "gemini-3.8-flash", AccountID: "work", Input: []string{"text", "image"}, ContextWindow: 1048576},
+		{ID: "claude-sonnet-5", AccountID: "work"}, // built-in Anthropic: must be skipped
+		{ID: "gpt-5.5", AccountID: "work"},         // built-in OpenAI: must be skipped
+		{ID: "gemini-3.8-pro", AccountID: "other"}, // must not leak across accounts
 	}
 	got := importModels(t, `{}`, "work", "http://127.0.0.1:8317", models)
 	var doc struct {
@@ -53,8 +58,16 @@ func TestPiImportAddsOwnedAccountProvider(t *testing.T) {
 	}
 }
 
+func TestPiImportFiltersOtherAccounts(t *testing.T) {
+	models := []PiImportModel{{ID: "gemini-work", AccountID: "work"}, {ID: "gemini-other", AccountID: "other"}}
+	got := importModels(t, `{}`, "work", "http://127.0.0.1:8317", models)
+	if !strings.Contains(got, "gemini-work") || strings.Contains(got, "gemini-other") {
+		t.Fatalf("imported models from wrong accounts: %s", got)
+	}
+}
+
 func TestPiImportIsIdempotent(t *testing.T) {
-	models := []PiImportModel{{ID: "gemini-3.8-flash"}}
+	models := []PiImportModel{{ID: "gemini-3.8-flash", AccountID: "work"}}
 	once := importModels(t, `{}`, "work", "http://127.0.0.1:8317", models)
 	twice := importModels(t, once, "work", "http://127.0.0.1:8317", models)
 	if once != twice {
@@ -74,14 +87,37 @@ func TestPiImportRefusesUserOwnedAccountProvider(t *testing.T) {
 	// A user who already named a provider peaproxy-work must not have it
 	// overwritten: that provider has no owned marker.
 	raw := `{"providers":{"peaproxy-work":{"baseUrl":"https://user.test/v1","apiKey":"their-key","models":[{"id":"keep"}]}}}`
-	if _, err := importPi(a(raw), "work", "http://127.0.0.1:8317", []PiImportModel{{ID: "gemini-3.8-flash"}}); err == nil {
+	if _, err := importPi(a(raw), "work", "http://127.0.0.1:8317", []PiImportModel{{ID: "gemini-3.8-flash", AccountID: "work"}}); err == nil {
 		t.Fatalf("expected refusal for a user-owned peaproxy-work provider")
+	}
+}
+
+func TestFetchPiModelsUsesAdminCatalogAndPreservesAccountMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/catalog" || r.URL.Query().Get("filter") != "all" {
+			t.Fatalf("request path/query = %s", r.URL.String())
+		}
+		if r.Header.Get("X-Admin-Token") != "fixture-token" {
+			t.Fatalf("admin token missing")
+		}
+		_, _ = io.WriteString(w, `{"models":[{"id":"gemini-3.8-flash","accountId":"work","modalities":["text","image"],"contextWindow":1048576,"routable":true},{"id":"gemini-hidden","accountId":"work","modalities":["text"],"routable":false},{"id":"claude-sonnet-5","accountId":"work","modalities":["text","image"],"routable":true}]}`)
+	}))
+	defer server.Close()
+	models, err := FetchPiModels(context.Background(), server.URL, "fixture-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 2 || models[0].ID != "gemini-3.8-flash" || models[0].AccountID != "work" || models[0].ContextWindow != 1048576 || strings.Join(models[0].Input, ",") != "text,image" {
+		t.Fatalf("models = %+v", models)
+	}
+	if models[1].ID != "claude-sonnet-5" {
+		t.Fatalf("non-routable model was included or model lost: %+v", models)
 	}
 }
 
 func TestPiRemovalDropsOwnedAccountProviderOnly(t *testing.T) {
 	raw := importModels(t, `{"providers":{"mine":{"baseUrl":"https://example.test/v1","apiKey":"secret-user-key"}}}`,
-		"work", "http://127.0.0.1:8317", []PiImportModel{{ID: "gemini-3.8-flash"}})
+		"work", "http://127.0.0.1:8317", []PiImportModel{{ID: "gemini-3.8-flash", AccountID: "work"}})
 	out, err := removePi(a(raw))
 	if err != nil {
 		t.Fatal(err)

@@ -14,11 +14,14 @@ import (
 // provider into Pi's models.json, end to end through the command.
 func TestClientsImportPiWritesOwnedAccountProvider(t *testing.T) {
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
+		if r.URL.Path != "/admin/catalog" {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(`{"data":[{"id":"gemini-3.8-flash"},{"id":"claude-sonnet-5"}]}`))
+		if r.URL.Query().Get("filter") != "all" {
+			t.Errorf("filter = %q, want all", r.URL.Query().Get("filter"))
+		}
+		_, _ = w.Write([]byte(`{"models":[{"id":"gemini-3.8-flash","accountId":"work","modalities":["text","image"],"contextWindow":1048576,"routable":true},{"id":"claude-sonnet-5","accountId":"work","modalities":["text","image"],"routable":true}]}`))
 	}))
 	t.Cleanup(gw.Close)
 
@@ -39,6 +42,9 @@ func TestClientsImportPiWritesOwnedAccountProvider(t *testing.T) {
 	}
 	if strings.Contains(s, "claude-sonnet-5") {
 		t.Fatalf("built-in Claude model was imported:\n%s", s)
+	}
+	if !strings.Contains(s, `"input":["text","image"]`) || !strings.Contains(s, `"contextWindow":1048576`) {
+		t.Fatalf("Pi model metadata was not imported:\n%s", s)
 	}
 }
 

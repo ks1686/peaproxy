@@ -488,13 +488,13 @@ func clientsCmd() *cobra.Command {
 	var root string
 	var importAccount string
 	var importOrigin string
+	var importAdminToken string
 	importCmd := &cobra.Command{
 		Use:   "import pi",
 		Short: "Add live models to Pi as a PeaProxy-owned account provider",
-		Long: "Reads GET /v1/models from the gateway and writes a peaproxy-<account> provider " +
-			"into Pi's models.json. Claude and GPT models are skipped because Pi serves them " +
-			"with its built-in providers. Re-running is idempotent; disconnect removes only " +
-			"the owned provider.",
+		Long: "Reads the admin catalog from the gateway and writes routable models for the selected account " +
+			"into a PeaProxy-owned Pi provider. Claude and GPT models are skipped because Pi serves them " +
+			"with built-in providers. Re-running is idempotent; disconnect removes only the owned provider.",
 		Args: cobra.ExactArgs(1),
 		ValidArgsFunction: func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
 			return []string{"pi"}, cobra.ShellCompDirectiveNoFileComp
@@ -508,7 +508,11 @@ func clientsCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
-			models, err := clients.FetchPiModels(ctx, importOrigin)
+			token := importAdminToken
+			if token == "" {
+				token = os.Getenv("PEAPROXY_ADMIN_TOKEN")
+			}
+			models, err := clients.FetchPiModels(ctx, importOrigin, token)
 			if err != nil {
 				return err
 			}
@@ -526,6 +530,7 @@ func clientsCmd() *cobra.Command {
 	}
 	importCmd.Flags().StringVar(&importAccount, "account", "", "Account id; the provider is named peaproxy-<account>")
 	importCmd.Flags().StringVar(&importOrigin, "origin", clients.DefaultOrigin, "Gateway origin (a trailing /v1 is accepted)")
+	importCmd.Flags().StringVar(&importAdminToken, "admin-token", "", "Admin API token (defaults to PEAPROXY_ADMIN_TOKEN)")
 	cmd.AddCommand(importCmd)
 	var model string
 	var baseURL string

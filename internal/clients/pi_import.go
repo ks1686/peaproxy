@@ -17,6 +17,7 @@ import (
 // the fields Pi needs for an openai-completions custom provider are kept.
 type PiImportModel struct {
 	ID            string   `json:"id"`
+	AccountID     string   `json:"accountId,omitempty"`
 	Reasoning     bool     `json:"reasoning,omitempty"`
 	Input         []string `json:"input,omitempty"`
 	ContextWindow int      `json:"contextWindow,omitempty"`
@@ -83,7 +84,11 @@ func importPi(raw []byte, account, baseURL string, models []PiImportModel) ([]by
 	}
 	var keep []PiImportModel
 	for _, m := range models {
+		if m.AccountID != "" && m.AccountID != account {
+			continue
+		}
 		if piImportable(m.ID) {
+			m.AccountID = ""
 			keep = append(keep, m)
 		}
 	}
@@ -137,15 +142,19 @@ func (l Layout) ImportPi(account, origin string, models []PiImportModel) error {
 	return writeAtomic(path, updated)
 }
 
-// FetchPiModels reads GET /v1/models from origin and returns importable rows.
-func FetchPiModels(ctx context.Context, origin string) ([]PiImportModel, error) {
+// FetchPiModels reads GET /admin/catalog from origin, retaining account and
+// modality metadata so it imports only models served by the selected account.
+func FetchPiModels(ctx context.Context, origin, adminToken string) ([]PiImportModel, error) {
 	origin = NormalizeOrigin(origin)
 	if origin == "" {
 		origin = DefaultOrigin
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/v1/models", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/admin/catalog?filter=all", nil)
 	if err != nil {
 		return nil, err
+	}
+	if adminToken != "" {
+		req.Header.Set("X-Admin-Token", adminToken)
 	}
 	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
 	if err != nil {
@@ -153,19 +162,33 @@ func FetchPiModels(ctx context.Context, origin string) ([]PiImportModel, error) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("import pi: GET /v1/models returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("import pi: GET /admin/catalog returned %d", resp.StatusCode)
 	}
 	var doc struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
+		Models []struct {
+			ID            string   `json:"id"`
+			AccountID     string   `json:"accountId"`
+			Modalities    []string `json:"modalities"`
+			ContextWindow int      `json:"contextWindow"`
+			Routable      bool     `json:"routable"`
+			Hidden        bool     `json:"hidden"`
+		} `json:"models"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&doc); err != nil {
-		return nil, fmt.Errorf("import pi: decode /v1/models: %v", err)
+		return nil, fmt.Errorf("import pi: decode /admin/catalog: %v", err)
 	}
-	out := make([]PiImportModel, 0, len(doc.Data))
-	for _, m := range doc.Data {
-		out = append(out, PiImportModel{ID: m.ID})
+	out := make([]PiImportModel, 0, len(doc.Models))
+	for _, m := range doc.Models {
+		if !m.Routable || m.Hidden {
+			continue
+		}
+		input := []string{"text"}
+		for _, modality := range m.Modalities {
+			if modality == "image" {
+				input = append(input, "image")
+			}
+		}
+		out = append(out, PiImportModel{ID: m.ID, AccountID: m.AccountID, Input: input, ContextWindow: m.ContextWindow})
 	}
 	return out, nil
 }

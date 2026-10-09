@@ -483,6 +483,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 		return adapter.ChatResponse{}, err
 	}
 	if wireOf(req.Model) != wireChat {
+		req.Stream = false
 		return a.chatViaWire(ctx, req)
 	}
 	inner, err := a.compat()
@@ -495,6 +496,10 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.Writer) error {
 	if err := a.ensureToken(ctx); err != nil {
 		return err
+	}
+	if wireOf(req.Model) != wireChat {
+		req.Stream = true
+		return a.streamViaWire(ctx, req, w)
 	}
 	inner, err := a.compat()
 	if err != nil {
