@@ -82,7 +82,7 @@ func SetTopLevelRaw(raw []byte, key string, value []byte) []byte {
 	if len(inner) > 1 && inner[len(inner)-1] != '{' {
 		insert = append([]byte{','}, insert...)
 	}
-	out := make([]byte, 0, len(raw)+len(insert))
+	out := make([]byte, 0)
 	out = append(out, inner...)
 	out = append(out, insert...)
 	out = append(out, raw[end:]...)
