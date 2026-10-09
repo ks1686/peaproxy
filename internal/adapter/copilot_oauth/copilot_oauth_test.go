@@ -97,6 +97,11 @@ func TestAuthStartPostsGitHubDeviceCode(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"choices": []map[string]any{{"message": map[string]string{"content": "hi copilot"}}},
 			})
+		case r.URL.Path == "/responses":
+			chatAuth = r.Header.Get("Authorization")
+			chatIntegration = r.Header.Get("Copilot-Integration-Id")
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi copilot\"}]}]}}\n\ndata: [DONE]\n\n")
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -153,6 +158,64 @@ func TestAuthStartPostsGitHubDeviceCode(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "hi copilot") {
 		t.Fatalf("stream %s", buf.String())
+	}
+}
+
+func TestCopilotOAuthSelectsTheRequiredUpstreamWire(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path)
+		switch r.URL.Path {
+		case "/responses":
+			var body struct {
+				Model string `json:"model"`
+				Input any    `json:"input"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Model != "grok-4.7" || body.Input == nil {
+				t.Fatalf("responses body %#v", body)
+			}
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"from responses\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"grok-4.7\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"from responses\"}]}]}}\n\ndata: [DONE]\n\n")
+		case "/v1/messages":
+			var body struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Model != "claude-sonnet-5" {
+				t.Fatalf("messages model = %q", body.Model)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "msg_1", "model": body.Model, "role": "assistant", "content": []map[string]string{{"type": "text", "text": "from messages"}}})
+		case "/chat/completions":
+			_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": "from chat"}}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "tok", RefreshToken: "ghu", ExpiresAt: time.Now().Add(time.Hour)}
+
+	for _, tc := range []struct {
+		model, want string
+	}{
+		{"grok-4.7", "from responses"},
+		{"claude-sonnet-5", "from messages"},
+		{"gemini-3.8-flash", "from chat"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			resp, err := a.Chat(context.Background(), adapter.ChatRequest{Model: tc.model, Raw: []byte(`{"model":"` + tc.model + `","messages":[{"role":"user","content":"hi"}]}`)})
+			if err != nil || resp.Content != tc.want {
+				t.Fatalf("Chat() = %#v, %v", resp, err)
+			}
+		})
+	}
+	wantPaths := []string{"/responses", "/v1/messages", "/chat/completions"}
+	if strings.Join(got, ",") != strings.Join(wantPaths, ",") {
+		t.Fatalf("paths = %v, want %v", got, wantPaths)
 	}
 }
 

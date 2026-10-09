@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
@@ -205,4 +206,17 @@ func contains2(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// #136: Copilot refuses a Responses-only model on chat with its own code. That
+// is a protocol refusal, so it must be believed like ModelProtocolUnsupported,
+// not read as a malformed request.
+func TestCopilotUnsupportedAPIForModelIsAProtocolRefusal(t *testing.T) {
+	err := adapter.HTTPError{
+		Status: http.StatusBadRequest,
+		Body:   `{"error":{"message":"model \"mai-code-1.1-flash\" is not accessible via the /chat/completions endpoint","code":"unsupported_api_for_model"}}`,
+	}
+	if !protocolRefused(err) {
+		t.Fatalf("unsupported_api_for_model must count as a protocol refusal")
+	}
 }

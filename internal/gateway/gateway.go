@@ -404,7 +404,8 @@ func protocolRefused(err error) bool {
 	}
 	b := strings.ToLower(string(he.Body))
 	return strings.Contains(b, "modelprotocolunsupported") ||
-		strings.Contains(b, "does not support this protocol")
+		strings.Contains(b, "does not support this protocol") ||
+		strings.Contains(b, "unsupported_api_for_model")
 }
 
 // markModelNotChat records that this provider refused to serve the model on the

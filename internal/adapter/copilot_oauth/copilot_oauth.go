@@ -482,6 +482,9 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 	if err := a.ensureToken(ctx); err != nil {
 		return adapter.ChatResponse{}, err
 	}
+	if wireOf(req.Model) != wireChat {
+		return a.chatViaWire(ctx, req)
+	}
 	inner, err := a.compat()
 	if err != nil {
 		return adapter.ChatResponse{}, err
