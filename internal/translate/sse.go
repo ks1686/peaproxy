@@ -82,7 +82,11 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 			if id == "" {
 				id = "msg_peaproxy"
 			}
-			if err := writeEvent("message_start", fmt.Sprintf(`{"type":"message_start","message":{"id":%s,"type":"message","role":"assistant","model":%s,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}`, jsonString(id), jsonString(model))); err != nil {
+			start, err := claudeMessageStartJSON(id, model)
+			if err != nil {
+				return err
+			}
+			if err := writeEvent("message_start", start); err != nil {
 				return err
 			}
 			if err := writeEvent("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`); err != nil {
@@ -171,11 +175,11 @@ func OpenAISSEToClaude(r io.Reader, w io.Writer, model string) error {
 			return err
 		}
 	}
-	deltaUsage := `{"output_tokens":0}`
-	if usage != nil {
-		deltaUsage = fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d}`, usage.InputTokens, usage.OutputTokens)
+	delta, err := claudeMessageDeltaJSON(claudeStopReason(finish, len(calls) > 0), usage)
+	if err != nil {
+		return err
 	}
-	if err := writeEvent("message_delta", fmt.Sprintf(`{"type":"message_delta","delta":{"stop_reason":%s,"stop_sequence":null},"usage":%s}`, jsonString(claudeStopReason(finish, len(calls) > 0)), deltaUsage)); err != nil {
+	if err := writeEvent("message_delta", delta); err != nil {
 		return err
 	}
 	return writeEvent("message_stop", `{"type":"message_stop"}`)
@@ -1049,12 +1053,66 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	return emit(event, string(raw))
 }
 
-func jsonString(s string) string {
-	b, err := json.Marshal(s)
+func claudeMessageStartJSON(id, model string) (string, error) {
+	payload := struct {
+		Type    string `json:"type"`
+		Message struct {
+			ID           string          `json:"id"`
+			Type         string          `json:"type"`
+			Role         string          `json:"role"`
+			Model        string          `json:"model"`
+			Content      json.RawMessage `json:"content"`
+			StopReason   json.RawMessage `json:"stop_reason"`
+			StopSequence json.RawMessage `json:"stop_sequence"`
+			Usage        struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+	}{Type: "message_start"}
+	payload.Message.ID = id
+	payload.Message.Type = "message"
+	payload.Message.Role = "assistant"
+	payload.Message.Model = model
+	payload.Message.Content = json.RawMessage("[]")
+	payload.Message.StopReason = json.RawMessage("null")
+	payload.Message.StopSequence = json.RawMessage("null")
+	raw, err := json.Marshal(payload)
 	if err != nil {
-		return `""`
+		return "", err
 	}
-	return string(b)
+	return string(raw), nil
+}
+
+func claudeMessageDeltaJSON(stop string, usage *claudeUsage) (string, error) {
+	usageRaw := json.RawMessage(`{"output_tokens":0}`)
+	if usage != nil {
+		raw, err := json.Marshal(struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		}{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens})
+		if err != nil {
+			return "", err
+		}
+		usageRaw = raw
+	}
+	type deltaBody struct {
+		StopReason   string          `json:"stop_reason"`
+		StopSequence json.RawMessage `json:"stop_sequence"`
+	}
+	raw, err := json.Marshal(struct {
+		Type  string          `json:"type"`
+		Delta deltaBody       `json:"delta"`
+		Usage json.RawMessage `json:"usage"`
+	}{
+		Type:  "message_delta",
+		Delta: deltaBody{StopReason: stop, StopSequence: json.RawMessage("null")},
+		Usage: usageRaw,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // responseStub is the minimal response object carried by the lifecycle events

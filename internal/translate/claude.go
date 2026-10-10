@@ -11,6 +11,7 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/sizehint"
 )
 
 // ClaudeRequest is a subset of POST /v1/messages.
@@ -114,7 +115,7 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 	if in.Model == "" {
 		return nil, adapter.ChatRequest{}, fmt.Errorf("missing model")
 	}
-	msgs := make([]openAIMessage, 0, len(in.Messages)+1)
+	msgs := make([]openAIMessage, 0, sizehint.Sum(len(in.Messages), 1))
 	if sys := systemText(in.System); sys != "" {
 		rawSys, err := json.Marshal(sys)
 		if err != nil {
@@ -179,7 +180,7 @@ func FromOpenAI(raw []byte, model string) ([]byte, error) {
 	if in.Model != "" {
 		model = in.Model
 	}
-	content := make([]claudeContentOut, 0, 1+len(calls)+len(opaque))
+	content := make([]claudeContentOut, 0, sizehint.Sum(1, len(calls), len(opaque)))
 	for _, e := range opaque {
 		switch e.Kind {
 		case kindAnthropicThinking:

@@ -9,6 +9,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/ks1686/peaproxy/internal/jsonx"
+	"github.com/ks1686/peaproxy/internal/sizehint"
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
@@ -220,7 +221,7 @@ func insertMidConversationSystem(raw []byte, texts []string) []byte {
 			Content: []cloakBlock{{Type: "text", Text: text, CacheControl: &ephemeralCache}},
 		}))
 	}
-	out := make([]json.RawMessage, 0, len(msgs)+len(inserted))
+	out := make([]json.RawMessage, 0, sizehint.Sum(len(msgs), len(inserted)))
 	out = append(out, msgs[:insertAt]...)
 	out = append(out, inserted...)
 	out = append(out, msgs[insertAt:]...)
@@ -261,7 +262,7 @@ func prependCallerSystemReminders(raw []byte, texts []string) []byte {
 	for _, b := range reminders {
 		reminderRaw = append(reminderRaw, marshalJSON(b))
 	}
-	blocks := make([]json.RawMessage, 0, len(existing)+len(reminderRaw))
+	blocks := make([]json.RawMessage, 0, sizehint.Sum(len(existing), len(reminderRaw)))
 	blocks = append(blocks, existing[:insertAt]...)
 	blocks = append(blocks, reminderRaw...)
 	blocks = append(blocks, existing[insertAt:]...)

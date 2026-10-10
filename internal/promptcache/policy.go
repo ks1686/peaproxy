@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"github.com/ks1686/peaproxy/internal/compatdata"
+	"github.com/ks1686/peaproxy/internal/sizehint"
 )
 
 // Mode controls PeaProxy-owned cache edits.
@@ -155,7 +156,7 @@ func insertBreakpoint(body []byte) ([]byte, error) {
 	}
 
 	at := start + elemEnd - len(elem) + closing
-	out := make([]byte, 0, len(body)+len(insert))
+	out := make([]byte, 0, sizehint.Sum(len(body), len(insert)))
 	out = append(out, body[:at]...)
 	out = append(out, insert...)
 	out = append(out, body[at:]...)

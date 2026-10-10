@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -57,45 +58,52 @@ func ExactLocalStaysLocal(local bool) bool { return local }
 // ProbeLoopback asks one configured endpoint. Hosts that are not loopback are ignored.
 func ProbeLoopback(ctx context.Context, endpoint string, client *http.Client) Snapshot {
 	snap := Snapshot{Endpoint: endpoint, State: StateUnknown, At: time.Now()}
-	if !loopback(endpoint) {
-		return snap
+	if isLocalURL(endpoint) {
+		if client == nil {
+			client = &http.Client{Timeout: 2 * time.Second}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/api/tags", nil)
+		if err != nil {
+			snap.State = StateUnknown
+			return snap
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			snap.State = StateOffline
+			return snap
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var buf [512]byte
+		n, _ := resp.Body.Read(buf[:])
+		snap.State = ClassifyOllama(resp.StatusCode, string(buf[:n]))
 	}
-	if client == nil {
-		client = &http.Client{Timeout: 2 * time.Second}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/api/tags", nil)
-	if err != nil {
-		snap.State = StateUnknown
-		return snap
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		snap.State = StateOffline
-		return snap
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var buf [512]byte
-	n, _ := resp.Body.Read(buf[:])
-	snap.State = ClassifyOllama(resp.StatusCode, string(buf[:n]))
 	return snap
 }
 
-func loopback(raw string) bool {
-	host := raw
-	if i := strings.Index(raw, "://"); i >= 0 {
-		host = raw[i+3:]
+// isLocalURL reports whether raw is an http(s) URL whose host is this machine.
+// A missing scheme is treated as http so a host:port endpoint still counts.
+// Userinfo and any other scheme are rejected: those are not a local model server.
+func isLocalURL(raw string) bool {
+	if raw == "" || strings.ContainsAny(raw, "\r\n\t ") {
+		return false
 	}
-	host = strings.Split(host, "/")[0]
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
+	candidate := raw
+	if !strings.Contains(candidate, "://") {
+		candidate = "http://" + candidate
 	}
-	switch strings.Trim(host, "[]") {
-	case "localhost", "127.0.0.1", "::1":
+	u, err := url.Parse(candidate)
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
 		return true
-	default:
-		ip := net.ParseIP(strings.Trim(host, "[]"))
-		return ip != nil && ip.IsLoopback()
 	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // KnownLoopbackPorts are the only ports probed when discovering a local runtime.
@@ -131,8 +139,5 @@ func ParseTagsReady(body []byte) bool {
 // assistant package refuses anything else, because a feature described as
 // local that can be pointed at a remote host is not local under any name.
 func LoopbackURL(raw string) bool {
-	if raw == "" {
-		return false
-	}
-	return loopback(raw)
+	return isLocalURL(raw)
 }
