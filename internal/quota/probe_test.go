@@ -87,6 +87,41 @@ func TestProbeOpenRouterHTTPErrorDoesNotInventZero(t *testing.T) {
 	}
 }
 
+func TestQuotaProbeURLPolicy(t *testing.T) {
+	allow := []string{
+		"https://openrouter.ai/api/v1/key",
+		"https://example.com/v1/key",
+		"http://127.0.0.1:9/v1/key",
+		"http://localhost:11434/key",
+		"http://[::1]:9/key",
+		"https://10.0.0.5/key",
+	}
+	for _, raw := range allow {
+		if !openRouterProbeURL.MatchString(raw) || !quotaProbeURLAllowed(raw) {
+			t.Errorf("allowed %q", raw)
+		}
+	}
+	deny := []string{
+		"http://169.254.169.254/latest/meta-data",
+		"https://169.254.169.254/latest",
+		"http://example.com/key",
+		"file:///etc/passwd",
+		"https://user:pass@openrouter.ai/api/v1/key",
+		"https://metadata.google.internal/computeMetadata/v1/",
+		"http://0.0.0.0:9/key",
+		"https://openrouter.ai/key\n",
+	}
+	for _, raw := range deny {
+		if openRouterProbeURL.MatchString(raw) && quotaProbeURLAllowed(raw) {
+			t.Errorf("must reject %q", raw)
+		}
+	}
+	_, err := ProbeOpenRouter(context.Background(), nil, "or1", "sk-or-test", "http://169.254.169.254/latest")
+	if err == nil {
+		t.Fatal("metadata URL must not be requested")
+	}
+}
+
 func TestProbeOpenRouterRequiresKey(t *testing.T) {
 	_, err := ProbeOpenRouter(context.Background(), nil, "or1", "", "https://openrouter.ai/api/v1/key")
 	if err == nil {

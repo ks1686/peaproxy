@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+
+	"github.com/ks1686/peaproxy/internal/sizehint"
 )
 
 // Peek is a typed extract from a client body. Unmarshal into structs is safe;
@@ -74,7 +76,7 @@ func SetTopLevelRaw(raw []byte, key string, value []byte) []byte {
 		return raw
 	}
 	inner := bytes.TrimRight(raw[:end], " \t\r\n")
-	insert := make([]byte, 0, 3+len(key)+len(value))
+	insert := make([]byte, 0, sizehint.Sum(3, len(key), len(value)))
 	insert = append(insert, '"')
 	insert = append(insert, key...)
 	insert = append(insert, '"', ':')

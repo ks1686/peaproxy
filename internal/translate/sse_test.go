@@ -57,6 +57,26 @@ func TestOpenAISSEToClaudeEmitsThinkingBeforeStop(t *testing.T) {
 	}
 }
 
+func TestOpenAISSEToClaudeQuotesStayInsideJSON(t *testing.T) {
+	in := strings.NewReader("data: {\"id\":\"c\\\"1\",\"model\":\"m\\\\x\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")
+	var out bytes.Buffer
+	if err := OpenAISSEToClaude(in, &out, "m\\x"); err != nil {
+		t.Fatal(err)
+	}
+	var start struct {
+		Message struct {
+			ID    string `json:"id"`
+			Model string `json:"model"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(singleClaudeEvent(t, out.String(), "message_start"), &start); err != nil {
+		t.Fatal(err)
+	}
+	if start.Message.ID != `c"1` || start.Message.Model != `m\x` {
+		t.Fatalf("identity %+v", start.Message)
+	}
+}
+
 func TestOpenAISSEToClaudeEmptyWritesNothing(t *testing.T) {
 	var out bytes.Buffer
 	if err := OpenAISSEToClaude(strings.NewReader(""), &out, "m"); err != nil {

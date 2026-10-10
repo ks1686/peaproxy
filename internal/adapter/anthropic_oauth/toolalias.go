@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+
+	"github.com/ks1686/peaproxy/internal/sizehint"
 )
 
 // oauthToolAliases are client tool names Anthropic bills as extra usage on
@@ -115,7 +117,10 @@ func rewriteAliasedNames(raw []byte, forward map[string]string) ([]byte, bool) {
 		if err != nil {
 			return nil, false
 		}
-		spliced := make([]byte, 0, len(out)-hit.end+hit.start+len(quoted))
+		if hit.start < 0 || hit.end < hit.start || hit.end > len(out) {
+			return nil, false
+		}
+		spliced := make([]byte, 0, sizehint.Sum(hit.start, len(out)-hit.end, len(quoted)))
 		spliced = append(spliced, out[:hit.start]...)
 		spliced = append(spliced, quoted...)
 		spliced = append(spliced, out[hit.end:]...)
@@ -459,7 +464,7 @@ func restoreSSELine(line []byte, reverse map[string]string) []byte {
 	if bytes.Equal(restored, payload) {
 		return line
 	}
-	out := make([]byte, 0, len(head)+len(lead)+len(restored)+len(trail))
+	out := make([]byte, 0, sizehint.Sum(len(head), len(lead), len(restored), len(trail)))
 	out = append(out, head...)
 	out = append(out, lead...)
 	out = append(out, restored...)

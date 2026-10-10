@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/fslock"
+	"github.com/ks1686/peaproxy/internal/sizehint"
 )
 
 type fileBlob struct {
@@ -257,7 +258,7 @@ func encrypt(key, plaintext []byte) ([]byte, error) {
 		return nil, err
 	}
 	ad := []byte(Magic)
-	out := make([]byte, 0, len(Magic)+len(nonce)+len(plaintext)+gcm.Overhead())
+	out := make([]byte, 0, sizehint.Sum(len(Magic), len(nonce), len(plaintext), gcm.Overhead()))
 	out = append(out, Magic...)
 	out = append(out, nonce...)
 	return gcm.Seal(out, nonce, plaintext, ad), nil

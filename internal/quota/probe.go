@@ -5,10 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// openRouterProbeURL matches the only URLs a quota probe may request.
+// https may name a DNS host or an IP literal. http is only loopback, because
+// the probe sends the account API key.
+var openRouterProbeURL = regexp.MustCompile(`^(?:https://(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\])(?::[0-9]{1,5})?(?:[/?#][^\s]*)?|https?://(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?(?:[/?#][^\s]*)?)$`)
 
 const openRouterDefaultBase = "https://openrouter.ai/api/v1"
 
@@ -40,6 +49,9 @@ type openRouterKeyResponse struct {
 func ProbeOpenRouter(ctx context.Context, client *http.Client, accountID, apiKey, keyURL string) (Snapshot, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return Snapshot{}, fmt.Errorf("openrouter quota probe requires an API key")
+	}
+	if !openRouterProbeURL.MatchString(keyURL) || !quotaProbeURLAllowed(keyURL) {
+		return Snapshot{}, fmt.Errorf("openrouter quota probe URL is not allowed")
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
@@ -82,4 +94,46 @@ func ProbeOpenRouter(ctx context.Context, client *http.Client, accountID, apiKey
 		return Snapshot{}, fmt.Errorf("openrouter GET /key returned no remaining fields")
 	}
 	return snap, nil
+}
+
+// quotaProbeURLAllowed is the parsed check behind openRouterProbeURL.
+// Link-local addresses are rejected so a configured base cannot be the cloud
+// metadata service. http is accepted only for loopback.
+func quotaProbeURLAllowed(raw string) bool {
+	if strings.ContainsAny(raw, "\r\n\t ") {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return false
+	}
+	if port := u.Port(); port != "" {
+		n, convErr := strconv.Atoi(port)
+		if convErr != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	host := u.Hostname()
+	if host == "" || strings.EqualFold(host, "metadata.google.internal") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return true
+		}
+		if u.Scheme != "https" {
+			return false
+		}
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return false
+		}
+		return true
+	}
+	if u.Scheme == "http" {
+		return strings.EqualFold(host, "localhost")
+	}
+	return true
 }

@@ -65,7 +65,7 @@ func TestLoopbackHelpersAndTags(t *testing.T) {
 			t.Errorf("LoopbackURL(%q) = false", raw)
 		}
 	}
-	for _, raw := range []string{"", "https://example.com:11434", "http://192.168.1.2:11434"} {
+	for _, raw := range []string{"", "https://example.com:11434", "http://192.168.1.2:11434", "file://localhost/etc/passwd", "http://user:pass@127.0.0.1:11434", "http://127.0.0.1.example.com"} {
 		if LoopbackURL(raw) {
 			t.Errorf("LoopbackURL(%q) = true", raw)
 		}

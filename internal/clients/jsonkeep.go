@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/ks1686/peaproxy/internal/sizehint"
 )
 
 // upsertJSONKey sets key to value, keeping an existing key at its position and
@@ -143,7 +145,9 @@ func renderObject(body []byte, pairs []jsonPair) []byte {
 	// A nested object closes on the line its own key is on, which is one
 	// indentation step in from its children. The body's own last line says so.
 	closing := bodyIndentAt(body, bytes.LastIndexByte(body, '\n')+1)
-	out := make([]byte, 0, len(body)+len(pairs)*(len(indent)+8))
+	per := sizehint.Sum(len(indent), 8)
+	extra := sizehint.Mul(len(pairs), per)
+	out := make([]byte, 0, sizehint.Sum(len(body), extra))
 	out = append(out, '{', '\n')
 	unit := strings.TrimPrefix(indent, string(closing))
 	if unit == "" {
