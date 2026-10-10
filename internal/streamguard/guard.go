@@ -215,6 +215,13 @@ func (g *Guard) scanLocked() (keepalive bool, err error) {
 			if !g.unbounded {
 				g.deadline = time.Now().Add(g.timeout)
 			}
+			// Comment pings (`: ping`) and empty `data:` lines are not events,
+			// so they stay out of the prelude and cannot fill the byte cap.
+			// A blank line after a real event is that event's terminator.
+			// Dropping it glues Anthropic's `event: ping` onto `message_start`.
+			if strings.TrimSpace(line) == "" && len(kept) > 0 {
+				kept = append(kept, raw[i:end]...)
+			}
 			i = end
 		case lineError:
 			return keepalive, ErrPrelude

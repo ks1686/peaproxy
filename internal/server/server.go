@@ -276,7 +276,11 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ChatStream(requestCtx(r, raw), raw, sw)
-		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
+		status := http.StatusOK
+		if err != nil && !sw.started {
+			status = statusOf(err)
+		}
+		s.record(account, peek.Model, "openai", "/v1/chat/completions", true, status, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireOpenAI, err)
 		}
@@ -309,7 +313,11 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ResponsesStream(requestCtx(r, raw), raw, sw)
-		s.record(account, peek.Model, "responses", "/v1/responses", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
+		status := http.StatusOK
+		if err != nil && !sw.started {
+			status = statusOf(err)
+		}
+		s.record(account, peek.Model, "responses", "/v1/responses", true, status, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireOpenAI, err)
 		}
@@ -427,7 +435,11 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	if peek.Stream {
 		sw := &sseWriter{ResponseWriter: w}
 		account, err := s.gw.ClaudeChatStream(requestCtx(r, raw), raw, sw)
-		s.record(account, peek.Model, "claude", "/v1/messages", true, http.StatusOK, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
+		status := http.StatusOK
+		if err != nil && !sw.started {
+			status = statusOf(err)
+		}
+		s.record(account, peek.Model, "claude", "/v1/messages", true, status, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireAnthropic, err)
 		}
@@ -1167,12 +1179,53 @@ const (
 // clientMessage is what the client is told. An upstream body can echo request
 // fragments or credentials straight back at us, so any error that knows how to
 // redact itself does. The full text stays in the local request log.
+//
+// A classified limit is named. "upstream HTTP 400" with a null code is what
+// makes a harness stop a turn it could have retried or explained.
 func clientMessage(err error) string {
+	if gateway.ModelRefusesChat(err) {
+		return err.Error()
+	}
+	if msg, ok := limitClientMessage(err); ok {
+		return msg
+	}
 	var s interface{ Sanitized() string }
 	if errors.As(err, &s) {
 		return s.Sanitized()
 	}
 	return err.Error()
+}
+
+// limitClientMessage names a rate or usage limit without copying the provider
+// body. The upstream status stays so the client can still see which HTTP
+// failure it was.
+func limitClientMessage(err error) (string, bool) {
+	if router.Classify(err) != router.FailoverRateLimit {
+		return "", false
+	}
+	kind := "rate limit"
+	if router.ClientCode(err) == "usage_limit" {
+		kind = "usage limit"
+	}
+	base := "upstream " + kind
+	var he adapter.HTTPError
+	if errors.As(err, &he) && he.Status > 0 {
+		base = fmt.Sprintf("upstream %s (HTTP %d)", kind, he.Status)
+	}
+	var ce router.CooldownError
+	if errors.As(err, &ce) {
+		return "all matching accounts in cooldown: " + base, true
+	}
+	return base, true
+}
+
+// clientCode is a stable wire code. Empty means the OpenAI envelope keeps
+// code null. Provider bodies are not copied into it.
+func clientCode(err error) string {
+	if gateway.ModelRefusesChat(err) {
+		return "unsupported_api_for_model"
+	}
+	return router.ClientCode(err)
 }
 
 // errorTypeFor derives the wire's error type from the status, which is what the
@@ -1209,20 +1262,29 @@ func errorTypeFor(wr errWire, status int) string {
 
 func wireError(wr errWire, status int, err error) any {
 	msg := clientMessage(err)
+	typ := errorTypeFor(wr, status)
+	code := clientCode(err)
+	if code == "usage_limit" || code == "rate_limit" {
+		typ = "rate_limit_error"
+	}
+	var codeVal any
+	if code != "" {
+		codeVal = code
+	}
 	switch wr {
 	case wireOpenAI:
 		// param and code are part of the shape even when null; SDKs read both.
 		return map[string]any{"error": map[string]any{
 			"message": msg,
-			"type":    errorTypeFor(wr, status),
+			"type":    typ,
 			"param":   nil,
-			"code":    nil,
+			"code":    codeVal,
 		}}
 	case wireAnthropic:
 		return map[string]any{
 			"type": "error",
 			"error": map[string]any{
-				"type":    errorTypeFor(wr, status),
+				"type":    typ,
 				"message": msg,
 			},
 		}

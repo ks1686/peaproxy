@@ -41,9 +41,11 @@ main { flex: 1; }
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 1rem 1.1rem;
-  max-width: 58rem;
+  max-width: none;
   margin-bottom: 1rem;
+  overflow-x: auto;
 }
+main { width: min(100% - 1rem, 76rem); margin: 0 auto; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 label { font-size: 0.85rem; color: var(--muted); display: flex; flex-direction: column; gap: 0.2rem; }
 label.row {
@@ -74,7 +76,9 @@ pre { overflow: auto; background: #0e110c; padding: 0.75rem; border-radius: 8px;
 .pill.accent { border-color: var(--accent); color: var(--accent); }
 .pill.ok { border-color: var(--accent); color: var(--accent); }
 .row.tight { gap: 0.35rem; margin-top: 0.35rem; }
-td.preview { max-width: 28rem; word-break: break-word; font-size: 0.8rem; color: var(--muted); }
+td.preview, td.err { max-width: 28rem; word-break: break-word; font-size: 0.8rem; }
+td.preview { color: var(--muted); }
+.pill { border: 1px solid var(--border); border-radius: 999px; padding: 0.05rem 0.45rem; }
 footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); }
 .snippet { position: relative; }
 .snippet-actions { margin: 0.45rem 0 0.6rem; }

@@ -163,6 +163,25 @@ func TestTransientIncludesEdgeTransport503(t *testing.T) {
 	}
 }
 
+func TestTransientIncludesTransportFailures(t *testing.T) {
+	for _, msg := range []string{
+		`Post "https://example.test/v1/chat/completions": remote error: tls: bad record MAC`,
+		`read tcp 127.0.0.1:1->127.0.0.1:2: connection reset by peer`,
+		`http2: stream error: stream ID 1; INTERNAL_ERROR; received from peer`,
+		`unexpected EOF`,
+	} {
+		if !Transient(errors.New(msg)) {
+			t.Fatalf("not transient: %s", msg)
+		}
+	}
+	if Transient(context.Canceled) {
+		t.Fatal("a client cancel must not be retried")
+	}
+	if Transient(adapter.HTTPError{Status: 400, Body: "nope"}) {
+		t.Fatal("a 400 is not a transport failure")
+	}
+}
+
 func TestClientRetryAfterIsCappedForLongQuotaResets(t *testing.T) {
 	long := CooldownError{RetryAfter: time.Hour, Err: errors.New("quota reached. Resets in 166h")}
 	if got := RetryAfterSeconds(long); got != 60 {

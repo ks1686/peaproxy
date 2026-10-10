@@ -49,6 +49,15 @@ func TestAuthStartPostsDeviceCode(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer x-at" {
 				t.Errorf("chat auth %s", r.Header.Get("Authorization"))
 			}
+			if got := r.Header.Get("x-grok-client-version"); got == "" || got == "none" {
+				t.Errorf("x-grok-client-version = %q", got)
+			}
+			if r.Header.Get("X-XAI-Token-Auth") != "xai-grok-cli" {
+				t.Errorf("token auth %q", r.Header.Get("X-XAI-Token-Auth"))
+			}
+			if !strings.HasPrefix(r.Header.Get("User-Agent"), "xai-grok-workspace/") {
+				t.Errorf("user agent %q", r.Header.Get("User-Agent"))
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"choices": []map[string]any{{"message": map[string]string{"content": "hi grok"}}},
 			})

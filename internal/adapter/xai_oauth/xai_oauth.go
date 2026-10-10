@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +29,29 @@ const (
 	DiscoveryURL   = "https://auth.x.ai/.well-known/openid-configuration"
 	DefaultAPIBase = "https://cli-chat-proxy.grok.com/v1"
 	tokenExtra     = "token_endpoint"
+	// defaultGrokCLIVersion is the Grok CLI build cli-chat-proxy accepts.
+	// The proxy reports a missing x-grok-client-version as version "none"
+	// and answers HTTP 426. PEAPROXY_XAI_CLI_VERSION overrides this when
+	// xAI raises the floor before the next release. Stable on 2026-10-10
+	// was 1.0.50; the error text names 1.0.13 as the minimum.
+	defaultGrokCLIVersion = "1.0.50"
 )
+
+func grokCLIVersion() string {
+	if v := strings.TrimSpace(os.Getenv("PEAPROXY_XAI_CLI_VERSION")); v != "" {
+		return v
+	}
+	return defaultGrokCLIVersion
+}
+
+func grokCLIHeaders() map[string]string {
+	v := grokCLIVersion()
+	return map[string]string{
+		"x-grok-client-version": v,
+		"X-XAI-Token-Auth":      "xai-grok-cli",
+		"User-Agent":            "xai-grok-workspace/" + v,
+	}
+}
 
 // Adapter is an xAI Grok subscription OAuth client (device code + chat proxy).
 type Adapter struct {
@@ -285,6 +308,7 @@ func (a *Adapter) compat() (*oauthcompat.Tagged, error) {
 	a.mu.Unlock()
 	return oauthcompat.Open(adapter.Options{
 		ID: id, BaseURL: base, APIKey: tok.AccessToken, Tier: catalog.TierPaid,
+		ExtraHeaders: grokCLIHeaders(),
 	}, Name)
 }
 

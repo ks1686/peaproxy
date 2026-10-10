@@ -147,6 +147,28 @@ func TestKeepaliveIsNotBuffered(t *testing.T) {
 	}
 }
 
+func TestAnthropicPingStaysASeparateEvent(t *testing.T) {
+	var dst bytes.Buffer
+	g := New(&dst, 64<<10, time.Minute)
+	in := "event: ping\ndata: {\"type\": \"ping\"}\n\nevent: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\"}}\n\n"
+	// Split inside the ping payload the way a socket does.
+	cut := strings.Index(in, "ping\"}")
+	if _, err := g.Write([]byte(in[:cut])); err != nil {
+		t.Fatal(err)
+	}
+	if dst.Len() != 0 {
+		t.Fatalf("prelude forwarded early: %q", dst.String())
+	}
+	if _, err := g.Write([]byte(in[cut:])); err != nil {
+		t.Fatal(err)
+	}
+	got := dst.String()
+	const sep = "event: ping\ndata: {\"type\": \"ping\"}\n\nevent: message_start\n"
+	if !strings.Contains(got, sep) {
+		t.Fatalf("ping frame lost its blank line:\n%q", got)
+	}
+}
+
 func TestKeepaliveResetsTimeout(t *testing.T) {
 	var dst bytes.Buffer
 	g := New(&dst, 1024, 20*time.Millisecond)

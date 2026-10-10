@@ -26,6 +26,98 @@ func streamOnce(w http.ResponseWriter) {
 	}
 }
 
+// A streaming harness stops the turn when the first account answers 400.
+// Copilot does that for a model that is not on chat/completions
+// (unsupported_api_for_model) while another account can still serve it.
+// The non-streaming path already moves on. The stream must too, and it
+// must not cool the account down for a refusal that says nothing about quota.
+func TestChatStreamFailsOverWhenTheModelRefusesTheProtocol(t *testing.T) {
+	var first, second int
+	refuse := `{"error":{"message":"model \"gpt-6-luna\" is not accessible via the /chat/completions endpoint","code":"unsupported_api_for_model"}}`
+	a := streamStatusCounter(http.StatusBadRequest, refuse, &first)
+	b := streamStatusCounter(0, "", &second)
+	g := twoAccountGateway(t, a, b)
+
+	out := &strings.Builder{}
+	account, err := g.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), out)
+	if err != nil {
+		t.Fatalf("protocol refusal stopped the turn instead of failing over: %v", err)
+	}
+	if first == 0 || second == 0 {
+		t.Fatalf("attempts first=%d second=%d", first, second)
+	}
+	if account != "acct-b" {
+		t.Fatalf("served by %q, want the account that can answer", account)
+	}
+	if !strings.Contains(out.String(), "ok") {
+		t.Errorf("the client did not get the healthy account's answer: %s", out.String())
+	}
+	for _, cd := range g.Cooldowns() {
+		if cd.AccountID == "acct-a" {
+			t.Errorf("a protocol refusal cooled the account: %+v", cd)
+		}
+	}
+}
+
+// Providers report an exhausted quota as HTTP 400 with a usage-limit phrase.
+// That is a reason to try the next account, not a malformed request.
+func TestChatStreamFailsOverOnAUsageLimit400(t *testing.T) {
+	var first, second int
+	limit := `{"error":{"message":"You have reached your usage limit","type":"invalid_request_error"}}`
+	a := streamStatusCounter(http.StatusBadRequest, limit, &first)
+	b := streamStatusCounter(0, "", &second)
+	g := twoAccountGateway(t, a, b)
+
+	out := &strings.Builder{}
+	if _, err := g.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), out); err != nil {
+		t.Fatalf("a usage-limit 400 stopped the turn instead of failing over: %v", err)
+	}
+	if second == 0 {
+		t.Error("the healthy account was never used")
+	}
+	if !strings.Contains(out.String(), "ok") {
+		t.Errorf("the client did not get the healthy account's answer: %s", out.String())
+	}
+}
+
+func TestClaudeStreamFailsOverWhenTheModelRefusesTheProtocol(t *testing.T) {
+	var first, second int
+	refuse := `{"error":{"message":"model \"claude-opus-5.5\" is not accessible via the /chat/completions endpoint","code":"unsupported_api_for_model"}}`
+	a := streamStatusCounter(http.StatusBadRequest, refuse, &first)
+	b := streamStatusCounter(0, "", &second)
+	g := twoAccountGateway(t, a, b)
+
+	out := &strings.Builder{}
+	if _, err := g.ClaudeChatStream(context.Background(), claudeBody("m"), out); err != nil {
+		t.Fatalf("protocol refusal stopped the turn instead of failing over: %v", err)
+	}
+	if second == 0 {
+		t.Error("the healthy account was never used")
+	}
+	if !strings.Contains(out.String(), "ok") {
+		t.Errorf("the client did not get the healthy account's answer: %s", out.String())
+	}
+}
+
+func TestResponsesStreamFailsOverWhenTheModelRefusesTheProtocol(t *testing.T) {
+	var first, second int
+	refuse := `{"error":{"message":"model \"gpt-6-luna\" is not accessible via the /chat/completions endpoint","code":"unsupported_api_for_model"}}`
+	a := streamStatusCounter(http.StatusBadRequest, refuse, &first)
+	b := streamStatusCounter(0, "", &second)
+	g := twoAccountGateway(t, a, b)
+
+	out := &strings.Builder{}
+	if _, err := g.ResponsesStream(context.Background(), responsesBody("m"), out); err != nil {
+		t.Fatalf("protocol refusal stopped the turn instead of failing over: %v", err)
+	}
+	if second == 0 {
+		t.Error("the healthy account was never used")
+	}
+	if !strings.Contains(out.String(), "ok") {
+		t.Errorf("the client did not get the healthy account's answer: %s", out.String())
+	}
+}
+
 func TestResponsesStreamFailsOverOnA502(t *testing.T) {
 	var first, second int
 	a := streamStatusCounter(http.StatusBadGateway, "upstream is down", &first)
