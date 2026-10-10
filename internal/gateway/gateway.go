@@ -80,6 +80,12 @@ type Gateway struct {
 	// lastReloadErr is the same idea for the config watcher: one line per
 	// distinct failure, cleared by the next reload that works.
 	lastReloadErr string
+	// watchSig is the config file as New left it. The watcher goroutine starts
+	// later — after the first catalog refresh, and whenever the runtime gets
+	// to it — so a stat taken then can already include a write that memory
+	// does not have. That write would become the baseline and never be adopted.
+	watchSig    fileSig
+	watchSigSet bool
 	// saveMu serialises mutate+persist. It is taken before mu and is never
 	// held across Refresh or any adapter call, so a PersistOAuth callback from
 	// ListModels cannot deadlock.
@@ -151,6 +157,12 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	g.Artifacts = newArtifactStore(&cfg)
 	if err := g.rebuild(); err != nil {
 		return nil, err
+	}
+	if path != "" {
+		if sig, ok := statSig(path); ok {
+			g.watchSig = sig
+			g.watchSigSet = true
+		}
 	}
 	return g, nil
 }

@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,12 +19,28 @@ import (
 // or a catalog edit from the CLI only appears at the next save -- which for an
 // idle server is never.
 
+func watchUpstream(g *Gateway) string {
+	providers := g.Config().Providers
+	if len(providers) == 0 || providers[0].BaseURL == "" {
+		return "http://127.0.0.1:1/v1"
+	}
+	return providers[0].BaseURL
+}
+
 func watchTestGateway(t *testing.T) (*Gateway, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
+	// A local upstream so adopting an account can refresh its catalog without
+	// dialing a real provider. The watcher rebuilds live adapters on a provider
+	// change and then refreshes.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(upstream.Close)
 	cfg := config.Default()
 	cfg.RequestLog = true
-	cfg.Providers = []config.Provider{{ID: "a", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-a"}}
+	cfg.Providers = []config.Provider{{ID: "a", Adapter: "openai_compat", BaseURL: upstream.URL + "/v1", APIKey: "sk-a"}}
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +56,7 @@ func TestConfigWatcherAdoptsAnAccountAddedElsewhere(t *testing.T) {
 	startWatch(t, g, testWatchInterval)
 
 	writeConfig(t, path, func(c *config.Config) {
-		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-b"})
+		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: watchUpstream(g), APIKey: "sk-b"})
 	})
 	waitFor(t, 3*time.Second, func() bool { return len(g.Config().Providers) == 2 }, "the added account was never adopted")
 
@@ -57,6 +76,53 @@ func TestConfigWatcherAdoptsARemovedAccount(t *testing.T) {
 
 	writeConfig(t, path, func(c *config.Config) { c.Providers = nil })
 	waitFor(t, 3*time.Second, func() bool { return len(g.Config().Providers) == 0 }, "the removed account was never dropped")
+}
+
+// A write that lands after New, while the watcher goroutine is not scheduled
+// yet, still has to be adopted. Sampling the baseline inside that goroutine
+// treats the write as the starting file and then never reloads it. That is
+// the timeout in TestConfigWatcherAdoptsARemovedAccount on the macOS runner.
+func TestConfigWatcherAdoptsAWriteThatBeatsItsGoroutine(t *testing.T) {
+	g, path := watchTestGateway(t)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	free := func() { once.Do(func() { close(release) }) }
+	watchBeforeSample = func() {
+		close(started)
+		<-release
+	}
+	startWatch(t, g, testWatchInterval)
+	t.Cleanup(func() {
+		watchBeforeSample = nil
+		free()
+	})
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher never reached its baseline sample")
+	}
+	writeConfig(t, path, func(c *config.Config) { c.Providers = nil })
+	free()
+	waitFor(t, 3*time.Second, func() bool { return len(g.Config().Providers) == 0 }, "a write that landed before the watcher goroutine ran was never adopted")
+}
+
+// Config() is the snapshot the UI reads. Routing uses the live adapter built
+// at startup, so a removed account has to leave that set too.
+func TestConfigWatcherDropsTheLiveAdapterOfARemovedAccount(t *testing.T) {
+	g, path := watchTestGateway(t)
+	if _, ok := g.AdapterByID("a"); !ok {
+		t.Fatal("account a was not live at start")
+	}
+	startWatch(t, g, testWatchInterval)
+
+	writeConfig(t, path, func(c *config.Config) { c.Providers = nil })
+	waitFor(t, 3*time.Second, func() bool {
+		_, ok := g.AdapterByID("a")
+		return !ok
+	}, "the removed account was still routable")
 }
 
 func TestConfigWatcherAdoptsPerRequestSettings(t *testing.T) {
@@ -106,7 +172,7 @@ func TestConfigWatcherSkipsWhileASaveIsInProgress(t *testing.T) {
 
 	g.saveMu.Lock()
 	writeConfig(t, path, func(c *config.Config) {
-		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-b"})
+		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: watchUpstream(g), APIKey: "sk-b"})
 	})
 	// Several ticks with the save lock held.
 	time.Sleep(20 * testWatchInterval)
@@ -134,8 +200,8 @@ func TestConfigWatcherSurvivesABrokenConfig(t *testing.T) {
 	// writeConfig, which would have to load the broken file first.
 	good := config.Default()
 	good.Providers = []config.Provider{
-		{ID: "a", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-a"},
-		{ID: "b", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-b"},
+		{ID: "a", Adapter: "openai_compat", BaseURL: watchUpstream(g), APIKey: "sk-a"},
+		{ID: "b", Adapter: "openai_compat", BaseURL: watchUpstream(g), APIKey: "sk-b"},
 	}
 	if err := config.Save(path, good); err != nil {
 		t.Fatal(err)
@@ -181,7 +247,7 @@ func TestAdoptedChangeSurvivesTheNextServerSave(t *testing.T) {
 	startWatch(t, g, testWatchInterval)
 
 	writeConfig(t, path, func(c *config.Config) {
-		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: "https://api.openai.com/v1", APIKey: "sk-b"})
+		c.Providers = append(c.Providers, config.Provider{ID: "b", Adapter: "openai_compat", BaseURL: watchUpstream(g), APIKey: "sk-b"})
 		c.Failover.Policy = "adaptive"
 	})
 	waitFor(t, 3*time.Second, func() bool {
