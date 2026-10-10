@@ -10,6 +10,10 @@ import (
 	"github.com/ks1686/peaproxy/internal/config"
 )
 
+// watchBeforeSample, when set, runs before the watcher reads its baseline.
+// Tests use it to land a write in the gap before the goroutine is scheduled.
+var watchBeforeSample func()
+
 // configWatchInterval is how often the config file is checked. Polling beats
 // fsnotify here: a rename-replace writer -- which is what every atomic save is,
 // including our own -- produces an event the watcher may never see on some
@@ -56,9 +60,18 @@ func (g *Gateway) watchConfig(ctx context.Context, interval time.Duration) {
 	if path == "" {
 		return
 	}
-	// Start from what is on disk now: serve has already loaded this file, and
-	// adopting it again would be a pointless rebuild.
-	last, _ := statSig(path)
+	// Baseline is the file New observed. A stat here would run only after this
+	// goroutine is scheduled, which is after serve's first Refresh, and would
+	// record any write from that gap as the starting file.
+	if watchBeforeSample != nil {
+		watchBeforeSample()
+	}
+	g.mu.RLock()
+	last, have := g.watchSig, g.watchSigSet
+	g.mu.RUnlock()
+	if !have {
+		last, _ = statSig(path)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -129,6 +142,7 @@ func (g *Gateway) reloadFromDisk(path string) (skipped bool, err error) {
 func (g *Gateway) adopt(disk config.Config) (rebuilt bool, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	prev := append([]config.Provider(nil), g.cfg.Providers...)
 	next := config.Clone(g.cfg)
 	// Request-path settings. These are read per request, so a file edit should
 	// take effect without a restart.
@@ -153,24 +167,22 @@ func (g *Gateway) adopt(disk config.Config) (rebuilt bool, err error) {
 	// The merge base moves with it, so the next save does not undo what was just
 	// adopted.
 	g.saved = next
-	changed := !reflect.DeepEqual(g.cfg.Providers, disk.Providers)
-	if changed {
-		kept := make(map[string]bool, len(g.cfg.Providers))
-		for _, p := range g.cfg.Providers {
-			kept[p.ID] = true
-		}
-		g.mu.Unlock()
-		err = g.rebuild()
-		g.mu.Lock()
-		for _, p := range disk.Providers {
-			if !kept[p.ID] {
-				g.mu.Lock()
-				g.forgetAccountLocked(p.ID)
-				g.mu.Unlock()
-			}
+	// Compare the previous set. g.cfg.Providers is already disk's, so comparing
+	// those two is always equal and the live adapters would never be rebuilt.
+	if reflect.DeepEqual(prev, disk.Providers) {
+		return false, nil
+	}
+	kept := make(map[string]bool, len(disk.Providers))
+	for _, p := range disk.Providers {
+		kept[p.ID] = true
+	}
+	for _, p := range prev {
+		if !kept[p.ID] {
+			g.forgetAccountLocked(p.ID)
 		}
 	}
-	return changed, err
+	err = g.rebuild()
+	return true, err
 }
 
 // noteReloadErr logs a failed reload once per distinct error, the way a failed
