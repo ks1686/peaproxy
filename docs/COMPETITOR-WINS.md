@@ -1,6 +1,6 @@
 # Competitor issue wins → PeaProxy design goals
 
-Sources: open/recent issues on automazeio/vibeproxy and router-for-me/CLIProxyAPI (sampled 2026-09-26). Originally **product goals**. Status below is **2.1.x on main** (latest GitHub Release **v2.1.0**), not a claim that every upstream issue is closed.
+Sources: open/recent issues on automazeio/vibeproxy and router-for-me/CLIProxyAPI (sampled 2026-09-26). Originally **product goals**. The survey below was written against **2.1.x** (GitHub Release **v2.1.0**). Current release is **v3.0.9** ([V3.md](V3.md)). Not a claim that every upstream issue is closed.
 
 Cross-links: [PLAN.md](PLAN.md) (phases), [PROVIDERS.md](PROVIDERS.md) (adapters), [HARNESS.md](HARNESS.md) (client presets), [OAUTH.md](OAUTH.md) (liability), [V1.md](V1.md) (1.0 cut).
 
