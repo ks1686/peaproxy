@@ -11,6 +11,7 @@ const pages = {
 
 const FILTER_KEY = "peaproxy.catalogFilter";
 const TOKEN_KEY = "peaproxy.adminToken";
+let pendingRelogin = "";
 
 function render(name) {
   const fn = pages[name];
@@ -648,6 +649,12 @@ function accountsPage(root) {
           }
         });
       });
+      if (pendingRelogin) {
+        const id = pendingRelogin;
+        pendingRelogin = "";
+        const start = document.querySelector('[data-oauth="' + CSS.escape(id) + '"]');
+        if (start) start.click();
+      }
     } catch (err) {
       host.innerHTML = emptyState("Could not load accounts", err.message);
       toast(err.message);
@@ -1065,7 +1072,7 @@ function healthPage(root) {
       <p class="muted">After a rate-limit, overload, or auth-expired failure the account is skipped for 30s, or for the provider's reset hint when it sends one. Connection failures (502, 504, edge 503) skip it for 5s; a slow first token moves on without a cooldown. Cooled accounts are not re-hit until the window expires (avoids cooldown storms). Routing follows <code>failover.policy</code> (round-robin default, or fill-first / sticky).</p>
       <div id="cd">loading…</div>
     </section>
-    <section class="card"><h2>Gateway</h2><pre id="h">loading…</pre></section>
+    <section class="card"><h2>Gateway</h2><details><summary>Raw health JSON</summary><pre id="h">loading…</pre></details></section>
     <section class="card"><h2>Usage</h2><div id="u">loading…</div></section>`;
   const fmtRemaining = (ms) => {
     const n = Number(ms) || 0;
@@ -1090,7 +1097,7 @@ function healthPage(root) {
         <td>${quotaRemainingHTML(quotaMap[a.accountId], a.quotaHint)}</td>
         <td>${escapeHtml(String(a.models ?? 0))}</td>
         <td>${escapeHtml(String(a.latencyMs ?? 0))}ms</td>
-        <td>${a.error ? `<span class="warn">${escapeHtml(a.error)}</span>` : ""}</td>
+        <td>${healthErrorHTML(a)}</td>
       </tr>`
         )
         .join("")}</tbody></table>`
@@ -1121,6 +1128,12 @@ function healthPage(root) {
       <thead><tr><th>Account</th><th>Reason</th><th>Cooldown</th><th>Quota remaining</th><th>Until</th></tr></thead>
       <tbody>${rows}</tbody></table>`
       : emptyState("No accounts in cooldown", "Retryable failover (429/401, rate-limit / overloaded / auth-expired bodies) will show a skip window here. Last known remaining still appears on adapter health.");
+    document.querySelectorAll("[data-relogin]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        pendingRelogin = btn.dataset.relogin || "";
+        render("accounts");
+      });
+    });
   };
   loadHealth().catch((err) => {
     document.getElementById("h").textContent = err.message;
@@ -1178,16 +1191,19 @@ function requestsPage(root) {
       return;
     }
     host.innerHTML = `<table>
-      <thead><tr><th>Time</th><th>Path</th><th>Model</th><th>Account</th><th>Status</th><th>ms</th><th>Preview</th></tr></thead>
+      <thead><tr><th>Time</th><th>Path</th><th>Model</th><th>Account</th><th>Status</th><th>Error</th><th>ms</th><th>Preview</th></tr></thead>
       <tbody>${events
         .map((e) => {
           const t = e.time ? new Date(e.time).toLocaleTimeString() : "";
+          const failed = !!e.error && (e.status === 200 || e.status === 0 || !e.status);
+          const statusLabel = failed ? "error" : String(e.status ?? "");
           return `<tr>
             <td>${escapeHtml(t)}</td>
             <td><code>${escapeHtml(e.path || e.protocol || "")}</code></td>
             <td>${escapeHtml(e.model || "")}</td>
             <td>${escapeHtml(e.accountId || "")}${e.quotaHint ? ` <span class="muted">${escapeHtml(e.quotaHint)}</span>` : ""}</td>
-            <td>${escapeHtml(String(e.status || ""))}${e.error ? ` <span class="warn">${escapeHtml(e.error)}</span>` : ""}</td>
+            <td><span class="pill ${failed ? "" : "ok"}">${escapeHtml(statusLabel)}</span></td>
+            <td class="err">${e.error ? `<span class="warn">${escapeHtml(e.error)}</span>` : ""}</td>
             <td>${escapeHtml(String(e.durationMs || 0))}</td>
             <td class="preview">${escapeHtml(e.preview || "")}</td>
           </tr>`;
@@ -1349,6 +1365,15 @@ function oauthCLIProvider(adapter) {
     default:
       return adapter;
   }
+}
+
+function healthErrorHTML(a) {
+  if (!a || !a.error) return "";
+  const relogin = /sign in again|invalid_grant|refresh token/i.test(a.error);
+  const btn = relogin
+    ? ` <button class="btn" type="button" data-relogin="${escapeHtml(a.accountId || "")}">Sign in again</button>`
+    : "";
+  return `<span class="warn">${escapeHtml(a.error)}</span>${btn}`;
 }
 
 function escapeHtml(s) {

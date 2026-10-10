@@ -776,11 +776,13 @@ type geminiPart struct {
 type geminiFunctionCall struct {
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
+	ID   string          `json:"id,omitempty"`
 }
 
 type geminiFunctionResponse struct {
 	Name     string             `json:"name"`
 	Response geminiToolResponse `json:"response"`
+	ID       string             `json:"id,omitempty"`
 }
 
 type geminiToolResponse struct {
@@ -890,6 +892,7 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 	type toolCall struct {
 		name  string
 		order int
+		id    string
 	}
 	var sys strings.Builder
 	var contents []geminiContent
@@ -919,9 +922,16 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 				if args[0] != '{' || !json.Valid(args) || call.Function.Name == "" {
 					return nil, fmt.Errorf("antigravity: invalid function call %q", call.ID)
 				}
-				calls[call.ID] = toolCall{name: call.Function.Name, order: i}
+				// Cloud Code's OpenAI models (gpt-oss) reject an assistant
+				// tool_calls element whose id is empty. Keep the client's id,
+				// and mint one when the client left it blank.
+				id := call.ID
+				if id == "" {
+					id = "call_" + strconv.Itoa(i)
+				}
+				calls[id] = toolCall{name: call.Function.Name, order: i, id: id}
 				parts = append(parts, geminiPart{
-					FunctionCall: &geminiFunctionCall{Name: call.Function.Name, Args: args},
+					FunctionCall: &geminiFunctionCall{ID: id, Name: call.Function.Name, Args: args},
 					// Cloud Code accepts this sentinel for unsigned OpenAI history;
 					// OpenAI-compatible clients do not round-trip Gemini signatures.
 					ThoughtSignature: "skip_thought_signature_validator",
@@ -932,6 +942,12 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 			}
 		case "tool":
 			call, known := calls[m.ToolCallID]
+			if !known && m.ToolCallID == "" && len(calls) == 1 {
+				for _, only := range calls {
+					call = only
+					known = true
+				}
+			}
 			if !known {
 				contents = append(contents, geminiContent{Role: "user", Parts: geminiPartsFromContent(m.Content)})
 				previousRole = "user"
@@ -941,7 +957,7 @@ func (a *Adapter) geminiBody(req adapter.ChatRequest, stream bool) ([]byte, erro
 			if len(content) == 0 {
 				content = json.RawMessage("null")
 			}
-			part := geminiPart{FunctionResponse: &geminiFunctionResponse{Name: call.name, Response: geminiToolResponse{Content: content}}}
+			part := geminiPart{FunctionResponse: &geminiFunctionResponse{ID: call.id, Name: call.name, Response: geminiToolResponse{Content: content}}}
 			if previousRole != "tool" {
 				contents = append(contents, geminiContent{Role: "user"})
 				groupOrder = nil

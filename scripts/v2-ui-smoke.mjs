@@ -330,6 +330,55 @@ try {
   if (dialogFired || (await page.evaluate(() => window.__xss))) {
     throw new Error("adversarial model id executed");
   }
+
+  await page.route(/\/admin\/health$/, (route) =>
+    route.fulfill({
+      json: {
+        status: "ok",
+        adapterHealth: [
+          {
+            accountId: "work-copilot",
+            adapter: "copilot_oauth",
+            status: "error",
+            error: "sign in again; the saved refresh token was rejected",
+            models: 0,
+          },
+        ],
+        quota: [],
+        cooldowns: [],
+      },
+    }),
+  );
+  await page.route(/\/admin\/requests$/, (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        path: "/tmp/requests.log",
+        events: [
+          {
+            time: "2026-10-10T12:00:00Z",
+            path: "/v1/chat/completions",
+            model: "gpt-6-luna",
+            accountId: "copilot-oauth",
+            status: 200,
+            error: "upstream HTTP 400: unsupported_api_for_model",
+            durationMs: 12,
+            preview: "hi",
+          },
+        ],
+      },
+    }),
+  );
+  await page.getByRole("button", { name: "Health" }).click();
+  await page.getByRole("button", { name: "Sign in again" }).click();
+  await page.getByRole("heading", { name: "Add account" }).waitFor();
+  await page.getByRole("button", { name: "Request log" }).click();
+  await page.locator("#req-table").getByText("unsupported_api_for_model").waitFor({ timeout: 10000 });
+  const statusText = await page.locator("#req-table tbody tr").first().locator("td").nth(4).innerText();
+  if (!statusText.toLowerCase().includes("error")) {
+    throw new Error("a logged failure with status 200 still reads as success: " + statusText);
+  }
+  console.log("health sign-in and request-log failure column rendered");
 } finally {
   const proxyExit = new Promise((resolve) => {
     if (proxy.exitCode !== null || proxy.signalCode !== null) {

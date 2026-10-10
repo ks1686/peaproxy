@@ -44,6 +44,8 @@ func TestClassifyErrorBodies(t *testing.T) {
 		{"overloaded phrase on 500", 500, `{"error":{"message":"The model is overloaded, try again later"}}`, FailoverOverloaded},
 		{"auth expired json", 403, `{"error":{"type":"authentication_error","message":"invalid x-api-key"}}`, FailoverAuth},
 		{"token expired phrase", 400, `{"error":"access token expired"}`, FailoverAuth},
+		{"usage limit phrase on 400", 400, `{"error":{"message":"You have reached your usage limit","type":"invalid_request_error"}}`, FailoverRateLimit},
+		{"out of usage phrase on 400", 400, `{"error":{"message":"out of usage for this model"}}`, FailoverRateLimit},
 		{"plain 400 stays terminal", 400, `{"error":{"type":"invalid_request_error","message":"messages must be an array"}}`, FailoverNone},
 		{"zen free tier", 403, `{"type":"error","error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}}`, FailoverEntitlement},
 		{"payment required", 402, `{"error":{"message":"insufficient funds"}}`, FailoverEntitlement},

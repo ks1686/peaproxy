@@ -315,7 +315,7 @@ func (g *Gateway) Refresh(ctx context.Context) {
 		if err != nil {
 			g.observeLatency(inst.Provider.ID, time.Since(start), err)
 			h.Status = "error"
-			h.Error = usage.Redact(err.Error())
+			h.Error = healthErrorText(err)
 			all = append(all, catalog.Model{
 				ID:        inst.Provider.ID + ":unavailable",
 				Provider:  inst.Provider.Adapter,
@@ -397,6 +397,12 @@ func (g *Gateway) Models() []catalog.Model {
 // that worked a moment ago is not a useful answer.
 var errModelRefusesChat = errors.New("this provider does not serve that model on the chat protocol; it has been removed from /v1/models")
 
+// ModelRefusesChat reports the sentinel returned when every candidate has
+// refused the model on this protocol.
+func ModelRefusesChat(err error) bool {
+	return errors.Is(err, errModelRefusesChat)
+}
+
 func protocolRefused(err error) bool {
 	var he adapter.HTTPError
 	if !errors.As(err, &he) || he.Status != http.StatusBadRequest {
@@ -406,6 +412,17 @@ func protocolRefused(err error) bool {
 	return strings.Contains(b, "modelprotocolunsupported") ||
 		strings.Contains(b, "does not support this protocol") ||
 		strings.Contains(b, "unsupported_api_for_model")
+}
+
+// noteProtocolRefusal records a provider refusal and reports whether the
+// caller should try the next account. A refusal is not an account failure,
+// so it does not start a cooldown.
+func (g *Gateway) noteProtocolRefusal(account, model string, err error) bool {
+	if !protocolRefused(err) {
+		return false
+	}
+	g.markModelNotChat(account, model)
+	return true
 }
 
 // markModelNotChat records that this provider refused to serve the model on the
@@ -726,10 +743,15 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var slowSkipped, admissionSkipped bool
+	var slowSkipped, admissionSkipped, refused bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
+		if g.notChatModel(inst.Provider.ID, model) {
+			last = errModelRefusesChat
+			refused = true
+			continue
+		}
 		dest := newRouteRewriter(guard, model, client)
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
@@ -773,6 +795,11 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 			slowSkipped = true
 			continue
 		}
+		if g.noteProtocolRefusal(inst.Provider.ID, model, callErr) {
+			last = callErr
+			refused = true
+			continue
+		}
 		if retryable(callErr) || router.Transient(callErr) || preludeFailover(callErr) {
 			g.markCooldown(inst.Provider.ID, model, callErr)
 			continue
@@ -783,6 +810,9 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (stri
 	// "every account is cooling" would be a lie.
 	if slowSkipped || admissionSkipped {
 		return lastAccount, last
+	}
+	if refused && (protocolRefused(last) || errors.Is(last, errModelRefusesChat)) {
+		return lastAccount, errModelRefusesChat
 	}
 	return lastAccount, cooldownErr(last)
 }
@@ -1235,13 +1265,18 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	guard := streamguard.New(watch, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var slowSkipped, admissionSkipped bool
+	var slowSkipped, admissionSkipped, refused bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeResponses](cands, xerr == nil)
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
+		}
+		if g.notChatModel(inst.Provider.ID, model) {
+			last = errModelRefusesChat
+			refused = true
+			continue
 		}
 		dest := newRouteRewriter(guard, model, client)
 		if nr, ok := inst.Adapter.(adapter.NativeResponses); ok {
@@ -1282,6 +1317,11 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			}
 			if slowPrelude(err) {
 				slowSkipped = true
+				continue
+			}
+			if g.noteProtocolRefusal(inst.Provider.ID, model, err) {
+				last = err
+				refused = true
 				continue
 			}
 			if failoverOn(err) {
@@ -1351,6 +1391,11 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			slowSkipped = true
 			continue
 		}
+		if g.noteProtocolRefusal(inst.Provider.ID, model, err) {
+			last = err
+			refused = true
+			continue
+		}
 		if failoverOn(err) {
 			g.markCooldown(inst.Provider.ID, model, err)
 			continue
@@ -1365,6 +1410,9 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	}
 	if retryable(last) && !slowSkipped && !admissionSkipped {
 		return lastAccount, cooldownErr(last)
+	}
+	if refused && (protocolRefused(last) || errors.Is(last, errModelRefusesChat)) {
+		return lastAccount, errModelRefusesChat
 	}
 	return lastAccount, last
 }
@@ -1491,13 +1539,18 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var slowSkipped, admissionSkipped bool
+	var slowSkipped, admissionSkipped, refused bool
 	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeMessages](cands, xerr == nil)
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
 			oaReq.Model, oaReq.Raw = inst.applyModel(model, oaReq.Raw)
+		}
+		if g.notChatModel(inst.Provider.ID, model) {
+			last = errModelRefusesChat
+			refused = true
+			continue
 		}
 		dest := newRouteRewriter(guard, model, client)
 		if nm, ok := inst.Adapter.(adapter.NativeMessages); ok {
@@ -1526,6 +1579,11 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			}
 			if slowPrelude(err) {
 				slowSkipped = true
+				continue
+			}
+			if g.noteProtocolRefusal(inst.Provider.ID, model, err) {
+				last = err
+				refused = true
 				continue
 			}
 			if failoverOn(err) {
@@ -1592,6 +1650,11 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			slowSkipped = true
 			continue
 		}
+		if g.noteProtocolRefusal(inst.Provider.ID, model, err) {
+			last = err
+			refused = true
+			continue
+		}
 		if failoverOn(err) {
 			g.markCooldown(inst.Provider.ID, model, err)
 			continue
@@ -1606,6 +1669,9 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	}
 	if retryable(last) && !slowSkipped && !admissionSkipped {
 		return lastAccount, cooldownErr(last)
+	}
+	if refused && (protocolRefused(last) || errors.Is(last, errModelRefusesChat)) {
+		return lastAccount, errModelRefusesChat
 	}
 	return lastAccount, last
 }
@@ -1977,6 +2043,20 @@ func (g *Gateway) Cooldowns() []Cooldown {
 	return out
 }
 
+// healthErrorText is what Health shows. An auth failure keeps the upstream
+// body out of the UI; the operator needs to sign in again, not the raw
+// invalid_grant JSON. Other errors stay redacted.
+func healthErrorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	lower := strings.ToLower(err.Error())
+	if router.Classify(err) == router.FailoverAuth || strings.Contains(lower, "invalid_grant") || strings.Contains(lower, "refresh token") {
+		return "sign in again; the saved refresh token was rejected"
+	}
+	return usage.Redact(err.Error())
+}
+
 // AdapterHealth returns last probe/ListModels status, overlaying active cooldowns.
 func (g *Gateway) AdapterHealth() []AdapterHealth {
 	g.mu.Lock()
@@ -2022,7 +2102,7 @@ func (g *Gateway) Probe(ctx context.Context) []AdapterHealth {
 		}
 		if err != nil {
 			h.Status = "error"
-			h.Error = usage.Redact(err.Error())
+			h.Error = healthErrorText(err)
 		} else {
 			h.Status = "ok"
 		}

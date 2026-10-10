@@ -89,10 +89,25 @@ func TestGeminiToolHistory(t *testing.T) {
 	if len(c) != 2 || c[0].Role != "model" || len(c[0].Parts) != 3 || c[1].Role != "user" || len(c[1].Parts) != 2 {
 		t.Fatalf("history: %s", body)
 	}
-	for _, want := range []string{`"functionCall":{"name":"read","args":{"z":1,"a":2}}`, `"thoughtSignature":"skip_thought_signature_validator"`, `"functionResponse":{"name":"list","response":{"content":"listing"}}`, `"functionResponse":{"name":"read","response":{"content":"file"}}`} {
+	for _, want := range []string{`"functionCall":{"name":"read","args":{"z":1,"a":2},"id":"one"}`, `"thoughtSignature":"skip_thought_signature_validator"`, `"functionResponse":{"name":"list","response":{"content":"listing"},"id":"two"}`, `"functionResponse":{"name":"read","response":{"content":"file"},"id":"one"}`} {
 		if !bytes.Contains(body, []byte(want)) {
 			t.Fatalf("missing %s in %s", want, body)
 		}
+	}
+}
+
+func TestGeminiToolCallWithoutIDIsStillPopulated(t *testing.T) {
+	a := &Adapter{}
+	raw := []byte(`{"messages":[{"role":"assistant","tool_calls":[{"type":"function","function":{"name":"read","arguments":"{}"}}]},{"role":"tool","tool_call_id":"","content":"ok"}]}`)
+	body, err := a.geminiBody(adapter.ChatRequest{Model: "gpt-oss-120b-medium", Raw: raw}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte(`"functionCall":{"name":"read","args":{},"id":"call_0"}`)) {
+		t.Fatalf("missing minted id: %s", body)
+	}
+	if !bytes.Contains(body, []byte(`"id":"call_0"`)) {
+		t.Fatalf("response id missing: %s", body)
 	}
 }
 

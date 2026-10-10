@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -69,18 +70,24 @@ func Classify(err error) FailoverClass {
 // provider saying it is overloaded. The gateway retries that account once
 // before cooling it. 403 is not transient and does not fail over.
 func Transient(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
 	var he adapter.HTTPError
-	if !errors.As(err, &he) {
-		return false
+	if errors.As(err, &he) {
+		switch he.Status {
+		case http.StatusBadGateway, http.StatusGatewayTimeout:
+			return true
+		case http.StatusServiceUnavailable:
+			return containsAny(strings.ToLower(he.Body), edgeTransportPatterns)
+		default:
+			return false
+		}
 	}
-	switch he.Status {
-	case http.StatusBadGateway, http.StatusGatewayTimeout:
-		return true
-	case http.StatusServiceUnavailable:
-		return containsAny(strings.ToLower(he.Body), edgeTransportPatterns)
-	default:
-		return false
-	}
+	// A TLS or TCP failure never becomes an HTTPError. The request log shows
+	// these ending the stream on the first try (bad record MAC, reset,
+	// HTTP/2 INTERNAL_ERROR). One retry, then a short cooldown, matches 502.
+	return containsAny(strings.ToLower(err.Error()), transportPatterns)
 }
 
 var edgeTransportPatterns = []string{
@@ -88,6 +95,17 @@ var edgeTransportPatterns = []string{
 	"reset before headers",
 	"connection refused",
 	"connection timeout",
+}
+
+var transportPatterns = []string{
+	"bad record mac",
+	"connection reset",
+	"broken pipe",
+	"internal_error",
+	"unexpected eof",
+	"i/o timeout",
+	"client.timeout",
+	"tls:",
 }
 
 func classifyStatus(status int) FailoverClass {
@@ -178,8 +196,36 @@ var rateLimitPatterns = []string{
 	"quota exceeded",
 	"quota_exceeded",
 	"usage_limit",
+	"usage limit",
+	"out of usage",
 	"tokens_exceeded",
 	"billing_hard_limit",
+}
+
+// usageLimitPatterns are the rate-limit phrases that mean the quota is spent,
+// as opposed to a short request-rate window. The client is told which one.
+var usageLimitPatterns = []string{
+	"usage_limit",
+	"usage limit",
+	"out of usage",
+	"insufficient_quota",
+	"quota exceeded",
+	"quota_exceeded",
+	"billing_hard_limit",
+}
+
+// ClientCode is a stable OpenAI error code for a classified failure.
+// It is empty when the error is not a rate or usage limit. It never includes
+// provider body text.
+func ClientCode(err error) string {
+	if Classify(err) != FailoverRateLimit {
+		return ""
+	}
+	var he adapter.HTTPError
+	if errors.As(err, &he) && containsAny(strings.ToLower(he.Body), usageLimitPatterns) {
+		return "usage_limit"
+	}
+	return "rate_limit"
 }
 
 var overloadedPatterns = []string{

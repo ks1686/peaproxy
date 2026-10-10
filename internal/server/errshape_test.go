@@ -291,6 +291,59 @@ func TestCooldownReachesClientAs503Sanitized(t *testing.T) {
 	}
 }
 
+// A streaming client sees the refusal before any SSE byte. The message has to
+// name the protocol, and the OpenAI code has to be the provider's code, so a
+// harness can tell a protocol mismatch from a bad prompt. The upstream body
+// still stays out.
+func TestStreamProtocolRefusalNamesTheCause(t *testing.T) {
+	const secret = "sk-live-DO-NOT-LEAK"
+	body := `{"error":{"message":"model \"grok-4.7\" is not accessible via the /chat/completions endpoint","code":"unsupported_api_for_model","api_key":"` + secret + `"}}`
+	front := failingServer(t, http.StatusBadRequest, body, nil)
+	resp, raw := postJSON(t, front, "/v1/chat/completions", `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("stream failure was reported as 200: %s", raw)
+	}
+	if bytes.Contains(raw, []byte(secret)) || bytes.Contains(raw, []byte("grok-4.7")) {
+		t.Fatalf("upstream body leaked: %s", raw)
+	}
+	if bytes.Contains(raw, []byte("upstream HTTP 400")) {
+		t.Fatalf("opaque 400 reached the client: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("does not serve that model on the chat protocol")) {
+		t.Fatalf("refusal not named: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"code":"unsupported_api_for_model"`)) {
+		t.Fatalf("refusal code not sourced: %s", raw)
+	}
+}
+
+// A 400 whose body is a usage limit must not look like a bad request. The
+// client gets a rate-limit type and a stable code, without the provider body.
+func TestUsageLimit400IsNamedForTheClient(t *testing.T) {
+	const secret = "sk-live-DO-NOT-LEAK"
+	body := `{"error":{"message":"You have reached your usage limit","type":"invalid_request_error","api_key":"` + secret + `"}}`
+	front := failingServer(t, http.StatusBadRequest, body, nil)
+	resp, raw := postJSON(t, front, "/v1/chat/completions", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode == http.StatusOK {
+		t.Fatalf("usage limit was reported as 200: %s", raw)
+	}
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Fatalf("upstream body leaked: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("usage limit")) {
+		t.Fatalf("usage limit not named: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("rate_limit_error")) {
+		t.Fatalf("usage limit classified as a bad request: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"code":"usage_limit"`)) {
+		t.Fatalf("usage limit code not sourced: %s", raw)
+	}
+	if !bytes.Contains(raw, []byte("400")) {
+		t.Fatalf("upstream status dropped: %s", raw)
+	}
+}
+
 // #136: a model refused for its protocol must reach the client as a named
 // refusal, not the opaque "upstream HTTP 400". The upstream body still stays
 // out of the response.
