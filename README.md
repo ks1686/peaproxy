@@ -2,7 +2,7 @@
 
 Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **v2.1.0** on main. Schema stays 1. Request-engine behavior is in [docs/V2.md](docs/V2.md).
+Status: **v3.0.9** on main. Schema stays 1. v3 routing and cost behavior is in [docs/V3.md](docs/V3.md). The v2 request engine is in [docs/V2.md](docs/V2.md).
 
 **Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
@@ -53,16 +53,16 @@ peaproxy serve
 
 Every package installs the same `peaproxy` binary and reads the same config (`~/.config/peaproxy`, `%AppData%\peaproxy` on Windows), so moving between package managers does not relocate anyone's accounts or secrets.
 
-Alternatively, follow `main` with Go `@latest`, or pin the tag:
+Alternatively, install the latest release tag with Go, or pin one:
 
 ```bash
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
-# or pin a tag, e.g. @v2.1.0
+# @latest is the highest release tag, currently v3.0.9
 peaproxy --version
 peaproxy serve
 ```
 
-Requires Go 1.22+ for `go install`. Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)), and the Homebrew cask, Scoop manifest, and AUR `peaproxy-bin` package are generated from the same tag. macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
+Requires Go 1.26+ for `go install` (`go 1.26.0` in `go.mod`). Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)), and the Homebrew cask, Scoop manifest, and AUR `peaproxy-bin` package are generated from the same tag. macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
 
 ```bash
 go run ./cmd/peaproxy serve   # from a clone

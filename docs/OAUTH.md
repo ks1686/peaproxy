@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. As of **2.0.x**: Claude Pro/Max/Team/Enterprise (Team/Enterprise since v2.0.8), ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, and GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. Since **2.0.x** (current release **v3.0.9**): Claude Pro/Max/Team/Enterprise (Team/Enterprise since v2.0.8), ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, and GitHub Copilot (`copilot_oauth`). Qwen and Factory/Droid remain **not yet**. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
 
 ## Liability (read this)
 
