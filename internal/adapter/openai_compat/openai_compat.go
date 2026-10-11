@@ -416,6 +416,7 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	if err != nil {
 		return err
 	}
+	raw = askForStreamUsage(raw)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.baseURL+"/chat/completions", bytes.NewReader(raw))
 	if err != nil {
 		return err
@@ -434,6 +435,45 @@ func (a *Adapter) ChatStream(ctx context.Context, req adapter.ChatRequest, w io.
 	}
 	_, err = io.Copy(w, resp.Body)
 	return err
+}
+
+// askForStreamUsage adds stream_options.include_usage to a streaming request
+// that did not already carry stream_options.
+//
+// OpenAI-compatible providers gate the usage frame in a streamed response on
+// this flag. Without it the stream is still complete and correct for the client,
+// and PeaProxy records a call with no token counts -- unmeasured, which a spend
+// ceiling treats as untrustworthy and refuses on. Measured on 2026-10-11:
+// google-key reported usage on its non-stream path and none on its stream.
+//
+// The field is the documented OpenAI one, so a provider that does not implement
+// it ignores an object it does not recognise rather than refusing the request.
+//
+// A client that set stream_options itself keeps it: that is a decision about the
+// response shape made by whoever owns the body, and rewriting it would change a
+// request this code only forwards.
+func askForStreamUsage(raw []byte) []byte {
+	for _, s := range topLevelKeys(raw) {
+		if s == "stream_options" {
+			return raw
+		}
+	}
+	return jsonx.SetTopLevelRaw(raw, "stream_options", []byte(`{"include_usage":true}`))
+}
+
+// topLevelKeys lists the top-level object keys of a JSON body without decoding
+// it, so the check above cannot fail on a field the rest of the body does not
+// care about.
+func topLevelKeys(raw []byte) []string {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 func (a *Adapter) GenerateImage(ctx context.Context, req adapter.ImageRequest) (adapter.ImageResponse, error) {

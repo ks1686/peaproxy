@@ -1455,7 +1455,11 @@ func responsesToChatCompletion(model string, body []byte) ([]byte, string, error
 			Message      chatChoiceMessage `json:"message"`
 			FinishReason string            `json:"finish_reason"`
 		} `json:"choices"`
-	}{ID: "peaproxy-codex", Object: "chat.completion", Model: model}
+		// Omitted rather than zeroed: a Responses object with no usage object
+		// means the call was never measured, and a zero-filled usage would read
+		// as a measured call that happened to cost nothing.
+		Usage *translate.OpenAIChatUsage `json:"usage,omitempty"`
+	}{ID: "peaproxy-codex", Object: "chat.completion", Model: model, Usage: responsesBodyUsage(body)}
 	out.Choices = make([]struct {
 		Index        int               `json:"index"`
 		Message      chatChoiceMessage `json:"message"`
@@ -1477,6 +1481,31 @@ func ResponsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	return responsesSSEToOpenAI(r, w, model)
 }
 
+// responsesBodyUsage reads the usage object off an assembled Responses body.
+// Both halves or nothing, for the reason the streamed path does it: a one-sided
+// count understates the call, and the ledger refuses an unmeasured call rather
+// than pricing half of it.
+func responsesBodyUsage(body []byte) *translate.OpenAIChatUsage {
+	var parsed struct {
+		Usage *struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(body, &parsed) != nil || parsed.Usage == nil {
+		return nil
+	}
+	if parsed.Usage.InputTokens <= 0 || parsed.Usage.OutputTokens <= 0 {
+		return nil
+	}
+	return &translate.OpenAIChatUsage{
+		PromptTokens:     parsed.Usage.InputTokens,
+		CompletionTokens: parsed.Usage.OutputTokens,
+		TotalTokens:      parsed.Usage.InputTokens + parsed.Usage.OutputTokens,
+	}
+
+}
+
 func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
@@ -1485,6 +1514,10 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	wroteRole := false
 	hadToolCalls := false
 	var reasoningRaw []json.RawMessage
+	// Token counts, carried from response.completed. A Responses stream that
+	// never completes leaves these zero and no usage frame is written, because
+	// an unmeasured call is a different thing from a call measured at zero.
+	promptTokens, completionTokens := 0, 0
 	const id = "peaproxy-codex"
 	for sc.Scan() {
 		line := sc.Text()
@@ -1497,6 +1530,9 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		}
 		if items := reasoningItemsFromResponsesEvent(payload); len(items) > 0 {
 			reasoningRaw = items
+		}
+		if u, ok := responsesEventUsage(payload); ok {
+			promptTokens, completionTokens = u.prompt, u.completion
 		}
 		chunk, ok, tools, err := responsesStreamChunkToChat(payload, model, callIndex, &nextIndex)
 		if err != nil {
@@ -1555,7 +1591,36 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 			}
 		}
 	}
-	return translate.WriteOpenAIChatSSEFinish(w, id, model, reason)
+	var usage *translate.OpenAIChatUsage
+	// Both halves, or nothing: a one-sided count understates the call, and the
+	// ledger refuses an unmeasured one rather than pricing half of it.
+	if promptTokens > 0 && completionTokens > 0 {
+		usage = &translate.OpenAIChatUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+		}
+	}
+	return translate.WriteOpenAIChatSSEFinishUsage(w, id, model, reason, usage)
+}
+
+// responsesEventUsage reads the usage object the Responses wire publishes on
+// response.completed. input_tokens/output_tokens are the names that wire uses;
+// prompt/completion are what an OpenAI chat client expects.
+func responsesEventUsage(payload string) (struct{ prompt, completion int }, bool) {
+	var out struct{ prompt, completion int }
+	var ev struct {
+		Response *struct {
+			Usage *struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(payload), &ev) != nil || ev.Response == nil || ev.Response.Usage == nil {
+		return out, false
+	}
+	return struct{ prompt, completion int }{ev.Response.Usage.InputTokens, ev.Response.Usage.OutputTokens}, true
 }
 
 func reasoningItemsFromResponsesEvent(payload string) []json.RawMessage {
