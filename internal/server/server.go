@@ -1065,10 +1065,42 @@ func (s *Server) recordCall(account, model, proto, path string, stream bool, sta
 		// unmeasurable spend -- and a refusal costs the user nothing.
 		e.NotDispatched = usage.IsNotDispatched(err)
 	}
+	e.Class = classifyRecord(e, err)
+	// Written to a second store that keeps a week of history. usage.json keeps
+	// 200 events and requests.log keeps the last 80 after rotation, so a
+	// failure is otherwise evicted by traffic rather than by age.
+	if s.gw.Usage != nil {
+		s.gw.Usage.AddError(e)
+	}
 	if snap, ok := s.gw.QuotaSnapshot(account); ok && snap.Reported() && snap.CapturedAt != nil && !snap.CapturedAt.Before(started) {
 		e.QuotaHint = snap.Compact()
 	}
 	s.gw.Usage.Add(e)
+}
+
+// classifyRecord names what went wrong. It runs after e.Status and e.Error are
+// final, because those are what it reads.
+//
+// The order of the checks is the argument: a refusal PeaProxy made itself is not
+// an upstream failure, a stream that ended without its terminal event is its own
+// thing, and a call that published no counts is not a failure at all -- but all
+// three are things worth being able to count.
+func classifyRecord(e usage.Event, err error) usage.FailureClass {
+	switch {
+	case e.NotDispatched:
+		return usage.ClassNotDispatched
+	case e.Stream && e.StreamTerminal == "":
+		return usage.ClassifyStream(e.StreamTerminal, e.TokensKnown)
+	case err == nil && e.Status < http.StatusBadRequest:
+		if e.Status >= 200 && !e.TokensKnown {
+			// Served, but the spend cannot be measured. A ceiling over this
+			// account fails closed, which is the state PR #146 was about.
+			return usage.ClassUnmeasured
+		}
+		return usage.FailureNone
+	default:
+		return usage.ClassifyFailure(e.Status, err)
+	}
 }
 
 // priceEvent attaches PeaProxy's own cost figure to a call the provider priced

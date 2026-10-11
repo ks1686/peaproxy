@@ -317,6 +317,38 @@ Image and edit calls are **not** failed over on a **502** or **504**, unlike eve
 
 `requestLog: true` (or `PEAPROXY_REQUEST_LOG=1`, or the Request log **or** Settings toggle — they share `POST /admin/settings`) appends redacted JSONL to `requests.log` next to the config. File mode is `0600`. The log rotates when it exceeds 1MiB. Bearer tokens, API keys, JWTs, and PEM private keys are stripped before write. If that response included rate-limit remaining headers, the row carries a compact `quotaHint` (honest 0 is shown; unknown remaining is omitted). `GET /admin/requests` and `peaproxy requests tail` read that inspector. Usage counters still go to `usage.json` even when the inspector is off. `peaproxy health` prints the same bind / adapterHealth / quota / cooldowns fields as `GET /admin/health`; cooldown lines include last-known remaining when the provider reported it.
 
+### `errors.jsonl`
+
+The same toggle also opens **`errors.jsonl`** next to the config: one line per request that was *not* a clean success, kept for **7 days**.
+
+It exists because the other two stores evict failures by traffic rather than by age. `usage.json` keeps 200 events; `requests.log` keeps the last 80 after rotation. On a busy afternoon a 401 that explained the morning is simply gone by lunchtime.
+
+- **No prompt previews.** This file is meant to be handed to someone else, and a failed request's prompt is normally something you already know you sent.
+- **Redacted on write and again on export.** An upstream 401 quotes the offending credential in prose, so a `ghp_`/`ghu_`/`sk-`/JWT/bearer/API-key value is stripped before the line is written.
+- Mode `0600`. Pruned on every write and on every read, so a quiet week still empties it.
+
+Every event carries a `class`:
+
+| class | fault? | meaning |
+|---|---|---|
+| `client_cancel` | no | the client disconnected |
+| `not_dispatched` | no | PeaProxy refused before calling a provider |
+| `unmeasured` | no | the call succeeded but published no token counts — a spend ceiling fails closed on this |
+| `auth_revoked` | yes | 401 / `invalid_grant` |
+| `auth_refresh_failed` | yes | a token refresh attempt was refused |
+| `secret_unreadable` | yes | a stored secret could not be read (different fix from the two above) |
+| `rate_limit`, `entitlement`, `overloaded`, `upstream_error`, `not_found`, `stream_cut`, `timeout`, `unknown` | yes | |
+
+`client_cancel` is kept but counted apart from failures. On a busy machine most recorded errors are an agent closing a stream mid-response, and a count that cannot tell those apart is a count nobody reads.
+
+```sh
+peaproxy errors summary --since 24h
+peaproxy errors list --since 7d
+peaproxy errors export --since 7d --out errors.json   # redacted bundle with counts
+```
+
+`--since` takes `24h`, `7d`, a bare number of hours, or a date. The export leads with a `summary` block (failures, cancels, counts by class and by account) so a bundle can be read without scrolling every event.
+
 ## Editing a running config
 
 A running `peaproxy serve` watches `config.yaml` and adopts what it finds. An account added by `peaproxy auth login`, a `catalog`/`hide`/`routes` edit from the CLI, or a hand edit all take effect within about two seconds, with secrets hydrated from the secret store. A file that is invalid while you are mid-edit is logged once and left alone; the running config is not disturbed, and the next valid write is picked up.
