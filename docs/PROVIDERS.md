@@ -99,6 +99,29 @@ OpenAI-compatibility is a family resemblance, not a guarantee. Real per-provider
 
 Do **not** advertise Claude Free OAuth (CPA #6016).
 
+### Subscription and local accounts, verified 2026-10-11
+
+A separate live run covered the accounts configured on the maintainer's own
+machine, not the key presets above: `anthropic_oauth`, `openai_oauth`,
+`antigravity`, `copilot_oauth`, `xai_oauth`, `google`, `opencode_zen`,
+`workers_ai`. Model listing, one minimal non-stream and one minimal stream chat
+per account, and the native wire (`/v1/messages`, `/v1/responses`) were
+exercised with the smallest model each account offered.
+
+- **Chat path answered on seven of eight.** `copilot_oauth` refused with
+  upstream HTTP 429 `quota exceeded` and was cooled; its listing is fine.
+- **Native-wire pass-through works and records usage**, including on a stream:
+  `/v1/messages` against `anthropic_oauth` and `/v1/responses` against
+  `openai_oauth` both returned correct terminal events (`messages_stop`,
+  `responses_completed`) with token counts.
+- **The translated chat wire does not record usage.** See
+  [V3.md](V3.md#known-limitations). Tool calling, vision, images and embeddings
+  were **not** exercised, so these accounts are verified for listing, one tiny
+  chat shape, and stream termination only.
+
+Record, including the per-account evidence and the defects found:
+[research/2026-10-11-live-provider-verification.md](research/2026-10-11-live-provider-verification.md).
+
 ## Free / open (first-class)
 
 | Provider | How | Auth | Catalog tier |

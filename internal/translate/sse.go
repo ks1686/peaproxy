@@ -312,6 +312,19 @@ type openAIChatSSEChunk struct {
 	Object  string                `json:"object"`
 	Model   string                `json:"model"`
 	Choices []openAIChatSSEChoice `json:"choices"`
+	// Usage appears only on the final chunk of a stream that asked for it, the
+	// shape OpenAI uses for stream_options.include_usage. Omitted everywhere
+	// else so an ordinary delta does not claim to be a measurement.
+	Usage *OpenAIChatUsage `json:"usage,omitempty"`
+}
+
+// OpenAIChatUsage is the OpenAI chat usage object. It is exported because each
+// adapter translates from a different provider wire and every one of them has to
+// be able to hand the counts to WriteOpenAIChatSSEFinishUsage.
+type OpenAIChatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type openAIChatSSEChoice struct {
@@ -393,13 +406,51 @@ func WriteOpenAIChatSSERole(w io.Writer, id, model string) error {
 // WriteOpenAIChatSSEFinish writes a terminal chat.completion.chunk with
 // finish_reason, then data: [DONE].
 func WriteOpenAIChatSSEFinish(w io.Writer, id, model, finishReason string) error {
+	return WriteOpenAIChatSSEFinishUsage(w, id, model, finishReason, nil)
+}
+
+// WriteOpenAIChatSSEFinishUsage writes the terminal finish chunk, then the usage
+// frame when one is known, then data: [DONE].
+//
+// The order matters and is not cosmetic. A client reading the OpenAI chat stream
+// keys on finish_reason for the turn and on [DONE] for the end of the response,
+// so the usage frame goes between them: after the finish chunk, so a client that
+// stops at finish_reason has already seen the numbers, and before [DONE], so the
+// stream still ends the way a client expects.
+//
+// A nil usage writes no frame at all rather than a frame of zeros. Zeros would
+// read as a call that was measured and consumed nothing, which is the one thing
+// the ledger cannot tell apart from a real zero-token call.
+func WriteOpenAIChatSSEFinishUsage(w io.Writer, id, model, finishReason string, usage *OpenAIChatUsage) error {
 	if finishReason == "" {
 		finishReason = "stop"
 	}
 	if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{}, finishReason); err != nil {
 		return err
 	}
+	if usage != nil {
+		if err := writeOpenAIChatSSEUsage(w, id, model, usage); err != nil {
+			return err
+		}
+	}
 	_, err := io.WriteString(w, "data: [DONE]\n\n")
+	return err
+}
+
+// writeOpenAIChatSSEUsage writes the usage-only chunk: the same object as every
+// other chunk, with an empty choices array so it is not read as a content delta.
+func writeOpenAIChatSSEUsage(w io.Writer, id, model string, usage *OpenAIChatUsage) error {
+	raw, err := json.Marshal(openAIChatSSEChunk{
+		ID:      id,
+		Object:  "chat.completion.chunk",
+		Model:   model,
+		Choices: []openAIChatSSEChoice{},
+		Usage:   usage,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", raw)
 	return err
 }
 
@@ -449,6 +500,12 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	wroteRole := false
 	hadToolCalls := false
 	stopReason := ""
+	// Anthropic splits usage across two events: input on message_start, the
+	// cumulative output on message_delta. Both are read so the stream can
+	// report the same numbers the non-stream path reports, which matters because
+	// the ledger is what a spend ceiling is judged on and an unmeasured call
+	// fails it closed.
+	promptTokens, completionTokens := 0, 0
 	type thinkAcc struct {
 		kind, thinking, signature, data string
 	}
@@ -484,7 +541,16 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 			Message *struct {
 				ID    string `json:"id"`
 				Model string `json:"model"`
+				Usage *struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
 			} `json:"message"`
+			// usage on message_delta is the cumulative output count; the input
+			// side was published on message_start and is kept from there.
+			Usage *struct {
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
 			ContentBlock *struct {
 				Type      string `json:"type"`
 				ID        string `json:"id"`
@@ -519,6 +585,9 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 					id = ev.Message.ID
 				}
 				model = ev.Message.Model
+				if ev.Message.Usage != nil {
+					promptTokens = ev.Message.Usage.InputTokens
+				}
 			}
 		case "content_block_start":
 			if ev.ContentBlock != nil && (ev.ContentBlock.Type == "thinking" || ev.ContentBlock.Type == "redacted_thinking") {
@@ -591,6 +660,9 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 			if ev.Delta.StopReason != "" {
 				stopReason = ev.Delta.StopReason
 			}
+			if ev.Usage != nil && ev.Usage.OutputTokens > 0 {
+				completionTokens = ev.Usage.OutputTokens
+			}
 			if ev.Delta.StopReason == "tool_use" {
 				hadToolCalls = true
 				wrote = true
@@ -637,7 +709,18 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				return err
 			}
 		}
-		if err := WriteOpenAIChatSSEFinish(w, id, model, openAIFinishFromClaude(stopReason, hadToolCalls)); err != nil {
+		var usage *OpenAIChatUsage
+		// Both halves have to be published for the pair to be a measurement.
+		// One side alone leaves real tokens uncounted, and reporting it would
+		// understate the call rather than admit it is unmeasured.
+		if promptTokens > 0 && completionTokens > 0 {
+			usage = &OpenAIChatUsage{
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+				TotalTokens:      promptTokens + completionTokens,
+			}
+		}
+		if err := WriteOpenAIChatSSEFinishUsage(w, id, model, openAIFinishFromClaude(stopReason, hadToolCalls), usage); err != nil {
 			return err
 		}
 	}

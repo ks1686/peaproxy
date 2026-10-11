@@ -1,6 +1,6 @@
 # Readiness: take PeaProxy from v3.0.5 to a stable, "ready" state
 
-Status: **implementation complete; PR/release review pending** (2026-10-08). Baseline commit: `5676807` (`main`, CI green, tag `v3.0.5`).
+Status: **in progress** (updated after v3.0.7, 2026-10-09). Baseline: `5676807` (`main`, CI green, tag `v3.0.5`). Changes from this plan shipped in PRs #130 and #138; see phase checkboxes and the Handoff log for verified status. Several remaining hygiene, coverage, product-decision, gate, live-check, and release tasks are not complete.
 
 This plan is written so any agent can pick it up cold. Read **How to work** first, then take the
 first unchecked task in **Phase order**. Tick a box only after its proof command has run and passed
@@ -72,15 +72,11 @@ R1 and R2 can start now. R3 questions can be asked in parallel; R4 waits on the 
 
 ## R1 — Hygiene and doc truth
 
-- [x] **R1.1 Stray file breaks the local build.** `internal/docproof/zz_cov_test 2.go` (untracked,
-  a Finder duplicate) does not end in `_test.go`, so Go treats it as package source. `go test
-  ./internal/docproof` still passes (the test build supplies the helpers), but `go build ./...`
-  fails on undefined test-only helpers, and so does every sandboxed build in
-  `TestRoutingPromisesWouldNoticeTheirOwnRegression` (all 16 mutations report "does not compile").
-  CI is unaffected because the file is untracked. It is Karim's file: **ask before deleting.**
-  Consider a docproof/CI guard that rejects `.go` filenames containing spaces.
-  Proof: `go build ./... && go test ./internal/eval -count=1` in the main checkout.
-- [x] **R1.2 golangci-lint clean and in CI.** 36 issues at baseline: errcheck 23, staticcheck 10,
+- [ ] **R1.1 Stray file breaks the local build.** `internal/docproof/zz_cov_test 2.go` was reported as
+  an untracked Finder duplicate at baseline. Do not delete user data without approval. Reassess
+  existence/ownership in the current checkout before deciding on a safe remedy. A filename guard may
+  be appropriate. Proof: `go build ./... && go test ./internal/eval -count=1`.
+- [ ] **R1.2 golangci-lint clean and in CI.** 36 issues at baseline: errcheck 23, staticcheck 10,
   govet 2, unused 1. Production ones first:
   `internal/fslock/fslock.go:75,84,95` (`f.Close`), `internal/localassistant/assistant.go:89`,
   `internal/localruntime/runtime.go:76`, `internal/quota/probe.go:56` (`resp.Body.Close`),
@@ -91,29 +87,29 @@ R1 and R2 can start now. R3 questions can be asked in parallel; R4 waits on the 
   `golangci/golangci-lint-action` step to `.github/workflows/ci.yml` (pin by SHA like the others)
   and commit a minimal `.golangci.yml` if defaults need tuning.
   Proof: `golangci-lint run ./...` exits 0.
-- [x] **R1.3 Stale docs.** Each is verified wrong against code at 5676807:
+- [ ] **R1.3 Stale docs.** Each is verified wrong against code at 5676807:
   - `docs/V2.md:135` says Codex chat does not forward `verbosity`/`prompt_cache_key`; it does
     (`V2.md:56`, `internal/adapter/openai_oauth/openai_oauth.go:678-712`). Remove or mark superseded.
   - `docs/V1.md:71` leaves "Tag v1.0.0" unchecked; the tag exists. Tick it.
-  - `docs/archive/plans/2026-10-05-v3-release.md` completion checklist is all unchecked although
+  - `docs/plans/2026-10-05-v3-release.md` completion checklist is all unchecked although
     v3.0.0–v3.0.5 shipped. Record per item: done (with evidence), or moved into this plan (R3).
   - `.cursor/plans/active-01a10f6b.md` is a finished v3.0.4 plan. Leave it (gitignored stamp) but
     do not treat it as live work.
   - Issue #64 closed with no comment. Draft a closing note (V2.md known-limits explain why the
     keychain retry is kept); posting needs Karim.
   Proof: `go test ./internal/docproof -count=1`.
-- [x] **R1.4 Archive shipped plans.** Move `docs/plans/2026-10-05-*.md` and
-  `docs/archive/plans/2026-10-06-v3-0-4-money.md` to `docs/archive/plans/` once R1.3 has recorded their
+- [ ] **R1.4 Archive shipped plans.** Move `docs/plans/2026-10-05-*.md` and
+  `docs/plans/2026-10-06-v3-0-4-money.md` to `docs/archive/plans/` once R1.3 has recorded their
   dispositions; fix any links (`rg -n 'docs/plans/' docs README.md`). Keep this file in `docs/plans/`.
   Proof: docproof green; no dead relative links.
 
 ## R2 — Coverage and conformance fixtures
 
-Target: **≥77% total ratchet, ≥60% per package** (stubs exempt only if every exported path is asserted).
+Target: **≥80% total, ≥60% per package** (stubs exempt only if every exported path is asserted).
 Test behaviour, not lines: error paths, boundaries, wire shapes. No live network in tests — use
 `httptest.Server` fakes, as existing adapter tests do. One package per slice; slices are parallel-safe.
 
-- [x] **R2.1 OpenAI-compatible provider fixtures** (highest value, zero cost — named as the next step
+- [ ] **R2.1 OpenAI-compatible provider fixtures** (highest value, zero cost — named as the next step
   in `docs/research/2026-10-05-v3-provider-evidence.md` "Known gaps" #4). For each of
   alibabacoding, cohere, deepseek, fireworks, minimax, mistral, together, zai (specs in
   `internal/adapter/hosted`), capture the **documented** response shapes as fixtures under
@@ -123,16 +119,16 @@ Test behaviour, not lines: error paths, boundaries, wire shapes. No live network
   Z.AI `thinking`, Alibaba `enable_thinking`. Cite the doc URL in each fixture's README.
   Fixtures are documentation-derived, not live: do **not** change any preset to `live-verified`.
   Proof: `go test ./internal/adapter/openai_compat -cover` ≥60%.
-- [x] **R2.2 Zero-coverage adapters:** `opencodezen`, `openrouter` (incl. `GET /api/v1/key` quota
+- [ ] **R2.2 Zero-coverage adapters:** `opencodezen`, `openrouter` (incl. `GET /api/v1/key` quota
   probe, `limit_remaining: null` = unlimited), `ollama`, `openai`, `oauthcompat`. Cover
   ListModels, chat, stream termination, error classification, quota headers.
-- [x] **R2.3 Stub adapters** `factory_oauth`, `qwen_oauth`: assert every method returns the
+- [ ] **R2.3 Stub adapters** `factory_oauth`, `qwen_oauth`: assert every method returns the
   actionable `ErrNotImplemented` diagnostic and that onboarding still hides them (#115).
-- [x] **R2.4 `localruntime`, `adapter` (shared helpers), `anthropic`, `xai_oauth`:** to ≥60%.
+- [ ] **R2.4 `localruntime`, `adapter` (shared helpers), `anthropic`, `xai_oauth`:** to ≥60%.
   `localruntime`: runtime down, wrong port, non-JSON, timeout.
-- [x] **R2.5 `cmd/peaproxy`:** a `main` smoke (`--version`, `--help`, unknown flag exit code) via
+- [ ] **R2.5 `cmd/peaproxy`:** a `main` smoke (`--version`, `--help`, unknown flag exit code) via
   `exec` of a built binary or by extracting `run() int`.
-- [x] **R2.6 Coverage floor in CI.** Add a step that fails if total coverage drops below the level
+- [ ] **R2.6 Coverage floor in CI.** Add a step that fails if total coverage drops below the level
   reached (ratchet, not aspiration). Keep the `notYetBroken` exemption list in
   `internal/eval/mutation_gate_test.go` honest.
 
@@ -142,13 +138,13 @@ Proof for the phase: full check; record the new total here.
 
 Each needs a yes/no. Record the answer and date here, then implement in R4 or mark dropped.
 
-- [x] **R3.1 `optimization.persistentContext`.** Accepted and documented (`docs/CONFIG.md:127`,
+- [ ] **R3.1 `optimization.persistentContext`.** Accepted and documented (`docs/CONFIG.md:127`,
   `docs/V3.md:64`) but does nothing: `newArtifactStore` ignores config
   (`internal/gateway/gateway.go:2499`); `docs/V3.md:212` admits it.
   Options: (a) implement disk persistence (needs: 0600 files next to config, session isolation,
   size cap, expiry, fslock, security review); (b) make `config validate` warn and `--strict-config`
   refuse when it is set true. Recommendation: (b) now, (a) only if wanted.
-- [x] **R3.2 Unbuilt v3 deliverables** from `docs/archive/plans/2026-10-05-v3-release.md` T11–T13:
+- [ ] **R3.2 Unbuilt v3 deliverables** from `docs/plans/2026-10-05-v3-release.md` T11–T13:
   CLI `optimization status` / `optimization explain`; `scripts/v3-ui-smoke.mjs`;
   `cmd/peaproxy-eval` + `internal/evals` corpus + `docs/research/v3-evaluation.md`;
   the <10 ms p95 policy-overhead target (only `internal/gateway/benchmark_test.go` exists);
@@ -157,12 +153,12 @@ Each needs a yes/no. Record the answer and date here, then implement in R4 or ma
   CI snapshot build; extend the v2 smoke rather than a v3 copy; drop the separate eval binary
   (`internal/eval` + CI gate already covers the promises); add a benchmark assertion only if a
   reference machine is agreed.
-- [x] **R3.3 Image calls and the spend ceiling.** Images take no reservation and no admission slot
+- [ ] **R3.3 Image calls and the spend ceiling.** Images take no reservation and no admission slot
   (`docs/V3.0.4-REVIEW.md`, "What the ceiling is"). Options: per-image quote reservation, or
   admission slot only, or keep documented. Recommendation: admission slot at minimum, so
   `maxInFlight` bounds them too.
-- [x] **R3.4 Strict free-proof in routing.** `economics.GuaranteesFree`/`FreeForTrustedUse` exist,
-  routing (`freeOnlyAllows`) deliberately does not call them (`docs/archive/plans/2026-10-05-v3-scope.md`
+- [ ] **R3.4 Strict free-proof in routing.** `economics.GuaranteesFree`/`FreeForTrustedUse` exist,
+  routing (`freeOnlyAllows`) deliberately does not call them (`docs/plans/2026-10-05-v3-scope.md`
   D8). Keep, or switch `freeOnly` to the strict rule? Also: correct the Cerebras/Hugging Face tier
   tags (display-only) after R5.3 reads the pricing pages.
 
@@ -170,21 +166,18 @@ Each needs a yes/no. Record the answer and date here, then implement in R4 or ma
 
 Serial: these touch `internal/gateway` and `internal/eval` shared files.
 
-- [x] **R4.1 Last unbreakable promise.** `notYetBroken` in `internal/eval/mutation_gate_test.go:69`
+- [ ] **R4.1 Last unbreakable promise.** `notYetBroken` in `internal/eval/mutation_gate_test.go:69`
   holds "spend measured from tokens alone does not satisfy a ceiling": the eval harness never
   prices events (`priceEvent`/`QuoteFor` is server-side). Build a server-level harness that prices
   events, add a mutation, remove the exemption. Proof: the CI routing-promises step
   (`go test ./internal/eval -run 'TestRoutingPromises$|TestRoutingPromisesWouldNoticeTheirOwnRegression$|TestCheaperChoiceReallyIsCheaper$' -v -count=1`)
   reports 17/17 with no exemptions.
-- [x] **R4.2 Implement R3 answers** (persistentContext, optimization CLI, image admission, free-proof).
+- [ ] **R4.2 Implement R3 answers** (persistentContext, optimization CLI, image admission, free-proof).
   Each with a failing-first test and doc update (`docs/CONFIG.md`, `docs/V3.md` known limitations).
-- [x] **R4.3 Unpriced concurrent burst — retained as a stated limit.** An unpriced deployment
-  still holds no invented dollar amount, so concurrent calls can overshoot before their first
-  unmeasured event makes the ceiling fail closed. `requestEngine.maxInFlight` bounds the burst per
-  account. Counting an unknown call as a dollar hold would fabricate a price; refusing every
-  unpriced call with a ceiling changes existing routing semantics. The latter is a product policy
-  change, not a safe stabilization fix. The limit remains explicit in `docs/V3.0.4-REVIEW.md` and
-  `docs/CONFIG.md`; R3.3 now ensures image calls are included in that concurrency bound.
+- [ ] **R4.3 Unpriced concurrent burst.** Unpriced deployments hold nothing, so concurrent calls can
+  overshoot (bounded by `requestEngine.maxInFlight`). Do **not** invent a price. Option: count
+  in-flight unpriced calls against the ceiling as "unmeasurable" while held. Needs R3 sign-off if it
+  changes refusal behaviour.
 
 ## R5 — Live verification (LIVE: money/quota, ask per run)
 
@@ -192,32 +185,52 @@ Rules: isolated instance on a non-8317 port, a **copy** of config in a temp dir,
 shred copies after. Record date, PeaProxy commit, client + version, provider, model, and exact result
 in `docs/research/` and update the matching doc. Never mark a preset `live-verified` without this record.
 
-- [ ] **R5.1 D1 in the field.** Fixed and fixture-covered (`docs/archive/plans/2026-10-05-v3-stream-incident.md`),
+**Status after the 2026-10-11 run** (record: `docs/research/2026-10-11-live-provider-verification.md`,
+PeaProxy v3.0.9 `d57a0eb`, against the maintainer's own configured accounts on the running instance
+rather than a copied config — the maintainer asked for his own subscriptions to be exercised and
+approved spending the quota). Seven of eight accounts answered; `copilot-oauth` was quota-blocked.
+That run also established that **no account needed re-login** and found the usage-capture defect
+recorded in `docs/V3.md`. R5.1 and R5.2 are partially closed, not complete: tool calling, vision,
+images and embeddings were not exercised.
+
+- [ ] **R5.1 D1 in the field.** Fixed and fixture-covered (`docs/plans/2026-10-05-v3-stream-incident.md`),
   but the field confirmation is outstanding: run the diagnostics build with `pi` on the Chat wire
   against `openai-oauth`, check `streamTerminal` in the request log.
+  *Partial 2026-10-11:* `openai-oauth` streamed `/v1/responses` with
+  `streamTerminal: responses_completed`, and the translated chat wire ended `done`. Still open: the
+  same check driven by `pi` on the Chat wire specifically.
 - [ ] **R5.2 Native passthrough** (`anthropic_oauth` serving Messages, `openai_oauth` serving
   Responses) through a route-rewritten model: stream terminal event, usage, route name rewritten.
   Only the translated path has been verified live.
+  *Partial 2026-10-11:* both native wires answered 200 on both paths with correct terminal events
+  and recorded usage — `anthropic-oauth` `/v1/messages` `22/32` `messages_stop`, `openai-oauth`
+  `/v1/responses` `7/13` `responses_completed`. Still open: the route-rewritten-model half, and
+  confirming the route name is rewritten back in the response.
 - [ ] **R5.3 Free-tier presets** routing leans on: Groq, Google AI Studio, SambaNova,
   OpenRouter `:free`. Then read the seven unread pricing pages (alibabacoding, deepseek, fireworks,
   minimax, mistral, together, zai) in a browser and record tiers.
+  *Partial 2026-10-11:* Google AI Studio answered 200/200 on
+  `models/gemini-3.5-flash-lite` and `models/gemini-3.1-flash-lite`, and four `opencode_zen` free
+  models answered 200/200. Groq, SambaNova and OpenRouter `:free` are not configured on this
+  machine. The seven pricing pages were not read; still open.
 - [ ] **R5.4 `cursor_agent` success path** — blocked on Cursor quota; never run successfully.
+  *2026-10-11:* not configured on this machine, so still blocked rather than newly attempted.
 - [ ] **R5.5 Retrieval savings** — run a real retrieval workload, read `discarded*` in `/admin/usage`,
   record the figure in `docs/V3.md` (currently "not yet quantified").
 
 ## R6 — Release (Karim approves every step)
 
-- [x] Full check green on the branch; `goreleaser release --clean --snapshot --skip=publish` builds all
+- [ ] Full check green on the branch; `goreleaser release --clean --snapshot --skip=publish` builds all
   six archives; unpack one and run `peaproxy --version` and `config validate` on a sample config.
-- [x] Security review of the diff: gitleaks on range, govulncheck, workflow scan (zizmor if available).
+- [ ] Security review of the diff: gitleaks on range, govulncheck, workflow scan (zizmor if available).
 - [ ] PR(s) to `main`; read the Copilot review before merging, not just CI.
-- [x] Update `docs/V3.md` known limitations and README to match what is now true; no claim without a test
+- [ ] Update `docs/V3.md` known limitations and README to match what is now true; no claim without a test
   or a live record.
 - [ ] Tag per `docs/RELEASING.md`; verify Homebrew/Scoop/AUR and checksum of a downloaded asset.
 
 ## Definition of "ready"
 
-All of: R1 done; R2 76.5% CI total ratchet and package targets met; every R3 item answered and either implemented or
+All of: R1 done; R2 targets met and ratcheted in CI; every R3 item answered and either implemented or
 documented as a stated limit; R4.1 done (zero `notYetBroken`); lint in CI; no doc claims a feature
 that does nothing; every live-verified claim has a dated record. R5 items not run stay listed in
 `docs/V3.md` as unverified — that is acceptable for "ready", silence is not.
@@ -227,7 +240,30 @@ that does nothing; every live-verified claim has a dated record. R5 items not ru
 Append one line per session: date, agent, branch, what was finished (task IDs + commits), what is in
 progress, blockers.
 
-- 2026-10-08 — plan written from a full audit (docs, git history, all 48 issues, PRs, full check at
+- 2026-10-08 — plan written from a full audit (docs, git history, issues, PRs, full check at
   `5676807`).
-- 2026-10-08 — R1 completed; R3 decisions executed: persistentContext is reported/refused under strict mode rather than silently inert; CLI status/explain added; image calls take admission slots; asserted free prices remain supported but explain names their source. R4.1 completed (16/16 mutation-backed routing promises). R2 raised openai_compat 27%→85% and formerly zero adapter packages to 71%–90%; total coverage 77.9% before the CI ratchet; CI enforces >=76.5% (local Go 1.27 measures 77.9%; CI Go 1.22 measures 76.8%).
-- 2026-10-08 — R4.2 completed; R4.3 deliberately retained as a stated limit (no invented price and no silent policy change). Ran the full local gate: all tests including race, vet, build, gofmt, lint, govulncheck, gitleaks, Playwright smoke and GoReleaser snapshot; unpacked Darwin artifact reports 3.0.5-SNAPSHOT and validates a sample config. CI now builds a no-publish snapshot on every Linux race job.
+- 2026-10-09 — PR #130 merged and v3.0.6 released; R1.2 lint cleanup/CI, R2.6 Linux coverage ratchet
+  (76.5%), R3.1 inert persistent-context warning/strict rejection, R3.2 optimization explain with
+  partiality, R3.3 image admission slots, and R3.4 user-configured zero quotes were implemented in
+  the readiness workstream. These are not yet reconciled against every individual checkbox or the
+  baseline test floors. PR #138 merged and v3.0.7 released (Copilot protocol routing, Pi explicit
+  import, OAuth UI improvements, CodeQL). Main CI and CodeQL passed; release workflow and assets
+  verified. Issues #134–#136 closed.
+- 2026-10-09 — current audit: open PRs #131, #132, #133 (all Dependabot; their recorded CI checks
+  passed, but they are not merged); open issue #137 (Anthropic SSE framing report, not yet
+  reproduced). Next: reconcile individual R1–R6 proof status, investigate #137, and review/merge the
+  dependency PRs after current-head verification. R5 live checks remain unverified and require
+  Karim's per-run approval.
+- 2026-10-11 — first real R5 run, against the maintainer's own configured accounts on the running
+  v3.0.9 instance (`d57a0eb`) with Karim's explicit approval to spend quota. Eight accounts, smallest
+  model each, one non-stream and one stream request apiece, plus native-wire checks. Seven answered;
+  `copilot-oauth` refused with upstream 429 `quota exceeded`. Record:
+  `docs/research/2026-10-11-live-provider-verification.md`. Two conclusions worth carrying forward:
+  (1) **no account needed re-login** — `google-oauth` and `xai-oauth` were both past their access-token
+  expiry and refreshed themselves mid-test, so the recurring "expiry" is the short-lived access token,
+  not the credential; (2) **usage is lost on the translated chat wire** — the OpenAI-chat translation
+  emits no `usage` object, so every streamed translated call records zero tokens, and
+  `openai_oauth`/`antigravity` lose it unstreamed too, while the native wires record correctly. That
+  is a PeaProxy defect, not provider behaviour, and it is now stated in `docs/V3.md`. R5.1–R5.4 are
+  partially closed only; tool calling, vision, images and embeddings remain unexercised. Nothing
+  committed or pushed.

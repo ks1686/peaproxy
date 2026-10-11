@@ -607,6 +607,9 @@ func sseDataPayloads(s string) []string {
 	return payloads
 }
 
+// The finish chunk is not assumed to be the second-to-last payload: a stream that
+// reported usage puts a usage-only frame (empty choices) between the finish chunk
+// and [DONE], so the chunk carrying finish_reason is found by scanning back.
 func assertChatSSEFinish(t *testing.T, sse, reason string) {
 	t.Helper()
 	payloads := sseDataPayloads(sse)
@@ -616,11 +619,13 @@ func assertChatSSEFinish(t *testing.T, sse, reason string) {
 	if got := payloads[len(payloads)-1]; got != "[DONE]" {
 		t.Fatalf("last payload = %q, want [DONE]\n%s", got, sse)
 	}
-	finish := payloads[len(payloads)-2]
 	want := `"finish_reason":"` + reason + `"`
-	if !strings.Contains(finish, want) {
-		t.Fatalf("finish chunk missing %s: %s", want, finish)
+	for i := len(payloads) - 2; i >= 0; i-- {
+		if strings.Contains(payloads[i], want) {
+			return
+		}
 	}
+	t.Fatalf("no chunk carries %s: %s", want, sse)
 }
 
 func TestPrepareResponsesForcesStoreFalseAndDropsMaxOutputTokens(t *testing.T) {
@@ -1293,4 +1298,101 @@ func testAdapter(t *testing.T, base string) *Adapter {
 	a.apiBase = strings.TrimRight(base, "/")
 	a.httpClient = &http.Client{Timeout: 5 * time.Second}
 	return a
+}
+
+// The Responses wire publishes usage on response.completed. The translator read
+// that event to get the finish reason and dropped the counts, so every streamed
+// Codex call reached the ledger with no token counts at all -- unmeasured, which
+// is the state a spend ceiling refuses on.
+//
+// Measured 2026-10-11 on a live openai-oauth account: the native /v1/responses
+// wire recorded 7/13 and the translated chat wire recorded nothing at all.
+func TestResponsesSSEToOpenAIReportsUsage(t *testing.T) {
+	in := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hi"}`,
+		``,
+		`data: {"type":"response.completed","response":{"usage":{"input_tokens":7,"output_tokens":13,"total_tokens":20}}}`,
+		``,
+		`data: [DONE]`,
+		``,
+		``,
+	}, "\n")
+	var out bytes.Buffer
+	if err := responsesSSEToOpenAI(strings.NewReader(in), &out, "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	usageFrame := sseDataPayloads(got)
+	last := usageFrame[len(usageFrame)-2] // before [DONE]
+	for _, want := range []string{`"usage"`, `"prompt_tokens":7`, `"completion_tokens":13`} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("the chunk before [DONE] missing %s: %s", want, last)
+		}
+	}
+	assertChatSSEFinish(t, got, "stop")
+}
+
+// A response the upstream never completed has no counts to report. Zeros would
+// read as a measured call that consumed nothing.
+func TestResponsesSSEToOpenAIWithNoUsageReportsNone(t *testing.T) {
+	in := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\ndata: [DONE]\n\n"
+	var out bytes.Buffer
+	if err := responsesSSEToOpenAI(strings.NewReader(in), &out, "gpt-5"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), `"usage"`) {
+		t.Fatalf("a stream with no usage reported some: %s", out.String())
+	}
+}
+
+// The non-stream path assembles the Responses stream locally -- Codex rejects
+// stream:false -- and responsesStreamToJSON hands back the response.completed
+// object verbatim, usage object and all. responsesToChatCompletion read the text
+// and the tool calls out of it and left the usage behind, so the one path that
+// could have reported tokens reported none.
+//
+// Measured 2026-10-11 on a live openai-oauth account: the native /v1/responses
+// wire recorded 7/13 and the translated chat wire recorded nothing on either
+// path. Fixed 2026-10-11.
+func TestResponsesToChatCompletionCarriesUsage(t *testing.T) {
+	body := []byte(`{"id":"resp_1","model":"gpt-5.6-luna","usage":{"input_tokens":7,"output_tokens":13,"total_tokens":20},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}`)
+	raw, content, err := responsesToChatCompletion("gpt-5.6-luna", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "hi" {
+		t.Fatalf("content = %q, want %q", content, "hi")
+	}
+	for _, want := range []string{`"usage"`, `"prompt_tokens":7`, `"completion_tokens":13`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("chat.completion missing %s: %s", want, raw)
+		}
+	}
+}
+
+// A Responses object with no usage stays unmeasured. The key is omitted rather
+// than sent as zeros, because zeros read as a measured call that cost nothing.
+func TestResponsesToChatCompletionWithNoUsageOmitsIt(t *testing.T) {
+	body := []byte(`{"id":"resp_1","model":"gpt-5.6-luna","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}`)
+	raw, _, err := responsesToChatCompletion("gpt-5.6-luna", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"usage"`) {
+		t.Fatalf("a response with no usage carried a usage object: %s", raw)
+	}
+}
+
+// One half of the count is not a measurement. Reporting it would price the call
+// at a fraction of what it cost, which is the quiet failure mode a ceiling
+// cannot detect.
+func TestResponsesToChatCompletionWithOneSidedUsageReportsNone(t *testing.T) {
+	body := []byte(`{"id":"resp_1","model":"gpt-5.6-luna","usage":{"input_tokens":7,"output_tokens":0,"total_tokens":7},"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}`)
+	raw, _, err := responsesToChatCompletion("gpt-5.6-luna", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"usage"`) {
+		t.Fatalf("a half-measured call was reported as measured: %s", raw)
+	}
 }

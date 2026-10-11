@@ -1119,3 +1119,133 @@ func TestStreamErrorWithoutCodeStillClassifies(t *testing.T) {
 		t.Fatalf("an unknown status without a code must stay a plain error: %v", err)
 	}
 }
+
+// Gemini publishes usageMetadata on its final streamed chunk. geminiSSEToOpenAI
+// read that chunk for the finish reason and dropped the counts, so every
+// streamed Antigravity call reached the ledger with no token counts: unmeasured,
+// which is the state a spend ceiling refuses on.
+//
+// Measured 2026-10-11 on a live google-oauth account: no usage recorded on
+// either the streamed or the non-streamed translated chat wire.
+func TestGeminiStreamReportsUsage(t *testing.T) {
+	in := "data: " + `{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":7,"totalTokenCount":19}}` + "\n\n"
+	var out bytes.Buffer
+	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-2.5-flash-lite"); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	payloads := geminiSSEPayloads(got)
+	if len(payloads) < 2 {
+		t.Fatalf("want a usage frame then [DONE], got %d payloads: %q", len(payloads), got)
+	}
+	if last := payloads[len(payloads)-1]; last != "[DONE]" {
+		t.Fatalf("last payload = %q, want [DONE]", last)
+	}
+	usageFrame := payloads[len(payloads)-2]
+	for _, want := range []string{`"usage"`, `"prompt_tokens":12`, `"completion_tokens":7`} {
+		if !strings.Contains(usageFrame, want) {
+			t.Fatalf("the chunk before [DONE] missing %s: %s", want, usageFrame)
+		}
+	}
+}
+
+func geminiSSEPayloads(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		out = append(out, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+	}
+	return out
+}
+
+// The non-stream path had the same loss: geminiChatMessage reads the message and
+// toOpenAIChatJSON writes it back without ever reading usageMetadata, which
+// generateContent puts in the very same body.
+//
+// Measured 2026-10-11 on a live google-oauth account: usage recorded on neither
+// path. Fixed 2026-10-11.
+//
+// Driven through Chat against a stub generateContent rather than through
+// toOpenAIChatJSON directly, because the wiring -- reading usageMetadata off the
+// response body and handing it to the translation -- is the part that was
+// missing, and a test of the translation alone cannot see it.
+func TestNonStreamChatCarriesUsage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/internal:generateContent":
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3,"totalTokenCount":8}}`))
+		default:
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3,"totalTokenCount":8}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour)}
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gemini-2.5-flash-lite",
+		Raw:   []byte(`{"model":"gemini-2.5-flash-lite","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content != "hi" {
+		t.Fatalf("content = %q, want %q", resp.Content, "hi")
+	}
+	for _, want := range []string{`"usage"`, `"prompt_tokens":5`, `"completion_tokens":3`} {
+		if !strings.Contains(string(resp.Raw), want) {
+			t.Fatalf("chat.completion missing %s: %s", want, resp.Raw)
+		}
+	}
+}
+
+// A body with no usageMetadata stays unmeasured rather than measured at zero.
+func TestNonStreamChatWithNoUsageReportsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		default:
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}]}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour)}
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gemini-2.5-flash-lite",
+		Raw:   []byte(`{"model":"gemini-2.5-flash-lite","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(resp.Raw), `"usage"`) {
+		t.Fatalf("a call with no published usage carried a usage object: %s", resp.Raw)
+	}
+}
+
+// One half of the count is not a measurement. Reporting it would price the call
+// at a fraction of what it cost.
+func TestNonStreamChatWithOneSidedUsageReportsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		default:
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":0,"totalTokenCount":5}}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "test-token", ExpiresAt: time.Now().Add(time.Hour)}
+	resp, err := a.Chat(context.Background(), adapter.ChatRequest{
+		Model: "gemini-2.5-flash-lite",
+		Raw:   []byte(`{"model":"gemini-2.5-flash-lite","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(resp.Raw), `"usage"`) {
+		t.Fatalf("a half-measured call was reported as measured: %s", resp.Raw)
+	}
+}

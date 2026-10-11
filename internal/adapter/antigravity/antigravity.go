@@ -646,7 +646,7 @@ func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.Ch
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
-	oa, err := toOpenAIChatJSON(req.Model, message, finish)
+	oa, err := toOpenAIChatJSON(req.Model, message, finish, openAIUsageFromGemini(body))
 	if err != nil {
 		return adapter.ChatResponse{}, err
 	}
@@ -1550,13 +1550,20 @@ func geminiChatMessage(body []byte) (chatMessage, string, error) {
 	return message, finish, nil
 }
 
-func toOpenAIChatJSON(model string, message chatMessage, finish string) ([]byte, error) {
-	return json.Marshal(map[string]any{
+// toOpenAIChatJSON writes the OpenAI chat.completion a Gemini body becomes.
+// usage is nil when Gemini published none: an omitted object means the call was
+// never measured, which is not the same as a call that measured zero tokens.
+func toOpenAIChatJSON(model string, message chatMessage, finish string, usage *translate.OpenAIChatUsage) ([]byte, error) {
+	out := map[string]any{
 		"id":      "peaproxy-antigravity",
 		"object":  "chat.completion",
 		"model":   model,
 		"choices": []map[string]any{{"index": 0, "message": message, "finish_reason": geminiFinishReason(len(message.ToolCalls), finish)}},
-	})
+	}
+	if usage != nil {
+		out["usage"] = usage
+	}
+	return json.Marshal(out)
 }
 
 // promptBlocked stands in for a finish reason when Gemini rejects the prompt
@@ -1590,6 +1597,9 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	}
 	calls := 0
 	upstreamFinish := ""
+	// Token counts from Gemini's usageMetadata. Zero means the upstream never
+	// published them, which is not the same as a call that cost nothing.
+	promptTokens, completionTokens := 0, 0
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for sc.Scan() {
@@ -1610,6 +1620,9 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		// answer is never reported as complete.
 		if err := streamEventError(event); err != nil {
 			return err
+		}
+		if u, ok := geminiEventUsage(event); ok {
+			promptTokens, completionTokens = u.prompt, u.completion
 		}
 		delta, finish, err := geminiChatMessage(event)
 		if err != nil {
@@ -1656,7 +1669,51 @@ func geminiSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	if err := writeRole(); err != nil {
 		return err
 	}
-	return translate.WriteOpenAIChatSSEFinish(w, "peaproxy-antigravity", model, geminiFinishReason(calls, upstreamFinish))
+	var usage *translate.OpenAIChatUsage
+	// Both halves, or nothing: one-sided counts understate the call, and the
+	// ledger refuses an unmeasured call rather than pricing half of it.
+	if promptTokens > 0 && completionTokens > 0 {
+		usage = &translate.OpenAIChatUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: completionTokens,
+			TotalTokens:      promptTokens + completionTokens,
+		}
+	}
+	return translate.WriteOpenAIChatSSEFinishUsage(w, "peaproxy-antigravity", model, geminiFinishReason(calls, upstreamFinish), usage)
+}
+
+// geminiEventUsage reads usageMetadata from a Gemini streamed chunk. Gemini
+// names the fields promptTokenCount and candidatesTokenCount; an OpenAI chat
+// client expects prompt_tokens and completion_tokens.
+func geminiEventUsage(event []byte) (struct{ prompt, completion int }, bool) {
+	var out struct{ prompt, completion int }
+	var ev struct {
+		UsageMetadata *struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+		} `json:"usageMetadata"`
+	}
+	if json.Unmarshal(event, &ev) != nil || ev.UsageMetadata == nil {
+		return out, false
+	}
+	return struct{ prompt, completion int }{ev.UsageMetadata.PromptTokenCount, ev.UsageMetadata.CandidatesTokenCount}, true
+}
+
+// openAIUsageFromGemini reads the counts off a non-stream generateContent body,
+// which carries usageMetadata alongside the candidates exactly as the streamed
+// wire does. Both halves or nothing, for the reason the streamed path does it:
+// a one-sided count understates the call, and the ledger refuses an unmeasured
+// call rather than pricing half of it.
+func openAIUsageFromGemini(body []byte) *translate.OpenAIChatUsage {
+	u, ok := geminiEventUsage(body)
+	if !ok || u.prompt <= 0 || u.completion <= 0 {
+		return nil
+	}
+	return &translate.OpenAIChatUsage{
+		PromptTokens:     u.prompt,
+		CompletionTokens: u.completion,
+		TotalTokens:      u.prompt + u.completion,
+	}
 }
 
 // streamEventError returns the failure a Cloud Code SSE event sends in place

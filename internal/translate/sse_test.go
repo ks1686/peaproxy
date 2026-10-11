@@ -214,6 +214,13 @@ func sseDataPayloads(s string) []string {
 	return payloads
 }
 
+// assertChatSSEFinish requires the stream to end with [DONE] and to carry a
+// finish_reason somewhere before it.
+//
+// The finish chunk is not assumed to be the second-to-last payload: a stream that
+// reported usage puts a usage-only frame (empty choices) between the finish chunk
+// and [DONE], so the chunk carrying finish_reason is found by scanning back
+// rather than by position.
 func assertChatSSEFinish(t *testing.T, sse, reason string) {
 	t.Helper()
 	payloads := sseDataPayloads(sse)
@@ -223,9 +230,82 @@ func assertChatSSEFinish(t *testing.T, sse, reason string) {
 	if got := payloads[len(payloads)-1]; got != "[DONE]" {
 		t.Fatalf("last payload = %q, want [DONE]\n%s", got, sse)
 	}
-	finish := payloads[len(payloads)-2]
 	want := `"finish_reason":"` + reason + `"`
-	if !strings.Contains(finish, want) {
-		t.Fatalf("finish chunk missing %s: %s", want, finish)
+	for i := len(payloads) - 2; i >= 0; i-- {
+		if strings.Contains(payloads[i], want) {
+			return
+		}
+	}
+	t.Fatalf("no chunk carries %s: %s", want, sse)
+}
+
+// A streamed call that reports no token counts is a call the ledger cannot
+// measure, and the ledger is the only thing that can price a ceiling. Anthropic
+// publishes input_tokens on message_start and output_tokens on message_delta, so
+// the numbers exist; the translator was reading both events and keeping only the
+// id, model and stop reason.
+//
+// The fix emits the usage frame the way OpenAI does when a client asks for it:
+// a final chunk with an empty choices array and a usage object, after the finish
+// chunk and before [DONE].
+func TestClaudeSSEToOpenAIReportsUsage(t *testing.T) {
+	in := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"id":"msg_u","model":"c","usage":{"input_tokens":22,"output_tokens":0}}}`,
+		``,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		``,
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":16}}`,
+		``,
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		``,
+		``,
+	}, "\n")
+	var out bytes.Buffer
+	if err := ClaudeSSEToOpenAI(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	payloads := sseDataPayloads(got)
+
+	if len(payloads) < 3 {
+		t.Fatalf("want role, content, finish, usage, [DONE]; got %d payloads: %q", len(payloads), got)
+	}
+	if last := payloads[len(payloads)-1]; last != "[DONE]" {
+		t.Fatalf("last payload = %q, want [DONE]; the usage frame must precede it", last)
+	}
+	usageFrame := payloads[len(payloads)-2]
+	if !strings.Contains(usageFrame, `"usage"`) {
+		t.Fatalf("the chunk before [DONE] carries no usage: %s", usageFrame)
+	}
+	for _, want := range []string{`"prompt_tokens":22`, `"completion_tokens":16`} {
+		if !strings.Contains(usageFrame, want) {
+			t.Fatalf("usage frame missing %s: %s", want, usageFrame)
+		}
+	}
+	// The usage frame is the OpenAI shape: no choices, so a client reading it
+	// does not treat it as another content delta.
+	if !strings.Contains(usageFrame, `"choices":[]`) {
+		t.Fatalf("usage frame should carry an empty choices array: %s", usageFrame)
+	}
+	// The finish reason still has to reach the client, on a frame before the
+	// usage frame and [DONE].
+	assertChatSSEFinish(t, got, "stop")
+}
+
+// A stream the provider cut off never published a complete usage pair, so there
+// is nothing honest to report. Emitting zeros would be a number nobody measured,
+// and a zero-token call is exactly what the ledger refuses to price.
+func TestClaudeSSEToOpenAIWithNoUsageEmitsNoUsageFrame(t *testing.T) {
+	in := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg\",\"model\":\"c\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
+	var out bytes.Buffer
+	if err := ClaudeSSEToOpenAI(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), `"usage"`) {
+		t.Fatalf("a stream that published no usage reported some: %s", out.String())
 	}
 }
