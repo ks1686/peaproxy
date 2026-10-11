@@ -58,6 +58,7 @@ Examples:
 	root.AddCommand(modelsCmd(&configPath))
 	root.AddCommand(catalogCmd(&configPath))
 	root.AddCommand(requestsCmd(&configPath))
+	root.AddCommand(errorsCmd(&configPath))
 	root.AddCommand(healthCmd(&configPath))
 	root.AddCommand(statusCmd(&configPath))
 	root.AddCommand(optimizationCmd(&configPath))

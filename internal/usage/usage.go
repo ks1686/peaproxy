@@ -81,10 +81,14 @@ type Event struct {
 	CacheReadNested bool   `json:"cacheReadNested,omitempty"`
 	Status          int    `json:"status"`
 	Error           string `json:"error,omitempty"`
-	Preview         string `json:"preview,omitempty"`
-	DurationMS      int64  `json:"durationMs,omitempty"`
-	QuotaHint       string `json:"quotaHint,omitempty"`
-	CacheHit        bool   `json:"cacheHit,omitempty"`
+	// Class names what went wrong, so failures are aggregatable without
+	// reading every message. Empty means the call was not classified, which
+	// for a recorded event means it was not a failure at all. See failure.go.
+	Class      FailureClass `json:"class,omitempty"`
+	Preview    string       `json:"preview,omitempty"`
+	DurationMS int64        `json:"durationMs,omitempty"`
+	QuotaHint  string       `json:"quotaHint,omitempty"`
+	CacheHit   bool         `json:"cacheHit,omitempty"`
 	// StreamTerminal names the terminal event a streamed response ended with
 	// ("done", "chat_finish", "responses_completed", "messages_stop") or "none"
 	// when the stream ended without one. A stream that ends with no terminal
@@ -188,6 +192,7 @@ type Store struct {
 	days       []DayRollup
 	path       string
 	requestLog string
+	errorLog   string
 	maxLog     int64
 
 	// reserved is spend held by requests that are in flight. It is not
@@ -636,10 +641,15 @@ func (s *Store) Path() string {
 }
 
 var (
-	bearerRE   = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._\-+/=]+`)
-	headerRE   = regexp.MustCompile(`(?i)((?:x-api-key|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?id)\s*[:=]\s*)(\S+)`)
-	jsonKeyRE  = regexp.MustCompile(`(?i)("(?:access_token|refresh_token|id_token|api_key|apiKey|authorization|password|secret|dca_token|session_id|github_token)"\s*:\s*")[^"]*(")`)
-	skRE       = regexp.MustCompile(`(?i)\bsk-[A-Za-z0-9_-]{8,}`)
+	bearerRE  = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._\-+/=]+`)
+	headerRE  = regexp.MustCompile(`(?i)((?:x-api-key|api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?id)\s*[:=]\s*)(\S+)`)
+	jsonKeyRE = regexp.MustCompile(`(?i)("(?:access_token|refresh_token|id_token|api_key|apiKey|authorization|password|secret|dca_token|session_id|github_token)"\s*:\s*")[^"]*(")`)
+	skRE      = regexp.MustCompile(`(?i)\bsk-[A-Za-z0-9_-]{8,}`)
+	// GitHub tokens are self-identifying by prefix and turn up outside any
+	// labelled field -- a Copilot 401 quotes the offending token in prose. The
+	// Copilot adapter stores a github_token, so an unlabelled one in a provider
+	// error body is this machine's most likely credential to leak into a log.
+	ghRE       = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b`)
 	jwtRE      = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
 	pemRE      = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
 	secretKeys = []string{"bearer ", "sk-", "x-api-key", "api_key", "access_token", "refresh_token", "id_token", "private key", "github_token"}
@@ -655,6 +665,7 @@ func Redact(s string) string {
 	out = bearerRE.ReplaceAllString(out, `${1}[redacted]`)
 	out = headerRE.ReplaceAllString(out, `${1}[redacted]`)
 	out = skRE.ReplaceAllString(out, "[redacted]")
+	out = ghRE.ReplaceAllString(out, "[redacted]")
 	out = jwtRE.ReplaceAllString(out, "[redacted]")
 	lower := strings.ToLower(out)
 	for _, key := range secretKeys {

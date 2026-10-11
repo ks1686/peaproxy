@@ -141,7 +141,11 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 	if path != "" {
 		g.Usage = usage.Open(filepath.Join(filepath.Dir(path), "usage.json"))
 		if cfg.RequestLog {
-			g.Usage.SetRequestLog(filepath.Join(filepath.Dir(path), "requests.log"))
+			dir := filepath.Dir(path)
+			g.Usage.SetRequestLog(filepath.Join(dir, "requests.log"))
+			// Same opt-in as the request log, separate file. Sharing one file
+			// would put failures back in the ring that evicts them by traffic.
+			g.Usage.SetErrorLog(usage.ErrorLogPath(dir))
 		}
 	} else {
 		g.Usage = &usage.Store{}
@@ -2390,9 +2394,12 @@ func (g *Gateway) SetRequestLog(on bool) error {
 	g.mu.Unlock()
 	if g.Usage != nil {
 		if on && path != "" {
-			g.Usage.SetRequestLog(filepath.Join(filepath.Dir(path), "requests.log"))
+			dir := filepath.Dir(path)
+			g.Usage.SetRequestLog(filepath.Join(dir, "requests.log"))
+			g.Usage.SetErrorLog(usage.ErrorLogPath(dir))
 		} else {
 			g.Usage.SetRequestLog("")
+			g.Usage.SetErrorLog("")
 		}
 	}
 	return g.persistAndRefresh(mine)
