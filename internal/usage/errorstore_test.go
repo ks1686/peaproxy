@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -168,8 +169,13 @@ func TestErrorStoreIsOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("errors.jsonl is %o, want 600", perm)
+	// Windows has no POSIX permission bits; Chmod there only toggles read-only,
+	// so Mode().Perm() reports 0666 whatever we ask for. Same guard as the
+	// request-log rotation test.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("errors.jsonl is %o, want 600", perm)
+		}
 	}
 }
 
