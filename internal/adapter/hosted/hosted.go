@@ -191,7 +191,7 @@ var (
 		DefaultBaseURL: "https://api.z.ai/api/paas/v4",
 		DefaultTier:    catalog.TierPaid,
 		EnvKey:         "ZAI_API_KEY",
-		Notes:          "Z.AI GLM OpenAI-compatible endpoint. Not live-verified by PeaProxy.",
+		Notes:          "Z.AI GLM OpenAI-compatible endpoint (pay-as-you-go API). GLM Coding Plan keys need baseUrl https://api.z.ai/api/coding/paas/v4. Not live-verified by PeaProxy.",
 		Unverified:     true,
 		Group:          GroupAPIKey,
 	}

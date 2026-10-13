@@ -21,7 +21,7 @@ Adapters in this repo today (2.0.x):
 | `alibabacoding` | Hosted OpenAI-compat: Alibaba Cloud Coding Plan. Chat completions only; not the general Model Studio endpoint. Not live-verified by PeaProxy | API key (`DASHSCOPE_API_KEY`) | `https://coding-intl.dashscope.aliyuncs.com/v1` |
 | `deepseek` | Hosted OpenAI-compat: DeepSeek OpenAI-compatible API. Not live-verified by PeaProxy | API key (`DEEPSEEK_API_KEY`) | `https://api.deepseek.com/v1` |
 | `mistral` | Hosted OpenAI-compat: Mistral La Plateforme. Distinct from the Claude subscription OAuth adapter. Not live-verified by PeaProxy | API key (`MISTRAL_API_KEY`) | `https://api.mistral.ai/v1` |
-| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
+| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint (pay-as-you-go API). GLM Coding Plan keys need baseUrl https://api.z.ai/api/coding/paas/v4. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
 | `minimax` | Hosted OpenAI-compat: MiniMax OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`MINIMAX_API_KEY`) | `https://api.minimax.io/v1` |
 | `together` | Hosted OpenAI-compat: Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy | API key (`TOGETHER_API_KEY`) | `https://api.together.xyz/v1` |
 | `fireworks` | Hosted OpenAI-compat: Fireworks AI inference. Pay per token. Not live-verified by PeaProxy | API key (`FIREWORKS_API_KEY`) | `https://api.fireworks.ai/inference/v1` |
@@ -74,7 +74,7 @@ Antigravity details:
 
 **P0 OAuth (shipped):** Anthropic Claude Pro/Max/Team/Enterprise, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
-**P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (not a generic chat upstream).
+**P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (browser login exists upstream, but chat is a Windsurf/Codeium protocol, not a generic chat upstream).
 
 **P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`, `opencode_zen`, **`opencode_go`**, plus the named v3 presets below.
 
@@ -173,7 +173,7 @@ PeaProxy never invents remaining counts. Unknown remaining is **omitted** (JSON 
 | `alibabacoding` | Hosted OpenAI-compat: Alibaba Cloud Coding Plan. Chat completions only; not the general Model Studio endpoint. Not live-verified by PeaProxy | API key (`DASHSCOPE_API_KEY`) | `https://coding-intl.dashscope.aliyuncs.com/v1` |
 | `deepseek` | Hosted OpenAI-compat: DeepSeek OpenAI-compatible API. Not live-verified by PeaProxy | API key (`DEEPSEEK_API_KEY`) | `https://api.deepseek.com/v1` |
 | `mistral` | Hosted OpenAI-compat: Mistral La Plateforme. Distinct from the Claude subscription OAuth adapter. Not live-verified by PeaProxy | API key (`MISTRAL_API_KEY`) | `https://api.mistral.ai/v1` |
-| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
+| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint (pay-as-you-go API). GLM Coding Plan keys need baseUrl https://api.z.ai/api/coding/paas/v4. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
 | `minimax` | Hosted OpenAI-compat: MiniMax OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`MINIMAX_API_KEY`) | `https://api.minimax.io/v1` |
 | `together` | Hosted OpenAI-compat: Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy | API key (`TOGETHER_API_KEY`) | `https://api.together.xyz/v1` |
 | `fireworks` | Hosted OpenAI-compat: Fireworks AI inference. Pay per token. Not live-verified by PeaProxy | API key (`FIREWORKS_API_KEY`) | `https://api.fireworks.ai/inference/v1` |
