@@ -135,6 +135,7 @@ func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 	if !a.skipLoopback {
 		lb, lerr := oauth.StartLoopback("127.0.0.1:"+callbackPort, "/auth/callback")
 		if lerr == nil {
+			lb.ExpectState(pending.state)
 			pending.lb = lb
 		}
 	}

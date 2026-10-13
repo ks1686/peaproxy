@@ -163,6 +163,7 @@ func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 			// Port busy: user can paste the redirect URL into AuthComplete.
 			pending.lb = nil
 		} else {
+			lb.ExpectState(pending.state)
 			pending.lb = lb
 		}
 	}
