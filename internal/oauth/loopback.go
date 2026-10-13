@@ -24,6 +24,18 @@ type Loopback struct {
 	ch     chan Result
 	mu     sync.Mutex
 	closed bool
+	state  string
+}
+
+// ExpectState makes the callback accept only a request carrying state, the
+// value sent in the authorize URL. Any other request to the callback path is
+// answered 400 and does not count as the result, so a stray or forged hit on
+// the loopback port cannot take the place of the real browser redirect.
+// Call it before handing out the login URL.
+func (l *Loopback) ExpectState(state string) {
+	l.mu.Lock()
+	l.state = state
+	l.mu.Unlock()
 }
 
 // StartLoopback listens on addr (host:port) and handles GET path.
@@ -98,6 +110,13 @@ func (l *Loopback) handle(w http.ResponseWriter, r *http.Request) {
 		Code:  q.Get("code"),
 		State: q.Get("state"),
 		Error: q.Get("error"),
+	}
+	l.mu.Lock()
+	want := l.state
+	l.mu.Unlock()
+	if want != "" && CheckState(want, res.State) != nil {
+		http.Error(w, "oauth callback state mismatch", http.StatusBadRequest)
+		return
 	}
 	select {
 	case l.ch <- res:
