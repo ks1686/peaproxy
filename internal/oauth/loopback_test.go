@@ -56,7 +56,7 @@ func TestLoopbackIgnoresCallbackWithWrongState(t *testing.T) {
 		if err != nil {
 			t.Fatalf("callback get: %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return resp.StatusCode
 	}
