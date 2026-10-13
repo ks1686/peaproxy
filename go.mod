@@ -1,6 +1,6 @@
 module github.com/ks1686/peaproxy
 
-go 1.26.0
+go 1.26.9
 
 require (
 	github.com/spf13/cobra v1.10.2
