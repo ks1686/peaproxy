@@ -35,7 +35,7 @@ Flows were studied from [router-for-me/CLIProxyAPI](https://github.com/router-fo
 | `copilot_oauth` | Implemented | GitHub device code with the public VS Code Copilot Chat GitHub App (`Iv1.b507a08c87ecfe98`, scope `read:user`), then `GET https://api.github.com/copilot_internal/v2/token` for a short-lived Copilot session, then live `GET /models` + `POST /chat/completions` at `https://api.githubcopilot.com` (enterprise `proxy-ep` swapped `proxy.` → `api.`). **Not** retired GitHub Models. |
 | `qwen_oauth` | **Not yet** | CPA has no working Qwen consumer OAuth. Use a Qwen API key with `openai_compat`. |
 | `factory_oauth` | **Not yet** | Factory has no public consumer chat OAuth or OpenAI-compat chat API. Official Factory HTTP is sessions/CI/computers at `https://api.factory.ai`. Use **Droid as a PeaProxy client** (`peaproxy clients show droid`). |
-| Devin | Skipped | CPA has a session-token login; it is not a generic chat-model upstream for this gateway. |
+| Devin | Skipped | CLIProxyAPI now uses a browser login, but Devin chat speaks a Windsurf/Codeium protocol, not a generic chat-model wire, and CLIProxyAPI disabled its Devin catalog. |
 | Vertex | Skipped | Service-account / GCP credentials, not consumer subscription OAuth. |
 | OpenCode Go | API key (not OAuth) | Official key from [opencode.ai/auth](https://opencode.ai/auth); adapter `opencode_go` at `https://opencode.ai/zen/go/v1`. Distinct from Zen (`opencode_zen` / `/zen/v1`). `peaproxy auth login --provider opencode-go` explains this. |
 
