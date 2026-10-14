@@ -23,17 +23,25 @@ func OAuthAdapterName(provider string) (string, error) {
 	case "meta", "muse", "meta_oauth":
 		return "meta_oauth", nil
 	case "qwen", "qwen_oauth":
-		return "qwen_oauth", nil
+		return "", fmt.Errorf("%s", qwenDiscontinued)
 	case "copilot", "github-copilot", "github_copilot", "copilot_oauth":
 		return "copilot_oauth", nil
+	case "kilo", "kilo_oauth", "kilocode", "kilo-code":
+		return "kilo_oauth", nil
+	case "minimax", "minimax_oauth", "minimax-oauth":
+		return "minimax_oauth", nil
 	case "factory", "droid", "factory_oauth", "factory-droid":
 		return "factory_oauth", nil
 	case "opencode-go", "opencode_go", "opencodego":
 		return "opencode_go", nil
 	default:
-		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen | copilot | factory | opencode-go)", provider)
+		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai | gemini | xai | kimi | kimi-ai | meta | copilot | kilo | minimax | factory | opencode-go)", provider)
 	}
 }
+
+// qwenDiscontinued is returned for the removed Qwen login. The factory stays
+// registered so a saved qwen_oauth row fails with this text.
+const qwenDiscontinued = "qwen_oauth: Qwen free-tier consumer OAuth was discontinued on 2026-04-15; use an API key or the Alibaba Coding Plan preset"
 
 // DefaultOAuthAccountID is the YAML provider id written by auth login.
 func DefaultOAuthAccountID(adapterName string) string {
@@ -52,10 +60,12 @@ func DefaultOAuthAccountID(adapterName string) string {
 		return "kimi-ai-oauth"
 	case "meta_oauth":
 		return "meta-oauth"
-	case "qwen_oauth":
-		return "qwen-oauth"
 	case "copilot_oauth":
 		return "copilot-oauth"
+	case "kilo_oauth":
+		return "kilo-oauth"
+	case "minimax_oauth":
+		return "minimax-oauth"
 	case "factory_oauth":
 		return "factory-oauth"
 	case "opencode_go":
@@ -82,10 +92,12 @@ func CLIProvider(adapterName string) string {
 		return "kimi-ai"
 	case "meta_oauth":
 		return "meta"
-	case "qwen_oauth":
-		return "qwen"
 	case "copilot_oauth":
 		return "copilot"
+	case "kilo_oauth":
+		return "kilo"
+	case "minimax_oauth":
+		return "minimax"
 	case "factory_oauth":
 		return "factory"
 	case "opencode_go":
@@ -95,12 +107,12 @@ func CLIProvider(adapterName string) string {
 	}
 }
 
-// IsOAuthAdapter reports whether the factory is a subscription-OAuth implementation (including the Qwen stub).
+// IsOAuthAdapter reports whether the factory is a subscription-OAuth implementation.
 func IsOAuthAdapter(name string) bool {
 	switch name {
 	case "anthropic_oauth", "openai_oauth", "antigravity", "gemini_oauth",
-		"xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "qwen_oauth",
-		"copilot_oauth", "factory_oauth":
+		"xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth",
+		"copilot_oauth", "kilo_oauth", "minimax_oauth", "factory_oauth":
 		return true
 	default:
 		return false

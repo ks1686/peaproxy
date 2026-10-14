@@ -226,11 +226,11 @@ func TestAuthLoginGeminiPrintURL(t *testing.T) {
 	}
 }
 
-func TestAuthLoginQwenNotYet(t *testing.T) {
+func TestAuthLoginQwenDiscontinued(t *testing.T) {
 	out := &bytes.Buffer{}
 	err := ExecuteWithArgs([]string{"auth", "login", "--provider", "qwen", "--print-url"}, out)
-	if err == nil || !strings.Contains(err.Error(), "not yet") {
-		t.Fatalf("want not yet, got %v\n%s", err, out)
+	if err == nil || !strings.Contains(err.Error(), "2026-04-15") {
+		t.Fatalf("want discontinued, got %v\n%s", err, out)
 	}
 	if !strings.Contains(out.String(), "not liable") {
 		t.Fatalf("warning should print before not-yet: %s", out)

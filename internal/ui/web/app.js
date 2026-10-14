@@ -1354,10 +1354,12 @@ function oauthCLIProvider(adapter) {
       return "kimi-ai";
     case "meta_oauth":
       return "meta";
-    case "qwen_oauth":
-      return "qwen";
     case "copilot_oauth":
       return "copilot";
+    case "kilo_oauth":
+      return "kilo";
+    case "minimax_oauth":
+      return "minimax";
     case "factory_oauth":
       return "factory";
     case "opencode_go":

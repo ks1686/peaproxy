@@ -18,7 +18,7 @@ func TestAccountPresetsIncludeHosted(t *testing.T) {
 		"google-key", "groq-key", "cerebras-key",
 		"xai-key", "huggingface", "nim-key", "workers-ai", "sambanova-key", "openrouter", "custom", "anthropic-oauth", "openai-oauth",
 		"antigravity", "xai-oauth", "kimi-oauth", "kimi-ai-oauth", "meta-oauth",
-		"copilot-oauth", "opencode-go",
+		"copilot-oauth", "kilo-oauth", "minimax-oauth", "opencode-go",
 	} {
 		if _, ok := got[id]; !ok {
 			t.Fatalf("missing preset %s", id)
