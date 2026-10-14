@@ -102,13 +102,19 @@ func TestImportCompletesPiOnly(t *testing.T) {
 }
 
 func TestClientNameCompletion(t *testing.T) {
-	want := map[string]bool{}
-	for _, n := range clients.List() {
-		want[n] = true
-	}
 	for _, path := range [][]string{
 		{"clients", "show"},
 		{"clients", "verify"},
+	} {
+		cmd := findCmd(t, path...)
+		got := complete(t, cmd, nil, "")
+		for _, n := range clients.List() {
+			if !contains(got, n) {
+				t.Errorf("%s does not offer %q", cmd.CommandPath(), n)
+			}
+		}
+	}
+	for _, path := range [][]string{
 		{"clients", "connect"},
 		{"clients", "disconnect"},
 	} {
@@ -117,14 +123,10 @@ func TestClientNameCompletion(t *testing.T) {
 		if len(got) == 0 {
 			t.Fatalf("%s completes nothing", cmd.CommandPath())
 		}
-		for _, g := range got {
-			if !want[g] {
-				t.Errorf("%s offered %q, which is not a preset", cmd.CommandPath(), g)
-			}
-		}
 		for _, n := range clients.List() {
-			if !contains(got, n) && want[n] {
-				t.Errorf("%s does not offer %q", cmd.CommandPath(), n)
+			offered := contains(got, n)
+			if offered != clients.Connectable(n) {
+				t.Errorf("%s offer %q = %v, connectable %v", cmd.CommandPath(), n, offered, clients.Connectable(n))
 			}
 		}
 	}
