@@ -18,7 +18,7 @@ func TestAccountPresetsIncludeHosted(t *testing.T) {
 		"google-key", "groq-key", "cerebras-key",
 		"xai-key", "huggingface", "nim-key", "workers-ai", "sambanova-key", "openrouter", "custom", "anthropic-oauth", "openai-oauth",
 		"antigravity", "xai-oauth", "kimi-oauth", "kimi-ai-oauth", "meta-oauth",
-		"copilot-oauth", "kilo-oauth", "minimax-oauth", "opencode-go",
+		"copilot-oauth", "kilo-oauth", "minimax-oauth", "poe-oauth", "zai-coding-oauth", "opencode-go",
 	} {
 		if _, ok := got[id]; !ok {
 			t.Fatalf("missing preset %s", id)
@@ -90,6 +90,22 @@ func TestAccountPresetsReportEnvPresenceWithoutValues(t *testing.T) {
 	}
 	if got["ollama-local"].EnvKeySet {
 		t.Fatalf("local ollama should not claim a key env: %#v", got["ollama-local"])
+	}
+}
+
+func TestUntestedOAuthPresets(t *testing.T) {
+	for _, id := range []string{"kilo-oauth", "minimax-oauth", "poe-oauth", "zai-coding-oauth"} {
+		p, ok := LookupPreset(id)
+		if !ok {
+			t.Fatalf("missing %s", id)
+		}
+		if !p.Unverified || !strings.Contains(p.Warn, "Untested") || !strings.Contains(p.Warn, "https://github.com/ks1686/peaproxy/issues") {
+			t.Fatalf("%s: unverified=%v warn=%q", id, p.Unverified, p.Warn)
+		}
+	}
+	p, ok := LookupPreset("anthropic-oauth")
+	if !ok || p.Unverified {
+		t.Fatalf("claude login should stay unmarked: %#v", p)
 	}
 }
 

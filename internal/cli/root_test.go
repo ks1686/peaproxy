@@ -11,6 +11,19 @@ import (
 	"github.com/ks1686/peaproxy/internal/version"
 )
 
+func TestAuthHelpLabelsUntestedLogins(t *testing.T) {
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"auth", "login", "--help"}, out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"poe", "zai", "untested", "https://github.com/ks1686/peaproxy/issues"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("auth help missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRootHelpListsPlanCommands(t *testing.T) {
 	out := &bytes.Buffer{}
 	err := ExecuteWithArgs([]string{"--help"}, out)

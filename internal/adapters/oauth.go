@@ -30,12 +30,16 @@ func OAuthAdapterName(provider string) (string, error) {
 		return "kilo_oauth", nil
 	case "minimax", "minimax_oauth", "minimax-oauth":
 		return "minimax_oauth", nil
+	case "poe", "poe_oauth", "poe-oauth":
+		return "poe_oauth", nil
+	case "zai", "zai_oauth", "zai-oauth", "zai-coding":
+		return "zai_oauth", nil
 	case "factory", "droid", "factory_oauth", "factory-droid":
 		return "factory_oauth", nil
 	case "opencode-go", "opencode_go", "opencodego":
 		return "opencode_go", nil
 	default:
-		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai | gemini | xai | kimi | kimi-ai | meta | copilot | kilo | minimax | factory | opencode-go)", provider)
+		return "", fmt.Errorf("unknown OAuth provider %q (anthropic | openai | gemini | xai | kimi | kimi-ai | meta | copilot | kilo | minimax | poe | zai | factory | opencode-go)", provider)
 	}
 }
 
@@ -66,6 +70,10 @@ func DefaultOAuthAccountID(adapterName string) string {
 		return "kilo-oauth"
 	case "minimax_oauth":
 		return "minimax-oauth"
+	case "poe_oauth":
+		return "poe-oauth"
+	case "zai_oauth":
+		return "zai-coding-oauth"
 	case "factory_oauth":
 		return "factory-oauth"
 	case "opencode_go":
@@ -98,6 +106,10 @@ func CLIProvider(adapterName string) string {
 		return "kilo"
 	case "minimax_oauth":
 		return "minimax"
+	case "poe_oauth":
+		return "poe"
+	case "zai_oauth":
+		return "zai"
 	case "factory_oauth":
 		return "factory"
 	case "opencode_go":
@@ -112,7 +124,7 @@ func IsOAuthAdapter(name string) bool {
 	switch name {
 	case "anthropic_oauth", "openai_oauth", "antigravity", "gemini_oauth",
 		"xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth",
-		"copilot_oauth", "kilo_oauth", "minimax_oauth", "factory_oauth":
+		"copilot_oauth", "kilo_oauth", "minimax_oauth", "poe_oauth", "zai_oauth", "factory_oauth":
 		return true
 	default:
 		return false

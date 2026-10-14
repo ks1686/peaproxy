@@ -30,7 +30,8 @@ func NewRoot() *cobra.Command {
 providers, a live model catalog, and OpenAI/Claude-compatible endpoints.
 
 Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse,
-GitHub Copilot, Kilo, MiniMax) is implemented and may violate provider ToS.
+GitHub Copilot, Kilo, MiniMax, Poe, Z.AI Coding Plan) is implemented and may
+violate provider ToS. Kilo, MiniMax, Poe, and Z.AI Coding Plan are untested.
 See docs/OAUTH.md. API keys remain the official path.
 
 Examples:

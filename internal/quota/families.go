@@ -58,6 +58,8 @@ var families = map[string]Family{
 	"copilot_oauth":   {Headers: "", Note: "not reported by provider; Copilot has no stable documented remaining endpoint (internal quota APIs are skipped)"},
 	"kilo_oauth":      {Headers: "x-ratelimit-* if sent", Note: oauthNote()},
 	"minimax_oauth":   {Headers: "anthropic-ratelimit-* if sent", Note: oauthNote()},
+	"poe_oauth":       {Headers: "x-ratelimit-* if sent", Note: oauthNote()},
+	"zai_oauth":       {Headers: "x-ratelimit-* if sent", Note: oauthNote()},
 	"factory_oauth":   {Headers: "", Note: "not reported by provider; Factory/Droid upstream is not yet"},
 }
 

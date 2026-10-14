@@ -23,7 +23,9 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter/opencodego"
 	"github.com/ks1686/peaproxy/internal/adapter/opencodezen"
 	"github.com/ks1686/peaproxy/internal/adapter/openrouter"
+	"github.com/ks1686/peaproxy/internal/adapter/poe_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/xai_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/zai_oauth"
 )
 
 // DefaultRegistry registers built-in adapter factories for the server and CLI.
@@ -59,6 +61,8 @@ func DefaultRegistry() *adapter.Registry {
 	r.Register(copilot_oauth.Name, copilot_oauth.New)
 	r.Register(kilo_oauth.Name, kilo_oauth.New)
 	r.Register(minimax_oauth.Name, minimax_oauth.New)
+	r.Register(poe_oauth.Name, poe_oauth.New)
+	r.Register(zai_oauth.Name, zai_oauth.New)
 	r.Register("qwen_oauth", discontinuedQwen)
 	r.Register(factory_oauth.Name, factory_oauth.New)
 	return r

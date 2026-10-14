@@ -376,7 +376,11 @@ function presetOptions(presets) {
       const opts = byGroup
         .get(g)
         .map((p) => {
-          const mark = p.unverified ? " (not verified)" : "";
+          const mark = p.unverified
+            ? p.group === "Subscription OAuth"
+              ? " (untested)"
+              : " (not verified)"
+            : "";
           const label = (p.label || p.id) + mark;
           return `<option value="${escapeHtml(p.id)}">${escapeHtml(label)}</option>`;
         })
@@ -392,7 +396,7 @@ function accountsPage(root) {
   root.innerHTML = `
     <section class="card">
       <h2>Add account</h2>
-      <p class="muted">Presets for local servers, API keys, subscription OAuth, and OpenAI-compat hosts. Gemini API keys use Google AI Studio’s official OpenAI-compat endpoint; Gemini/Antigravity subscription OAuth is a separate Cloud Code path. Subscription OAuth may violate provider ToS and can ban the account; PeaProxy authors are not liable. Prefer API keys.</p>
+      <p class="muted">Presets for local servers, API keys, subscription OAuth, and OpenAI-compat hosts. Gemini API keys use Google AI Studio’s official OpenAI-compat endpoint; Gemini/Antigravity subscription OAuth is a separate Cloud Code path. Subscription OAuth may violate provider ToS and can ban the account; PeaProxy authors are not liable. Prefer API keys. Untested logins (Kilo, MiniMax, Poe, Z.AI Coding Plan): please report what happened at https://github.com/ks1686/peaproxy/issues.</p>
       <div class="row">
         <label>Preset
           <select id="preset"></select>
@@ -1360,6 +1364,10 @@ function oauthCLIProvider(adapter) {
       return "kilo";
     case "minimax_oauth":
       return "minimax";
+    case "poe_oauth":
+      return "poe";
+    case "zai_oauth":
+      return "zai";
     case "factory_oauth":
       return "factory";
     case "opencode_go":

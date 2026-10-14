@@ -1,8 +1,8 @@
 # PeaProxy
 
-Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
+Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax, Poe, Z.AI Coding Plan). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
-Status: **v3.1.1** on main. Schema stays 1. v3 routing and cost behavior is in [docs/V3.md](docs/V3.md). The v2 request engine is in [docs/V2.md](docs/V2.md).
+Status: **v3.1.2** on main. Schema stays 1. v3 routing and cost behavior is in [docs/V3.md](docs/V3.md). The v2 request engine is in [docs/V2.md](docs/V2.md).
 
 **Liability:** subscription OAuth **may violate provider terms** and can ban the account. PeaProxy authors are **not liable**. The official path is an **API key**. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
@@ -12,12 +12,12 @@ Status: **v3.1.1** on main. Schema stays 1. v3 routing and cost behavior is in [
 |---|---|---|
 | **API key** (`anthropic`, `openai`, `google`/`gemini`, `xai`, Groq, …) | Official provider console / AI Studio | Supported. Prefer this. |
 | **Local / no key** (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | Software you already run | Supported. |
-| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude (Pro/Max/Team/Enterprise), ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo Pass, or MiniMax Coding Plan subscription | **ToS/ban risk. At your own risk.** Authors not liable. |
+| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude (Pro/Max/Team/Enterprise), ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo Pass, MiniMax Coding Plan, Poe, or Z.AI Coding Plan subscription | **ToS/ban risk. At your own risk.** Authors not liable. Kilo, MiniMax, Poe, and Z.AI Coding Plan are **untested**. |
 | **Qwen consumer OAuth** | Removed | Free-tier login ended 2026-04-15. Use a Qwen **API key** or the Alibaba Coding Plan preset. |
 | **Factory / Droid upstream** | — | **Not yet** (no public consumer chat OAuth). Use **Droid as a client** of PeaProxy. |
 | **OpenCode Go** | Subscribe at [opencode.ai/auth](https://opencode.ai/auth) | Official **API key** (`adapter: opencode_go`). Distinct from Zen. Not OAuth. |
 
-OAuth presets in the UI print the same warning. Tokens and inline keys go to the **OS keychain** (encrypted file fallback), not plaintext YAML.
+OAuth presets in the UI print the same warning. Untested logins are marked in the preset list. Please report what happened, with tokens removed, at [GitHub issues](https://github.com/ks1686/peaproxy/issues). Tokens and inline keys go to the **OS keychain** (encrypted file fallback), not plaintext YAML.
 
 ## One-liner
 
@@ -57,7 +57,7 @@ Alternatively, install the latest release tag with Go, or pin one:
 
 ```bash
 go install github.com/ks1686/peaproxy/cmd/peaproxy@latest
-# @latest is the highest release tag, currently v3.1.1
+# @latest is the highest release tag (v3.1.0). This tree is v3.1.2 and is not tagged.
 peaproxy --version
 peaproxy serve
 ```
@@ -120,7 +120,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Grouped accounts UI + 8 new paid presets (DeepSeek, Mistral, Z.AI, MiniMax, Together, Fireworks, Alibaba Coding Plan, Cohere) | Shipped in v3. Only **Cohere** is live-verified (2026-10-05); the rest show `(not verified)` and mean it |
 | **Anonymous-provider consent** | Enforced since 3.0.4. `allowAnonymousProviders` was previously read by nothing. Automatic routes now refuse a deployment with no credential of any kind; local accounts and OAuth sessions are exempt, because an OAuth session is an account just as much as a key |
 | **Per-endpoint capability overrides** | Since 3.0.4. An OpenAI-compatible server is a wire shape, not a promise — plenty accept a `tools` array and ignore it. `capabilities` under a provider corrects `tools`, `visionIn`, `imageOut`, `embeddings` for your machine; unset keeps the adapter's own declaration |
-| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot, Kilo, MiniMax) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways. Kilo and MiniMax device login match their public clients; a subscribed chat was not completed from PeaProxy |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot, Kilo, MiniMax, Poe, Z.AI Coding Plan) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways. Kilo, MiniMax, Poe, and Z.AI Coding Plan match public clients and are **untested** (a subscribed chat was not completed from PeaProxy). Please report results in [GitHub issues](https://github.com/ks1686/peaproxy/issues) |
 | Claude OAuth Messages cloak | **Shipped** — `anthropic_oauth` injects Claude Code billing header + CLI identity (caller system relocated, never deleted). Client-preset cloak defaults stay **off** |
 | Codex OAuth `store` / token limits | **Shipped** — `openai_oauth` forces `store: false` and omits `max_output_tokens` / `stream_options` |
 | Qwen consumer OAuth | **Removed** (discontinued 2026-04-15). Use an API key or Alibaba Coding Plan |
@@ -176,7 +176,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` / `-v` | Release tag (`go install …@vX.Y.Z` or GoReleaser). Dirty local trees print `dev` |
-| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta\|copilot\|kilo\|minimax`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Factory is **not yet**. Qwen login was removed (discontinued 2026-04-15). OpenCode Go is an API key (`--provider opencode-go` explains). |
+| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta\|copilot\|kilo\|minimax\|poe\|zai`). Prints ToS/ban-risk warning. Kilo, MiniMax, Poe, and Z.AI are **untested**. `--print-url` / `--device` / `--no-browser`. Poe refuses `--print-url` because its callback port is ephemeral. Prefer API keys. Factory is **not yet**. Qwen login was removed (discontinued 2026-04-15). OpenCode Go is an API key (`--provider opencode-go` explains). GitLab Duo is not shipped. |
 | `accounts` | Configured provider accounts (`list` / `add <preset>`) |
 | `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |
 | `catalog` | Listing overlays (`pin` / `rename` / `hide`) matching the Catalog UI |

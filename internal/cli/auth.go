@@ -18,7 +18,9 @@ func authCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
 		Short: "Subscription OAuth login",
-		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax).
+		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax, Poe, Z.AI Coding Plan).
+
+Kilo, MiniMax, Poe, and Z.AI Coding Plan logins are untested. Please report what happened: https://github.com/ks1686/peaproxy/issues
 
 ` + oauth.LiabilityWarning() + `
 
@@ -33,6 +35,8 @@ Examples:
   peaproxy auth login --provider copilot
   peaproxy auth login --provider kilo
   peaproxy auth login --provider minimax
+  peaproxy auth login --provider poe
+  peaproxy auth login --provider zai
   peaproxy auth login --provider anthropic --print-url
 `,
 	}
@@ -46,6 +50,10 @@ Examples:
 	login := &cobra.Command{
 		Use:   "login",
 		Short: "Start subscription OAuth (ToS/ban risk)",
+		Long: `Start subscription OAuth (ToS/ban risk).
+
+Kilo, MiniMax, Poe, and Z.AI Coding Plan logins are untested. Please report what happened: https://github.com/ks1686/peaproxy/issues
+`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_ = args
 			if provider == "" {
@@ -137,9 +145,9 @@ Examples:
 			return nil
 		},
 	}
-	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | copilot | kilo | minimax | factory | opencode-go")
+	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | copilot | kilo | minimax | poe | zai | factory | opencode-go (kilo, minimax, poe, and zai are untested)")
 	login.Flags().StringVar(&accountID, "id", "", "Account id to write (default per provider)")
-	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (xAI, Kimi, Meta, Kilo, and MiniMax already use device code)")
+	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (xAI, Kimi, Meta, Kilo, MiniMax, and Z.AI Coding Plan already poll; Poe uses a browser callback)")
 	login.Flags().BoolVar(&noBrowser, "no-browser", false, "Do not open a browser")
 	login.Flags().BoolVar(&printURL, "print-url", false, "Print the authorize URL and exit without waiting")
 	cmd.AddCommand(login)
