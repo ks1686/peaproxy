@@ -37,7 +37,9 @@ func Resolve(ldflags string, info *debug.BuildInfo) string {
 	if info == nil {
 		return "dev"
 	}
-	if v := strings.TrimSpace(info.Main.Version); v != "" && v != "(devel)" {
+	// A local `go build` on a dirty tree stamps a pseudo-version ending in
+	// +dirty. That is not a release the user installed, so it stays "dev".
+	if v := strings.TrimSpace(info.Main.Version); v != "" && v != "(devel)" && !strings.HasSuffix(v, "+dirty") {
 		return v
 	}
 	revision, modified := vcsMeta(info)
