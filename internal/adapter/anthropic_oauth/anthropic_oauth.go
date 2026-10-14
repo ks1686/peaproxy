@@ -160,12 +160,10 @@ func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 	if !a.skipLoopback {
 		lb, lerr := oauth.StartLoopback("127.0.0.1:"+callbackPort, "/callback")
 		if lerr != nil {
-			// Port busy: user can paste the redirect URL into AuthComplete.
-			pending.lb = nil
-		} else {
-			lb.ExpectState(pending.state)
-			pending.lb = lb
+			return adapter.AuthSession{}, fmt.Errorf("anthropic_oauth: callback port %s is in use: %w", callbackPort, lerr)
 		}
+		lb.ExpectState(pending.state)
+		pending.lb = lb
 	}
 	a.mu.Lock()
 	if a.pending != nil && a.pending.lb != nil {
