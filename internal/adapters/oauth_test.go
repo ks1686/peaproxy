@@ -24,6 +24,9 @@ func TestOAuthAdapterNameAliases(t *testing.T) {
 		"kilo":           "kilo_oauth",
 		"minimax":        "minimax_oauth",
 		"minimax-oauth":  "minimax_oauth",
+		"poe":            "poe_oauth",
+		"zai":            "zai_oauth",
+		"zai-coding":     "zai_oauth",
 		"factory":        "factory_oauth",
 		"droid":          "factory_oauth",
 		"opencode-go":    "opencode_go",
@@ -37,13 +40,13 @@ func TestOAuthAdapterNameAliases(t *testing.T) {
 	if _, err := OAuthAdapterName("nope"); err == nil {
 		t.Fatal("expected error")
 	}
-	if !IsOAuthAdapter("antigravity") || IsOAuthAdapter("qwen_oauth") || !IsOAuthAdapter("copilot_oauth") || !IsOAuthAdapter("kilo_oauth") || !IsOAuthAdapter("minimax_oauth") || !IsOAuthAdapter("factory_oauth") || IsOAuthAdapter("google") || IsOAuthAdapter("opencode_go") {
+	if !IsOAuthAdapter("antigravity") || IsOAuthAdapter("qwen_oauth") || !IsOAuthAdapter("copilot_oauth") || !IsOAuthAdapter("kilo_oauth") || !IsOAuthAdapter("minimax_oauth") || !IsOAuthAdapter("poe_oauth") || !IsOAuthAdapter("zai_oauth") || !IsOAuthAdapter("factory_oauth") || IsOAuthAdapter("google") || IsOAuthAdapter("opencode_go") {
 		t.Fatal("IsOAuthAdapter")
 	}
 	if _, err := OAuthAdapterName("qwen"); err == nil || !strings.Contains(err.Error(), "2026-04-15") {
 		t.Fatalf("qwen: %v", err)
 	}
-	if CLIProvider("antigravity") != "gemini" || CLIProvider("kimi_ai_oauth") != "kimi-ai" || CLIProvider("copilot_oauth") != "copilot" || CLIProvider("kilo_oauth") != "kilo" || CLIProvider("minimax_oauth") != "minimax" || CLIProvider("opencode_go") != "opencode-go" {
+	if CLIProvider("antigravity") != "gemini" || CLIProvider("kimi_ai_oauth") != "kimi-ai" || CLIProvider("copilot_oauth") != "copilot" || CLIProvider("kilo_oauth") != "kilo" || CLIProvider("minimax_oauth") != "minimax" || CLIProvider("poe_oauth") != "poe" || CLIProvider("zai_oauth") != "zai" || CLIProvider("opencode_go") != "opencode-go" {
 		t.Fatal("CLIProvider")
 	}
 }

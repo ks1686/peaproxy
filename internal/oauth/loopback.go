@@ -14,6 +14,8 @@ type Result struct {
 	Code  string
 	State string
 	Error string
+	// Iss is the optional issuer query parameter. Empty when the provider omits it.
+	Iss string
 }
 
 // Loopback is a one-shot localhost callback server.
@@ -110,6 +112,7 @@ func (l *Loopback) handle(w http.ResponseWriter, r *http.Request) {
 		Code:  q.Get("code"),
 		State: q.Get("state"),
 		Error: q.Get("error"),
+		Iss:   q.Get("iss"),
 	}
 	l.mu.Lock()
 	want := l.state

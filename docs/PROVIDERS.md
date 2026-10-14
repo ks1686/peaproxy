@@ -44,8 +44,10 @@ Adapters in this repo today (2.0.x):
 | `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |
 | `meta_oauth` | Meta Muse device OAuth + minted key. **ToS/ban risk.** | OAuth (`--provider meta`) | `https://api.meta.ai/v1` |
 | `copilot_oauth` | GitHub Copilot subscription device OAuth + Copilot chat (`api.githubcopilot.com`). **ToS/ban risk.** Not GitHub Models. | OAuth (`--provider copilot`) | `https://api.githubcopilot.com` |
-| `kilo_oauth` | Kilo Pass device OAuth + OpenAI-compat chat at `/api/openrouter`. **ToS/ban risk.** A subscribed chat was not completed from PeaProxy. | OAuth (`--provider kilo`) | `https://api.kilo.ai/api/openrouter` |
-| `minimax_oauth` | MiniMax Coding Plan device OAuth + Anthropic Messages (`x-api-key`). Global region only. **ToS/ban risk.** A subscribed chat was not completed from PeaProxy. Distinct from the `minimax` API-key preset. | OAuth (`--provider minimax`) | `https://api.minimax.io/anthropic` |
+| `kilo_oauth` | Kilo Pass device OAuth + OpenAI-compat chat at `/api/openrouter`. **ToS/ban risk. Untested.** A subscribed chat was not completed from PeaProxy. | OAuth (`--provider kilo`) | `https://api.kilo.ai/api/openrouter` |
+| `minimax_oauth` | MiniMax Coding Plan device OAuth + Anthropic Messages (`x-api-key`). Global region only. **ToS/ban risk. Untested.** A subscribed chat was not completed from PeaProxy. Distinct from the `minimax` API-key preset. | OAuth (`--provider minimax`) | `https://api.minimax.io/anthropic` |
+| `poe_oauth` | Poe browser OAuth (public OpenCode client) + OpenAI-compat chat at `api.poe.com/v1`. **ToS/ban risk. Untested.** No refresh token. | OAuth (`--provider poe`) | `https://api.poe.com/v1` |
+| `zai_oauth` | Z.AI Coding Plan poll login. Mints a Coding Plan key, then OpenAI-compat chat. **ToS/ban risk. Untested.** Distinct from the `zai` pay-as-you-go API-key preset. | OAuth (`--provider zai`) | `https://api.z.ai/api/coding/paas/v4` |
 | `cursor_agent` | Cursor subscription as an upstream, run through Cursor's own `cursor-agent` CLI (`--mode ask`, one flattened prompt per call). **No tool calling** — the mode is read-only, so `tools` is reported unsupported rather than unknown. **ToS/ban risk.** POSIX-only upstream: the CLI is a shell script. Set `workDir` (see [CONFIG](CONFIG.md#cursor-agent)) so the interactive workspace-trust prompt is answered for a directory you chose. | `CURSOR_API_KEY` / `CURSOR_API_ENDPOINT`, else the IDE session | n/a — the CLI decides |
 | `qwen_oauth` | Removed. Free-tier consumer OAuth ended 2026-04-15. A saved row fails with that reason. | n/a | Qwen API key, or Alibaba Coding Plan |
 | `factory_oauth` | Stub: no public Factory consumer chat OAuth | n/a | use Droid as a PeaProxy **client** (`peaproxy clients show droid`) |
@@ -175,7 +177,7 @@ PeaProxy never invents remaining counts. Unknown remaining is **omitted** (JSON 
 | `openrouter` | `X-RateLimit-*` on **429** only | **`GET /api/v1/key`** on Health refresh / probe (`limit_remaining`) |
 | `ollama_cloud`, `opencode_zen`, `opencode_go` | headers if sent | none |
 | Local (`ollama`, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | none | none |
-| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta, Copilot, Kilo, MiniMax) | headers if the upstream sends them | **none**. No stable documented remaining GET (Copilot `/copilot_internal/user` is skipped) |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta, Copilot, Kilo, MiniMax, Poe, Z.AI Coding Plan) | headers if the upstream sends them | **none**. No stable documented remaining GET (Copilot `/copilot_internal/user` is skipped). Kilo, MiniMax, Poe, and Z.AI Coding Plan are untested |
 
 Surfaces: `GET /admin/health` (`quota`), `GET /admin/quota`, Health UI, `peaproxy health`. Header snapshots are taken from the HTTP transport (does not add a request). Probes are not run on every chat.
 

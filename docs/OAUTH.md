@@ -1,6 +1,6 @@
 # OAuth
 
-Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. Since **2.0.x** (current release **v3.1.1**): Claude Pro/Max/Team/Enterprise (Team/Enterprise since v2.0.8), ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, GitHub Copilot (`copilot_oauth`), Kilo Pass (`kilo_oauth`), and MiniMax Coding Plan (`minimax_oauth`, global region). Factory/Droid remains **not yet**. Qwen free-tier consumer OAuth was discontinued on 2026-04-15 and the login stub is gone. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
+Karim (owner) overrode the prior “official OAuth only” policy on **2026-09-26**: PeaProxy ships **consumer subscription OAuth** so a local gateway can reuse a subscription the user already pays for. Since **2.0.x** (current release **v3.1.2**): Claude Pro/Max/Team/Enterprise (Team/Enterprise since v2.0.8), ChatGPT/Codex, Gemini/Antigravity, xAI Grok, Kimi, Meta Muse, GitHub Copilot (`copilot_oauth`), Kilo Pass (`kilo_oauth`), MiniMax Coding Plan (`minimax_oauth`, global region), Poe (`poe_oauth`), and Z.AI Coding Plan (`zai_oauth`). Factory/Droid remains **not yet**. GitLab Duo is not shipped (see the status table). Qwen free-tier consumer OAuth was discontinued on 2026-04-15 and the login stub is gone. OpenCode Go is an **API key** (`opencode_go`), not OAuth. 1.0 residuals: [V1.md](V1.md).
 
 ## Liability (read this)
 
@@ -33,8 +33,11 @@ Flows were studied from [router-for-me/CLIProxyAPI](https://github.com/router-fo
 | `kimi_ai_oauth` | Implemented | Same flow on `kimi.ai` (`auth.kimi.ai` / `api.kimi.ai/coding/v1`) |
 | `meta_oauth` | Implemented | Device code at `auth.meta.com`, mint `api.meta.ai/muse-code/key`, then OpenAI-compat at `https://api.meta.ai/v1` |
 | `copilot_oauth` | Implemented | GitHub device code with the public VS Code Copilot Chat GitHub App (`Iv1.b507a08c87ecfe98`, scope `read:user`), then `GET https://api.github.com/copilot_internal/v2/token` for a short-lived Copilot session, then live `GET /models` + `POST /chat/completions` at `https://api.githubcopilot.com` (enterprise `proxy-ep` swapped `proxy.` → `api.`). **Not** retired GitHub Models. |
-| `kilo_oauth` | Implemented | Kilo Pass device code: `POST https://api.kilo.ai/api/device-auth/codes`, then `GET` that code (202 pending, 403 denied, 410 expired, 200 approved). Chat is OpenAI-compatible at `https://api.kilo.ai/api/openrouter`. A token that embeds a base URL is routed to that host's `/api/openrouter`. No refresh token is stored. A subscribed chat was not completed from PeaProxy. |
-| `minimax_oauth` | Implemented | MiniMax CLI device code (client `659cf4c1-615c-45f6-a5f6-4bf15eb476e5`, scope `openid profile coding_plan`) at `https://account.minimax.io/oauth2/device/code` and `/oauth2/token`, grant `urn:ietf:params:oauth:grant-type:device_code`. Chat is Anthropic Messages at `https://api.minimax.io/anthropic` with `x-api-key`. Refresh uses a 5 minute skew. Global region only. A subscribed chat was not completed from PeaProxy. |
+| `kilo_oauth` | Implemented, **untested** | Kilo Pass device code: `POST https://api.kilo.ai/api/device-auth/codes`, then `GET` that code (202 pending, 403 denied, 410 expired, 200 approved). Chat is OpenAI-compatible at `https://api.kilo.ai/api/openrouter`. A token that embeds a base URL is routed to that host's `/api/openrouter`. No refresh token is stored. A subscribed chat was not completed from PeaProxy. |
+| `minimax_oauth` | Implemented, **untested** | MiniMax CLI device code (client `659cf4c1-615c-45f6-a5f6-4bf15eb476e5`, scope `openid profile coding_plan`) at `https://account.minimax.io/oauth2/device/code` and `/oauth2/token`, grant `urn:ietf:params:oauth:grant-type:device_code`. Chat is Anthropic Messages at `https://api.minimax.io/anthropic` with `x-api-key`. Refresh uses a 5 minute skew. Global region only. A subscribed chat was not completed from PeaProxy. |
+| `poe_oauth` | Implemented, **untested** | Public OpenCode client `client_728290227fc048cc9262091a1ea197ea`, scope `apikey:create`. PKCE on an ephemeral `http://127.0.0.1:<port>/callback` (the port is chosen when login starts; `--print-url` cannot finish it). Authorize `https://poe.com/oauth/authorize`, token `POST https://api.poe.com/token` (`api_key`, optional `api_key_expires_in`). Chat is OpenAI-compatible at `https://api.poe.com/v1` with that key as a bearer token. No refresh token. A subscribed chat was not completed from PeaProxy. |
+| `zai_oauth` | Implemented, **untested** | Z.AI Coding Plan poll, the same shape as the public ZCode CLI: `POST https://zcode.z.ai/api/v1/oauth/cli/init` with a one-off bearer, open the returned `authorize_url` (the client id is in that URL, not a constant PeaProxy sends), then `GET https://zcode.z.ai/api/v1/oauth/cli/poll/{flow_id}`. A ready poll exchanges the Z.AI token at `POST https://api.z.ai/api/auth/z/login` and mints a Coding Plan key (`apiKey.secretKey`) named `zcode-api-key`. Chat is OpenAI-compatible at `https://api.z.ai/api/coding/paas/v4`. No refresh grant. Distinct from the pay-as-you-go `zai` API-key preset (`https://api.z.ai/api/paas/v4`). A subscribed chat was not completed from PeaProxy. |
+| GitLab Duo | Skipped | The public OpenCode client `fd180700a8f9c5d5557aca231632dd0611a1135a3bb510a741d5a988a3394fa7` and `https://gitlab.com/oauth/authorize` / `/oauth/token` (redirect `http://127.0.0.1:8080/callback`, scope `api`) are documented for gitlab.com. Chat is not one endpoint. `gitlab-ai-provider` first mints a short-lived token at `POST /api/v4/ai/third_party_agents/direct_access`, then routes each model to `https://cloud.gitlab.com/ai/v1/proxy/anthropic/`, `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` chat completions, the OpenAI Responses API, or a Duo Workflow WebSocket. Model discovery is GraphQL `aiChatAvailableModels` and needs a project or namespace. Self-managed GitLab needs an OAuth app PeaProxy will not register. |
 | `qwen_oauth` | Removed | Free-tier consumer OAuth was discontinued on 2026-04-15. A saved `qwen_oauth` row fails at startup with that reason. Use a Qwen API key or the Alibaba Coding Plan preset. |
 | `factory_oauth` | **Not yet** | Factory has no public consumer chat OAuth or OpenAI-compat chat API. Official Factory HTTP is sessions/CI/computers at `https://api.factory.ai`. Use **Droid as a PeaProxy client** (`peaproxy clients show droid`). |
 | Devin | Skipped | CLIProxyAPI now uses a browser login, but Devin chat speaks a Windsurf/Codeium protocol, not a generic chat-model wire, and CLIProxyAPI disabled its Devin catalog. |
@@ -60,8 +63,12 @@ peaproxy auth login --provider meta
 peaproxy auth login --provider copilot
 peaproxy auth login --provider kilo
 peaproxy auth login --provider minimax
+peaproxy auth login --provider poe
+peaproxy auth login --provider zai
 peaproxy auth login --provider anthropic --print-url  # URL only, no wait
 ```
+
+Kilo, MiniMax, Poe, and Z.AI Coding Plan are **untested**: PeaProxy has not completed a subscribed chat on them. Please report what happened, including the provider and the error text with tokens removed, at [GitHub issues](https://github.com/ks1686/peaproxy/issues).
 
 The command always prints the liability warning first. Tokens are never printed. Smoke after login:
 
@@ -80,7 +87,9 @@ Callback ports (must match the public CLI OAuth clients):
 - Codex: `http://localhost:1455/auth/callback`
 - Gemini / Antigravity: `http://localhost:51121/oauth-callback`
 
-xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, and MiniMax use **device code** (no loopback port). If a PKCE callback port is already in use, login fails and names the port. Free it, or for Codex use `--device`.
+Poe listens on an ephemeral `127.0.0.1` port and puts that exact redirect in the authorize URL. `--print-url` cannot complete a Poe login, because the port exists only in the process that is waiting. Z.AI Coding Plan does not use a loopback port: init returns the authorize URL.
+
+xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax, and Z.AI Coding Plan poll (no fixed loopback port). If a PKCE callback port is already in use, login fails and names the port. Free it, or for Codex use `--device`.
 
 ## Storage and secrets
 
@@ -96,7 +105,7 @@ Set `PEAPROXY_SECRET_BACKEND=keyring` to require the OS store (error if it canno
 - Adapters implement `Authenticator` (`AuthStart` / `AuthComplete`) plus `ListModels` / `Chat` / `ChatStream`. Claude OAuth also implements `NativeMessages`.
 - JSON bodies used for Anthropic token exchange are structs (fixed key order), not `map[string]any`. Chat and Responses bodies use `jsonx.SetStream` / `jsonx.SetTopLevelRaw` / `jsonx.DropTopLevelKeys` (top-level only; nested `"stream"` and quoted text stay put). Codex OAuth drops Amp `stream_options` and `max_output_tokens`, then sets `store: false`, without reshuffling remaining keys. Chat completions sent to Codex carry `service_tier` (`fast` → `priority`, `priority`, `flex`; other values are dropped), `reasoning_effort` as `reasoning.effort`, and `parallel_tool_calls` when the client sent it. Every Codex `/responses` call sends `x-codex-routing-hint: model=<m>[;tier=<t>]` built from the posted body, as the Codex CLI does; `/models` does not. Claude OAuth Messages inject `metadata.user_id` (Claude Code JSON-string shape) and a **non-strict** Claude Code system cloak: top-level `system` becomes the CCH billing header + CLI identity (`cache_control: ephemeral`); caller system text is relocated (mid-conversation `role=system` on modern models such as `claude-sonnet-5`, first-user reminder on legacy IDs). Already-cloaked Claude Code bodies are left alone. On that same OAuth request, tool names `todowrite` and `mcp_manage` are sent as `TodoWrite` and `use_mcp`, then restored on the response, because Anthropic bills those client names as extra usage.
 - Failover, hide≠route, and catalog filters (`subscription_oauth`) are unchanged.
-- PeaProxy does **not** vendor CLIProxyAPI. Public CLI client ids (Claude Code, Codex CLI, Antigravity IDE, Grok CLI, Kimi Code, Muse CLI, VS Code Copilot Chat GitHub App, MiniMax CLI) are used because those are the clients the subscription tokens are issued for. Kilo device login has no client id.
+- PeaProxy does **not** vendor CLIProxyAPI. Public CLI client ids (Claude Code, Codex CLI, Antigravity IDE, Grok CLI, Kimi Code, Muse CLI, VS Code Copilot Chat GitHub App, MiniMax CLI, OpenCode's Poe client) are used because those are the clients the subscription tokens are issued for. Kilo device login and Z.AI Coding Plan init have no client id in the request PeaProxy sends. PeaProxy does not register its own OAuth apps.
 
 ## Residual gaps
 

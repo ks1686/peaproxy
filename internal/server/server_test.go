@@ -558,7 +558,7 @@ func TestHealthzPublicAndPresets(t *testing.T) {
 	if !strings.Contains(prr.Body.String(), `"group":"Official API keys"`) {
 		t.Fatalf("presets payload is missing groups: %s", prr.Body)
 	}
-	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth", "copilot_oauth", "kilo_oauth", "minimax_oauth", "opencode_go", "deepseek", "cohere"} {
+	for _, name := range []string{"lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "google", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "anthropic_oauth", "openai_oauth", "antigravity", "xai_oauth", "kimi_oauth", "meta_oauth", "copilot_oauth", "kilo_oauth", "minimax_oauth", "poe_oauth", "zai_oauth", "opencode_go", "deepseek", "cohere"} {
 		if !strings.Contains(prr.Body.String(), name) {
 			t.Fatalf("missing %s in %s", name, prr.Body)
 		}
@@ -660,7 +660,7 @@ func TestUIIncludesToastsAndLanBanner(t *testing.T) {
 	jrr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(jrr, js)
 	jsBody := jrr.Body.String()
-	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth", "not reported by provider", "/admin/quota", "quotaHint", "Quota remaining", "quotaByAccount"} {
+	for _, want := range []string{"peaproxy.catalogFilter", "toast(", "/admin/presets", "/admin/oauth/start", "not liable", "isOAuthAdapter", "image_out", "Generate image", "/v1/images/generations", "embeddings", "Embed", "/v1/embeddings", "/admin/requests", "data-pin", "displayName", "envKeySet", "accountIDEnv", "acc-account-id", "secretBackend", "Getting started", "byProvider", "clients verify", "optgroup", "copilot-oauth", "opencode-go", "copilot_oauth", "(untested)", "poe_oauth", "zai_oauth", "not reported by provider", "/admin/quota", "quotaHint", "Quota remaining", "quotaByAccount"} {
 		if !strings.Contains(jsBody, want) {
 			t.Fatalf("app.js missing %s", want)
 		}

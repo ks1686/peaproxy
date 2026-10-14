@@ -34,7 +34,7 @@ Prefer `apiKeyEnv` over inline `apiKey`. Inline keys and OAuth tokens are **not*
 
 Provider keys can also stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `NVIDIA_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `OLLAMA_API_KEY`, `SAMBANOVA_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML. `CLOUDFLARE_ACCOUNT_ID` is **not** a secret key: it fills `YOUR_ACCOUNT_ID` in the Workers AI base URL (`peaproxy accounts add workers-ai` does the same as the Accounts UI). The Accounts UI names these env vars and whether they are set; it never prints values.
 
-`peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|kimi-ai|meta|copilot|kilo|minimax` writes the account row plus secrets. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability. Never commit `config.yaml`, `secret.key`, or `secrets.enc`. `config.lock` and `secrets.lock` in the same directory are empty lock files that PeaProxy processes take while writing (up to 15 s wait, then a `busy` error); leave them in place.
+`peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|kimi-ai|meta|copilot|kilo|minimax|poe|zai` writes the account row plus secrets. Kilo, MiniMax, Poe, and Z.AI Coding Plan logins are untested; please report results at https://github.com/ks1686/peaproxy/issues. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability. Never commit `config.yaml`, `secret.key`, or `secrets.enc`. `config.lock` and `secrets.lock` in the same directory are empty lock files that PeaProxy processes take while writing (up to 15 s wait, then a `busy` error); leave them in place.
 
 ## LAN bind
 
