@@ -1,6 +1,6 @@
 # PeaProxy
 
-Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
+Local multi-provider AI gateway in Go: **API keys + free/local providers + subscription OAuth** (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax). OpenAI-, Claude-, and Responses-shaped localhost endpoints, a **live model catalog** (no hand-maintained allowlist), a CLI, and a browser UI.
 
 Status: **v3.1.1** on main. Schema stays 1. v3 routing and cost behavior is in [docs/V3.md](docs/V3.md). The v2 request engine is in [docs/V2.md](docs/V2.md).
 
@@ -12,8 +12,8 @@ Status: **v3.1.1** on main. Schema stays 1. v3 routing and cost behavior is in [
 |---|---|---|
 | **API key** (`anthropic`, `openai`, `google`/`gemini`, `xai`, Groq, …) | Official provider console / AI Studio | Supported. Prefer this. |
 | **Local / no key** (Ollama, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | Software you already run | Supported. |
-| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude (Pro/Max/Team/Enterprise), ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, or GitHub Copilot subscription | **ToS/ban risk. At your own risk.** Authors not liable. |
-| **Qwen consumer OAuth** | — | **Not yet** (no CPA flow). Use a Qwen **API key** with `openai_compat`. |
+| **Subscription OAuth** (`peaproxy auth login --provider …`) | Reuse a Claude (Pro/Max/Team/Enterprise), ChatGPT/Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo Pass, or MiniMax Coding Plan subscription | **ToS/ban risk. At your own risk.** Authors not liable. |
+| **Qwen consumer OAuth** | Removed | Free-tier login ended 2026-04-15. Use a Qwen **API key** or the Alibaba Coding Plan preset. |
 | **Factory / Droid upstream** | — | **Not yet** (no public consumer chat OAuth). Use **Droid as a client** of PeaProxy. |
 | **OpenCode Go** | Subscribe at [opencode.ai/auth](https://opencode.ai/auth) | Official **API key** (`adapter: opencode_go`). Distinct from Zen. Not OAuth. |
 
@@ -62,7 +62,7 @@ peaproxy --version
 peaproxy serve
 ```
 
-Requires Go 1.26+ for `go install` (`go 1.26.0` in `go.mod`). Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)), and the Homebrew cask, Scoop manifest, and AUR `peaproxy-bin` package are generated from the same tag. macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
+Requires Go 1.26+ for `go install` (`go 1.26.9` in `go.mod`). Tagged releases (`v*`) also publish linux/darwin/windows **amd64 + arm64** binaries via GoReleaser ([GitHub Releases](https://github.com/ks1686/peaproxy/releases)), and the Homebrew cask, Scoop manifest, and AUR `peaproxy-bin` package are generated from the same tag. macOS GitHub Release / Homebrew cask binaries are Developer ID signed and notarized ([docs/RELEASING.md](docs/RELEASING.md)).
 
 ```bash
 go run ./cmd/peaproxy serve   # from a clone
@@ -100,12 +100,12 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 
 | Capability | Status |
 |---|---|
-| **Automatic cost routing** | Shipped in v3. `pea/auto`, `pea/economy`, `pea/free`, `pea/local` choose a live model for cost and capability **on by default**. Exact model names are never substituted. Full behaviour and rollback: [docs/V3.md](docs/V3.md) |
+| **Automatic cost routing** | Shipped in v3. `pea/auto`, `pea/economy`, `pea/free`, `pea/local` choose a live model for cost and capability when `automaticRoutes.enabled` is true (off unless you turn it on). Exact model names are never substituted. Full behaviour and rollback: [docs/V3.md](docs/V3.md) |
 | **Spend ceiling** | Shipped in v3. `optimization.spendCeilingUSD` caps spend in a rolling window and **fails closed** when spend cannot be measured. In 3.0.4 the ledger prices published token counts against the deployment quote, and each request holds its input cost until the event recording what it actually cost arrives, so concurrent requests cannot all pass the same check and the total never dips in between A `-thinking-N` opt-in is priced as the base model it calls, because routing strips the suffix and calls the base id upstream — a suffixed name has no quote of its own, and an unpriced call fails the ceiling closed |
 | **Free-only routing** | Shipped in v3. `optimization.freeOnly` refuses any deployment that cannot prove a call stays free — including a model you named outright, and a deployment that publishes a paid cache rate |
 | **Carried context (`pea_search`)** | Shipped in v3, bounded at 4 rounds. Only for tool-using, non-streaming requests — a streaming client would have to be buffered. Toolless clients get pre-retrieval instead. Fixed in 3.0.1: the artifact store was not being constructed, so this silently did nothing. **Every round PeaProxy fetches is billed by the provider and recorded in the ledger** — including the final one, the round where the budget runs out and the turn is refused. A round the client paid for and the ledger never saw would be spend the ceiling could not account for |
 | **Local assistant** | Shipped in v3, **off by default**. Loopback only; no setting allows anything else |
-| **Routing promotion gates** | Shipped in v3. `internal/eval` runs fifteen routing promises in CI; cost *and* equivalence are asserted. Eleven of the fifteen are also **broken on purpose** and required to fail. The other four are named in `notYetBroken` with the reason each could not be, so the gap is visible instead of reading as coverage |
+| **Routing promotion gates** | Shipped in v3. `internal/eval` runs seventeen routing promises in CI; cost and equivalence are asserted. Each promise is also broken on purpose and required to fail. `notYetBroken` is empty |
 | **Policy inspector** | Shipped in v3. `GET /admin/policy` plus a UI panel; unset ceiling reports `null`, never `0` |
 | Live catalog, hide ≠ route, pin/rename overlays | Shipped. `routes:` are stable local names that rewrite to a live id; pin/rename stay listing-only |
 | `POST /v1/chat/completions` stream + non-stream | Shipped; translated SSE emits `finish_reason` before `[DONE]`. Cross-wire thinking/reasoning is `reasoning_opaque` on the assistant message (stripped before OpenAI-compat upstreams) |
@@ -120,14 +120,14 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Grouped accounts UI + 8 new paid presets (DeepSeek, Mistral, Z.AI, MiniMax, Together, Fireworks, Alibaba Coding Plan, Cohere) | Shipped in v3. Only **Cohere** is live-verified (2026-10-05); the rest show `(not verified)` and mean it |
 | **Anonymous-provider consent** | Enforced since 3.0.4. `allowAnonymousProviders` was previously read by nothing. Automatic routes now refuse a deployment with no credential of any kind; local accounts and OAuth sessions are exempt, because an OAuth session is an account just as much as a key |
 | **Per-endpoint capability overrides** | Since 3.0.4. An OpenAI-compatible server is a wire shape, not a promise — plenty accept a `tools` array and ignore it. `capabilities` under a provider corrects `tools`, `visionIn`, `imageOut`, `embeddings` for your machine; unset keeps the adapter's own declaration |
-| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Muse, Copilot, Kilo, MiniMax) | Shipped, **ToS/ban risk**. Antigravity supports tool calling both ways. Kilo and MiniMax device login match their public clients; a subscribed chat was not completed from PeaProxy |
 | Claude OAuth Messages cloak | **Shipped** — `anthropic_oauth` injects Claude Code billing header + CLI identity (caller system relocated, never deleted). Client-preset cloak defaults stay **off** |
 | Codex OAuth `store` / token limits | **Shipped** — `openai_oauth` forces `store: false` and omits `max_output_tokens` / `stream_options` |
-| Qwen consumer OAuth | **Not yet** — use an API key |
+| Qwen consumer OAuth | **Removed** (discontinued 2026-04-15). Use an API key or Alibaba Coding Plan |
 | Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
 | OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
 | OS keychain / `secrets.enc` | Shipped. Large OAuth tokens are stored as chunked keychain items |
-| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; **entitlement failures (402 / exhausted free tier) get 15 minutes, not 30s**; the 503 names the account and cause; a slow first token never starts a cooldown |
+| 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky` / `adaptive`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; **entitlement failures (402 / exhausted free tier) get 15 minutes, not 30s**; the 503 names the account and cause; a slow first token never starts a cooldown |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped. `config validate` reaches the verdict `serve` reaches, and reports keys this version does not read. `--strict-config` turns that report into a non-zero exit, for a CI job or a pre-commit hook (`docs/CONFIG.md`) |
 | CLI `catalog` / `health` / `requests` / `optimization` / `accounts add` | Shipped |
@@ -176,7 +176,7 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 |---|---|
 | `serve` | Listen `127.0.0.1:8317` + UI (writes first-run config) |
 | `--version` / `-v` | Release tag (`go install …@vX.Y.Z` or GoReleaser). Dirty local trees print `dev` |
-| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta\|copilot`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Qwen and Factory are **not yet**. OpenCode Go is an API key (`--provider opencode-go` explains). |
+| `auth` | Subscription OAuth (`--provider anthropic\|openai\|gemini\|xai\|kimi\|kimi-ai\|meta\|copilot\|kilo\|minimax`). Prints ToS/ban-risk warning. `--print-url` / `--device` / `--no-browser`. Prefer API keys. Factory is **not yet**. Qwen login was removed (discontinued 2026-04-15). OpenCode Go is an API key (`--provider opencode-go` explains). |
 | `accounts` | Configured provider accounts (`list` / `add <preset>`) |
 | `models` | Live catalog (`--filter all\|free\|paid\|local\|subscription_oauth`) |
 | `catalog` | Listing overlays (`pin` / `rename` / `hide`) matching the Catalog UI |
@@ -185,7 +185,8 @@ First `serve` writes `~/.config/peaproxy/config.yaml` if missing. Example: [conf
 | `optimization` | `status` prints the effective optimization policy and what the spend ledger can measure; `explain <model>` prints how a model would route and which accounts are out and why. Both read-only |
 | `status` | Bind / config path / version |
 | `config` | `path` / `show` / `validate` / `init` |
-| `clients` | Harness presets (`list` / `show` / `verify [--chat]`) |
+| `errors` | Recorded failures (`summary` / `list` / `export`) |
+| `clients` | Harness presets (`list` / `show` / `verify [--chat]` / `detect` / `connect` / `disconnect` / `status` / `import pi`) |
 | `completion` | Shell completion script (`bash` / `zsh` / `fish` / `powershell`) |
 
 ### Shell completion
@@ -200,7 +201,7 @@ peaproxy completion fish > ~/.config/fish/completions/peaproxy.fish
 ```
 
 Commands and flags complete from the command tree. So do the names this install
-already knows: client presets (`clients show|verify|connect|disconnect`), account
+already knows: client presets (`clients show` and `verify` list every preset; `connect` and `disconnect` list only harnesses PeaProxy can write), account
 presets (`accounts add`), and the model and provider ids in your config and
 `usage.json` (`catalog pin|rename|hide`, and `catalog hide --kind provider`).
 

@@ -49,9 +49,8 @@ jobs:
           go test ./... -coverprofile=coverage.out > /dev/null
           coverage="$(go tool cover -func=coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')"
           echo "statement coverage: ${coverage}%"
-          # CI uses Go 1.22; local Go 1.27 measures 77.9%, while the
-          # same committed tree measures 76.8% here. Keep the floor below
-          # that reproducible CI baseline, not tied to one developer toolchain.
+          # The floor is the Linux CI measurement for this tree. Raise it when
+          # coverage rises. Do not lower it to make a change pass.
           awk -v c="$coverage" 'BEGIN { exit !(c >= 76.5) }' || {
             echo "coverage ${coverage}% is below the 76.5% CI ratchet" >&2
             exit 1
