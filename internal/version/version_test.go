@@ -58,6 +58,20 @@ func TestResolveDirtyLocalTreeStaysDev(t *testing.T) {
 	}
 }
 
+func TestResolveDirtyPseudoVersionStaysDev(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.7.2-0.20261013193305-fde19a5c0c99+dirty"},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "fde19a5c0c99abcd"},
+			{Key: "vcs.modified", Value: "true"},
+		},
+	}
+	got := Resolve("dev", info)
+	if got != "dev" {
+		t.Fatalf("dirty pseudo-version: got %q", got)
+	}
+}
+
 func TestResolveCleanVCSRevisionWhenDevel(t *testing.T) {
 	info := &debug.BuildInfo{
 		Main: debug.Module{Version: "(devel)"},

@@ -80,3 +80,45 @@ func TestLoopbackIgnoresCallbackWithWrongState(t *testing.T) {
 		t.Fatalf("got %#v, want the real callback", res)
 	}
 }
+
+// A callback that matches state but carries no code and no OAuth error must
+// not complete the login. The browser tab is a 400, and a later real redirect
+// is still the result.
+func TestLoopbackIgnoresCallbackWithNoCode(t *testing.T) {
+	lb, err := StartLoopback("127.0.0.1:0", "/callback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lb.Close() })
+	lb.ExpectState("good-state")
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/callback?state=good-state", lb.Addr()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty callback status = %d, want 400", resp.StatusCode)
+	}
+
+	go func() {
+		resp, err := http.Get(fmt.Sprintf("http://%s/callback?code=real&state=good-state", lb.Addr()))
+		if err != nil {
+			t.Errorf("real callback: %v", err)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		_, _ = io.Copy(io.Discard, resp.Body)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	res, err := lb.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Code != "real" || res.State != "good-state" {
+		t.Fatalf("got %#v, want the real callback", res)
+	}
+}

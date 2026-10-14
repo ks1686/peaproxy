@@ -134,10 +134,11 @@ func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 	pending := &pendingAuth{pkce: pkce, state: state, redirectURI: RedirectURI}
 	if !a.skipLoopback {
 		lb, lerr := oauth.StartLoopback("127.0.0.1:"+callbackPort, "/auth/callback")
-		if lerr == nil {
-			lb.ExpectState(pending.state)
-			pending.lb = lb
+		if lerr != nil {
+			return adapter.AuthSession{}, fmt.Errorf("openai_oauth: callback port %s is in use: %w", callbackPort, lerr)
 		}
+		lb.ExpectState(pending.state)
+		pending.lb = lb
 	}
 	a.mu.Lock()
 	if a.pending != nil && a.pending.lb != nil {

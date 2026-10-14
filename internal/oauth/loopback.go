@@ -118,11 +118,18 @@ func (l *Loopback) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "oauth callback state mismatch", http.StatusBadRequest)
 		return
 	}
+	// A hit with neither a code nor an OAuth error is not a login result.
+	// Delivering it used to fill the one-slot channel with an empty code,
+	// so Wait returned success and the real redirect was dropped.
+	if res.Code == "" && res.Error == "" {
+		http.Error(w, "oauth callback missing code", http.StatusBadRequest)
+		return
+	}
 	select {
 	case l.ch <- res:
 	default:
 	}
-	if res.Error != "" || res.Code == "" {
+	if res.Error != "" {
 		http.Error(w, "oauth callback missing code", http.StatusBadRequest)
 		return
 	}

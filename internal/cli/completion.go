@@ -80,9 +80,20 @@ never makes a network call and never opens a keychain prompt.
 	return cmd
 }
 
-// completeClientNames offers the client presets.
-func completeClientNames(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
-	names := clients.List()
+// completeClientNames offers client presets. show and verify list every preset.
+// connect and disconnect list only the harnesses whose config PeaProxy can write.
+func completeClientNames(cmd *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	var names []string
+	switch cmd.Name() {
+	case "connect", "disconnect":
+		for _, n := range clients.List() {
+			if clients.Connectable(n) {
+				names = append(names, n)
+			}
+		}
+	default:
+		names = clients.List()
+	}
 	sort.Strings(names)
 	return names, cobra.ShellCompDirectiveNoFileComp
 }

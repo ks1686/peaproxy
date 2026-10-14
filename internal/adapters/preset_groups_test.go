@@ -59,14 +59,16 @@ func TestDeadOAuthStubsAreNotOffered(t *testing.T) {
 	}
 }
 
-// Hiding them from the dropdown must not unregister the adapters. Someone who
-// configured one before v3 keeps a working entry rather than a startup error.
+// Factory stays a stub that opens. Qwen's free login was discontinued, so the
+// factory remains only to fail a saved qwen_oauth row with that reason.
 func TestDeadOAuthAdaptersStayRegistered(t *testing.T) {
 	reg := DefaultRegistry()
-	for _, name := range []string{"qwen_oauth", "factory_oauth"} {
-		if _, err := reg.Open(name, adapter.Options{APIKey: "unused"}); err != nil {
-			t.Errorf("adapter %q stopped working: %v", name, err)
-		}
+	if _, err := reg.Open("factory_oauth", adapter.Options{APIKey: "unused"}); err != nil {
+		t.Errorf("factory_oauth stopped opening: %v", err)
+	}
+	_, err := reg.Open("qwen_oauth", adapter.Options{APIKey: "unused"})
+	if err == nil || !strings.Contains(err.Error(), "2026-04-15") {
+		t.Fatalf("qwen_oauth: %v", err)
 	}
 }
 

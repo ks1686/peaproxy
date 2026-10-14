@@ -44,8 +44,10 @@ Adapters in this repo today (2.0.x):
 | `kimi_oauth` / `kimi_ai_oauth` | Moonshot Kimi device OAuth + coding API. **ToS/ban risk.** | OAuth (`--provider kimi` / `kimi-ai`) | `https://api.kimi.com/coding/v1` |
 | `meta_oauth` | Meta Muse device OAuth + minted key. **ToS/ban risk.** | OAuth (`--provider meta`) | `https://api.meta.ai/v1` |
 | `copilot_oauth` | GitHub Copilot subscription device OAuth + Copilot chat (`api.githubcopilot.com`). **ToS/ban risk.** Not GitHub Models. | OAuth (`--provider copilot`) | `https://api.githubcopilot.com` |
+| `kilo_oauth` | Kilo Pass device OAuth + OpenAI-compat chat at `/api/openrouter`. **ToS/ban risk.** A subscribed chat was not completed from PeaProxy. | OAuth (`--provider kilo`) | `https://api.kilo.ai/api/openrouter` |
+| `minimax_oauth` | MiniMax Coding Plan device OAuth + Anthropic Messages (`x-api-key`). Global region only. **ToS/ban risk.** A subscribed chat was not completed from PeaProxy. Distinct from the `minimax` API-key preset. | OAuth (`--provider minimax`) | `https://api.minimax.io/anthropic` |
 | `cursor_agent` | Cursor subscription as an upstream, run through Cursor's own `cursor-agent` CLI (`--mode ask`, one flattened prompt per call). **No tool calling** — the mode is read-only, so `tools` is reported unsupported rather than unknown. **ToS/ban risk.** POSIX-only upstream: the CLI is a shell script. Set `workDir` (see [CONFIG](CONFIG.md#cursor-agent)) so the interactive workspace-trust prompt is answered for a directory you chose. | `CURSOR_API_KEY` / `CURSOR_API_ENDPOINT`, else the IDE session | n/a — the CLI decides |
-| `qwen_oauth` | Stub: CPA has no Qwen consumer OAuth | n/a | use `openai_compat` + a Qwen key |
+| `qwen_oauth` | Removed. Free-tier consumer OAuth ended 2026-04-15. A saved row fails with that reason. | n/a | Qwen API key, or Alibaba Coding Plan |
 | `factory_oauth` | Stub: no public Factory consumer chat OAuth | n/a | use Droid as a PeaProxy **client** (`peaproxy clients show droid`) |
 
 Hosted/local wrappers live in `internal/adapter/hosted`. They fill the default base URL and catalog tier, then delegate to `openai_compat`.
@@ -145,7 +147,7 @@ Record, including the per-account evidence and the defects found:
 
 **GitHub Models is retired (2026-07-30).** Do not ship it. Copilot chat is a **separate** adapter (`copilot_oauth`).
 
-**Not shipped (audit, 2026-09-26):** LocalAI defaults to `:8080/v1`, same as llama.cpp — use the llama.cpp or custom OpenAI-compat preset. Together AI (`https://api.together.ai/v1`) is OpenAI-compat but pay-per-token, not a free inference tier. SGLang / TGI: no extra preset; use custom OpenAI-compat with the port you launched. Accounts shows the env var **name** a preset expects (`envKey` / `accountIDEnv`) and whether it is set in this process; values are never returned.
+**Not shipped (audit, 2026-09-26):** LocalAI defaults to `:8080/v1`, same as llama.cpp. Use the llama.cpp or custom OpenAI-compat preset. SGLang / TGI: no extra preset; use custom OpenAI-compat with the port you launched. Together AI is shipped as `together` at `https://api.together.xyz/v1` (pay per token, not a free tier). Accounts shows the env var **name** a preset expects (`envKey` / `accountIDEnv`) and whether it is set in this process; values are never returned.
 
 ### OpenCode Go vs Zen
 
@@ -170,18 +172,10 @@ PeaProxy never invents remaining counts. Unknown remaining is **omitted** (JSON 
 | `groq`, `sambanova` | documented `x-ratelimit-*` headers | none |
 | `cerebras`, `xai`, `huggingface`, `nim`, `workers_ai`, generic `openai_compat` | capture `x-ratelimit-*` **if** the upstream sends them | none |
 | `google` / `gemini` | none documented on the OpenAI-compat endpoint | none |
-| `alibabacoding` | Hosted OpenAI-compat: Alibaba Cloud Coding Plan. Chat completions only; not the general Model Studio endpoint. Not live-verified by PeaProxy | API key (`DASHSCOPE_API_KEY`) | `https://coding-intl.dashscope.aliyuncs.com/v1` |
-| `deepseek` | Hosted OpenAI-compat: DeepSeek OpenAI-compatible API. Not live-verified by PeaProxy | API key (`DEEPSEEK_API_KEY`) | `https://api.deepseek.com/v1` |
-| `mistral` | Hosted OpenAI-compat: Mistral La Plateforme. Distinct from the Claude subscription OAuth adapter. Not live-verified by PeaProxy | API key (`MISTRAL_API_KEY`) | `https://api.mistral.ai/v1` |
-| `zai` | Hosted OpenAI-compat: Z.AI GLM OpenAI-compatible endpoint (pay-as-you-go API). GLM Coding Plan keys need baseUrl https://api.z.ai/api/coding/paas/v4. Not live-verified by PeaProxy | API key (`ZAI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
-| `minimax` | Hosted OpenAI-compat: MiniMax OpenAI-compatible endpoint. Not live-verified by PeaProxy | API key (`MINIMAX_API_KEY`) | `https://api.minimax.io/v1` |
-| `together` | Hosted OpenAI-compat: Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy | API key (`TOGETHER_API_KEY`) | `https://api.together.xyz/v1` |
-| `fireworks` | Hosted OpenAI-compat: Fireworks AI inference. Pay per token. Not live-verified by PeaProxy | API key (`FIREWORKS_API_KEY`) | `https://api.fireworks.ai/inference/v1` |
-| `cohere` | Hosted OpenAI-compat: Cohere OpenAI compatibility layer. Trial keys are rate limited. Live-verified 2026-10-05: listing, chat, streaming termination and streaming tool calls | API key (`COHERE_API_KEY`) | `https://api.cohere.ai/compatibility/v1` |
 | `openrouter` | `X-RateLimit-*` on **429** only | **`GET /api/v1/key`** on Health refresh / probe (`limit_remaining`) |
 | `ollama_cloud`, `opencode_zen`, `opencode_go` | headers if sent | none |
 | Local (`ollama`, LM Studio, llama.cpp, vLLM, Jan, GPT4All) | none | none |
-| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta, Copilot) | headers if the upstream sends them | **none** — no stable documented remaining GET (Copilot `/copilot_internal/user` is skipped) |
+| Subscription OAuth (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta, Copilot, Kilo, MiniMax) | headers if the upstream sends them | **none**. No stable documented remaining GET (Copilot `/copilot_internal/user` is skipped) |
 
 Surfaces: `GET /admin/health` (`quota`), `GET /admin/quota`, Health UI, `peaproxy health`. Header snapshots are taken from the HTTP transport (does not add a request). Probes are not run on every chat.
 

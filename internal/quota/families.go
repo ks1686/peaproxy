@@ -56,7 +56,8 @@ var families = map[string]Family{
 	"kimi_ai_oauth":   {Headers: "x-ratelimit-* if sent", Note: oauthNote()},
 	"meta_oauth":      {Headers: "x-ratelimit-* if sent", Note: oauthNote()},
 	"copilot_oauth":   {Headers: "", Note: "not reported by provider; Copilot has no stable documented remaining endpoint (internal quota APIs are skipped)"},
-	"qwen_oauth":      {Headers: "", Note: "not reported by provider; Qwen consumer OAuth is not yet"},
+	"kilo_oauth":      {Headers: "x-ratelimit-* if sent", Note: oauthNote()},
+	"minimax_oauth":   {Headers: "anthropic-ratelimit-* if sent", Note: oauthNote()},
 	"factory_oauth":   {Headers: "", Note: "not reported by provider; Factory/Droid upstream is not yet"},
 }
 

@@ -18,7 +18,7 @@ func authCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "auth",
 		Short: "Subscription OAuth login",
-		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot).
+		Long: `Login with a consumer subscription (Claude, Codex, Gemini/Antigravity, xAI, Kimi, Meta Muse, GitHub Copilot, Kilo, MiniMax).
 
 ` + oauth.LiabilityWarning() + `
 
@@ -31,6 +31,8 @@ Examples:
   peaproxy auth login --provider kimi
   peaproxy auth login --provider meta
   peaproxy auth login --provider copilot
+  peaproxy auth login --provider kilo
+  peaproxy auth login --provider minimax
   peaproxy auth login --provider anthropic --print-url
 `,
 	}
@@ -135,9 +137,9 @@ Examples:
 			return nil
 		},
 	}
-	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | qwen | copilot | factory | opencode-go")
+	login.Flags().StringVar(&provider, "provider", "", "anthropic | openai | gemini | xai | kimi | kimi-ai | meta | copilot | kilo | minimax | factory | opencode-go")
 	login.Flags().StringVar(&accountID, "id", "", "Account id to write (default per provider)")
-	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (xAI/Kimi/Meta already use device code)")
+	login.Flags().BoolVar(&device, "device", false, "Codex device-code flow (xAI, Kimi, Meta, Kilo, and MiniMax already use device code)")
 	login.Flags().BoolVar(&noBrowser, "no-browser", false, "Do not open a browser")
 	login.Flags().BoolVar(&printURL, "print-url", false, "Print the authorize URL and exit without waiting")
 	cmd.AddCommand(login)

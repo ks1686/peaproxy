@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
@@ -11,8 +12,10 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter/cursoragent"
 	"github.com/ks1686/peaproxy/internal/adapter/factory_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/hosted"
+	"github.com/ks1686/peaproxy/internal/adapter/kilo_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/kimi_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/meta_oauth"
+	"github.com/ks1686/peaproxy/internal/adapter/minimax_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/ollama"
 	"github.com/ks1686/peaproxy/internal/adapter/openai"
 	"github.com/ks1686/peaproxy/internal/adapter/openai_compat"
@@ -20,7 +23,6 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapter/opencodego"
 	"github.com/ks1686/peaproxy/internal/adapter/opencodezen"
 	"github.com/ks1686/peaproxy/internal/adapter/openrouter"
-	"github.com/ks1686/peaproxy/internal/adapter/qwen_oauth"
 	"github.com/ks1686/peaproxy/internal/adapter/xai_oauth"
 )
 
@@ -54,10 +56,16 @@ func DefaultRegistry() *adapter.Registry {
 	r.Register(kimi_oauth.Name, kimi_oauth.New)
 	r.Register(kimi_oauth.NameAI, kimi_oauth.NewAI)
 	r.Register(meta_oauth.Name, meta_oauth.New)
-	r.Register(qwen_oauth.Name, qwen_oauth.New)
 	r.Register(copilot_oauth.Name, copilot_oauth.New)
+	r.Register(kilo_oauth.Name, kilo_oauth.New)
+	r.Register(minimax_oauth.Name, minimax_oauth.New)
+	r.Register("qwen_oauth", discontinuedQwen)
 	r.Register(factory_oauth.Name, factory_oauth.New)
 	return r
+}
+
+func discontinuedQwen(adapter.Options) (adapter.Adapter, error) {
+	return nil, fmt.Errorf("%s", qwenDiscontinued)
 }
 
 // Names returns sorted factory names from DefaultRegistry.

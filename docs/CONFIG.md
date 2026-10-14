@@ -26,7 +26,7 @@ Example checked into the repo: [configs/peaproxy.example.yaml](../configs/peapro
 | `PEAPROXY_ALLOW_LAN` | `1` / `true` / `yes` / `on` sets `allowNonLoopback` |
 | `PEAPROXY_REQUEST_LOG` | same truthy values enable redacted `requests.log` |
 | `PEAPROXY_DEBUG` | same truthy values log the Claude OAuth tool alias mapping (`client -> upstream`) on a 4xx, so a `400 tool name ...` can be traced to the name the client actually used. Account id, status and pairs only — no headers, body or tokens. |
-| `PEAPROXY_FAILOVER_POLICY` | `round-robin` (default), `fill-first`, or `sticky` |
+| `PEAPROXY_FAILOVER_POLICY` | `round-robin` (default), `fill-first`, `sticky`, or `adaptive` |
 | `PEAPROXY_SECRET_BACKEND` | `file` forces the AES-GCM file next to the config; `keyring` requires the OS store (macOS Keychain / Windows Credential Manager / Linux Secret Service). Unset: try keyring, then file. `go test` always uses `file`. |
 | `PEAPROXY_CLIENT_ROOT` | Directory for managed harness connect/disconnect. Unset uses the home directory. Smoke tests set a temporary directory. |
 
@@ -34,7 +34,7 @@ Prefer `apiKeyEnv` over inline `apiKey`. Inline keys and OAuth tokens are **not*
 
 Provider keys can also stay in their own env vars (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY`, `HF_TOKEN`, `NVIDIA_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `OLLAMA_API_KEY`, `SAMBANOVA_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`) referenced as `apiKeyEnv` in YAML. `CLOUDFLARE_ACCOUNT_ID` is **not** a secret key: it fills `YOUR_ACCOUNT_ID` in the Workers AI base URL (`peaproxy accounts add workers-ai` does the same as the Accounts UI). The Accounts UI names these env vars and whether they are set; it never prints values.
 
-`peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|meta|copilot` writes the account row plus secrets. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability. Never commit `config.yaml`, `secret.key`, or `secrets.enc`. `config.lock` and `secrets.lock` in the same directory are empty lock files that PeaProxy processes take while writing (up to 15 s wait, then a `busy` error); leave them in place.
+`peaproxy auth login --provider anthropic|openai|gemini|xai|kimi|kimi-ai|meta|copilot|kilo|minimax` writes the account row plus secrets. See [OAUTH.md](OAUTH.md) for ToS/ban-risk liability. Never commit `config.yaml`, `secret.key`, or `secrets.enc`. `config.lock` and `secrets.lock` in the same directory are empty lock files that PeaProxy processes take while writing (up to 15 s wait, then a `busy` error); leave them in place.
 
 ## LAN bind
 

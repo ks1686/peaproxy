@@ -49,7 +49,7 @@ func TestKnownAdaptersHaveFamilies(t *testing.T) {
 		"ollama", "lmstudio", "llamacpp", "vllm", "jan", "gpt4all",
 		"anthropic_oauth", "openai_oauth", "antigravity", "gemini_oauth",
 		"xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth",
-		"copilot_oauth", "qwen_oauth", "factory_oauth",
+		"copilot_oauth", "kilo_oauth", "minimax_oauth", "factory_oauth",
 	} {
 		if _, ok := families[name]; !ok {
 			t.Errorf("missing quota family for %s", name)
