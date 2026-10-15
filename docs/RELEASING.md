@@ -35,8 +35,10 @@ update still run.
 
 ### GitHub Actions secrets (`ks1686/peaproxy`)
 
-Never commit `.p8`, `.p12`, or passphrases. Add these repository secrets
-(same names as genv; paste values locally, do not invent them):
+Never commit `.p8`, `.p12`, or passphrases. Add these as **`release`
+environment** secrets (same names as genv; paste values locally, do not
+invent them). The `release` environment only deploys from `v*` tags, so
+non-tag runs cannot read them:
 
 | Secret | Contents |
 | --- | --- |
@@ -46,7 +48,7 @@ Never commit `.p8`, `.p12`, or passphrases. Add these repository secrets
 | `MACOS_NOTARY_KEY_ID` | App Store Connect API Key ID |
 | `MACOS_NOTARY_ISSUER_ID` | App Store Connect Issuer UUID |
 
-Already required for the package publishers:
+Already required for the package publishers (repository secrets):
 
 | Secret | Contents |
 | --- | --- |
@@ -58,15 +60,17 @@ GoReleaser’s notarize step maps to the usual ASC API fields
 (`APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID` / `APPLE_API_KEY_PATH` or a
 base64 `.p8`): use the `MACOS_NOTARY_*` names above, not those aliases.
 
-Helper (does not print secret values):
+Helper (does not print secret values; `--env release` targets the environment):
 
 ```bash
+# Password from Keychain (or omit the variable to be prompted, input hidden):
+MACOS_P12_PASSWORD="$(security find-generic-password -w -s <item>)" \
 ./scripts/set-macos-signing-secrets.sh \
   --p12 /path/to/developer-id-application.p12 \
-  --p12-password '…' \
   --p8 /path/to/AuthKey_XXXXXXXXXX.p8 \
   --key-id XXXXXXXXXX \
-  --issuer-id 00000000-0000-0000-0000-000000000000
+  --issuer-id 00000000-0000-0000-0000-000000000000 \
+  --env release
 ```
 
 ### Verify a Darwin artifact after the next release
