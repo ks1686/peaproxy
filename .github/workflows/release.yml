@@ -26,6 +26,8 @@ jobs:
   goreleaser:
     name: Build and publish
     needs: ci
+    # MACOS_* signing secrets live in the tag-only `release` environment.
+    environment: release
     permissions:
       contents: write # zizmor: ignore[undocumented-permissions] -- GoReleaser needs this to create GitHub Releases and publish package manifests.
     runs-on: ubuntu-latest
