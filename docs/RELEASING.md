@@ -63,9 +63,10 @@ base64 `.p8`): use the `MACOS_NOTARY_*` names above, not those aliases.
 Helper (does not print secret values; `--env release` targets the environment):
 
 ```bash
+# Password from Keychain (or omit the variable to be prompted, input hidden):
+MACOS_P12_PASSWORD="$(security find-generic-password -w -s <item>)" \
 ./scripts/set-macos-signing-secrets.sh \
   --p12 /path/to/developer-id-application.p12 \
-  --p12-password '…' \
   --p8 /path/to/AuthKey_XXXXXXXXXX.p8 \
   --key-id XXXXXXXXXX \
   --issuer-id 00000000-0000-0000-0000-000000000000 \
