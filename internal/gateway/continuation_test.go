@@ -43,11 +43,11 @@ func TestResponsesContinuationStaysOnOriginatingAccount(t *testing.T) {
 	}
 	gw.Refresh(context.Background())
 
-	if _, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","input":"hello"}`)); err != nil || account != "first" {
-		t.Fatalf("initial account = %q, error = %v", account, err)
+	if _, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","input":"hello"}`)); err != nil || account.Account != "first" {
+		t.Fatalf("initial account = %q, error = %v", account.Account, err)
 	}
-	if _, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","previous_response_id":"resp_first","input":"continue"}`)); err != nil || account != "first" {
-		t.Fatalf("continuation account = %q, error = %v", account, err)
+	if _, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","previous_response_id":"resp_first","input":"continue"}`)); err != nil || account.Account != "first" {
+		t.Fatalf("continuation account = %q, error = %v", account.Account, err)
 	}
 	if first.calls != 2 || second.calls != 0 {
 		t.Fatalf("calls first=%d second=%d, want first=2 second=0", first.calls, second.calls)
@@ -74,8 +74,8 @@ func TestUnknownResponsesContinuationDoesNotInventAccountAffinity(t *testing.T) 
 	gw.Refresh(context.Background())
 
 	_, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","previous_response_id":"resp_unknown","input":"continue"}`))
-	if err != nil || account != "first" {
-		t.Fatalf("unknown continuation account = %q, error = %v", account, err)
+	if err != nil || account.Account != "first" {
+		t.Fatalf("unknown continuation account = %q, error = %v", account.Account, err)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestExternalProviderRemovalInvalidatesContinuationBindings(t *testing.T) {
 	}
 
 	_, account, err := gw.Responses(context.Background(), []byte(`{"model":"model","previous_response_id":"resp_second","input":"continue"}`))
-	if err != nil || account != "first" {
-		t.Fatalf("continuation after external removal: account = %q, error = %v", account, err)
+	if err != nil || account.Account != "first" {
+		t.Fatalf("continuation after external removal: account = %q, error = %v", account.Account, err)
 	}
 }

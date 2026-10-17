@@ -1,4 +1,4 @@
-package openai_oauth
+package translate
 
 import (
 	"encoding/json"

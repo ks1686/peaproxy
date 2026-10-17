@@ -20,7 +20,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/router"
 )
 
-type streamCall func(*Gateway, context.Context, []byte, io.Writer) (string, error)
+type streamCall func(*Gateway, context.Context, []byte, io.Writer) (Call, error)
 
 func TestLastNativeAccountUnboundedWhenTranslationFails(t *testing.T) {
 	for _, tc := range []struct {
@@ -53,8 +53,8 @@ func TestLastNativeAccountUnboundedWhenTranslationFails(t *testing.T) {
 			var out strings.Builder
 			account, err := tc.call(gw, context.Background(), []byte(tc.body), &out)
 
-			if err != nil || account != "native" {
-				t.Fatalf("prelude cut off the only account that can serve this body: account=%q err=%v", account, err)
+			if err != nil || account.Account != "native" {
+				t.Fatalf("prelude cut off the only account that can serve this body: account=%q err=%v", account.Account, err)
 			}
 			if !strings.Contains(out.String(), tc.event) || native.calls.Load() != 1 || compatHits != 0 {
 				t.Fatalf("out=%q native calls=%d compat hits=%d", out.String(), native.calls.Load(), compatHits)

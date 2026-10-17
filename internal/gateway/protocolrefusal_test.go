@@ -114,7 +114,7 @@ func TestModelRefusingTheChatProtocolStaysVisibleToAdmin(t *testing.T) {
 }
 
 // A refusal says the model cannot serve this protocol. It says nothing about
-// the account, so cooling the account would take a healthy one out of rotation
+// the account.Account, so cooling the account would take a healthy one out of rotation
 // for the whole cooldown.
 func TestModelRefusalDoesNotCoolDownTheAccount(t *testing.T) {
 	gw := zenGateway(t)

@@ -15,14 +15,49 @@ import (
 
 	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/oauth"
+	"github.com/ks1686/peaproxy/internal/translate"
 )
+
+func geminiStream(r io.Reader, w io.Writer, model string) error {
+	return translate.GeminiSSEToOpenAIWith(r, w, model, streamEventError)
+}
+
+type testGeminiEnvelope struct {
+	Request struct {
+		Contents []struct {
+			Parts []struct {
+				FunctionCall *struct {
+					Args json.RawMessage `json:"args"`
+				} `json:"functionCall"`
+				FunctionResponse *struct {
+					Name     string `json:"name"`
+					Response struct {
+						Content json.RawMessage `json:"content"`
+					} `json:"response"`
+				} `json:"functionResponse"`
+			} `json:"parts"`
+		} `json:"contents"`
+	} `json:"request"`
+}
+
+type testChatMessage struct {
+	ToolCalls []struct {
+		Index    *int   `json:"index"`
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+}
 
 func TestGeminiStreamToolCalls(t *testing.T) {
 	// Given two calls, including an empty-argument call, across upstream chunks.
 	in := "data: " + `{"response":{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":{"path":"a"}}}]}}]}}` + "\n\ndata: " + `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"list","args":{}}}]},"finishReason":"STOP"}]}` + "\n\n"
 	var out bytes.Buffer
 	// When translating the stream.
-	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
+	if err := geminiStream(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
 		t.Fatal(err)
 	}
 	// Then calls have distinct IDs, sequential indexes and terminal framing.
@@ -121,7 +156,7 @@ func TestGeminiParallelSameNameResultsPreserveAssociation(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Then the name-only responses follow the order of the calls they answer.
-	var env geminiEnvelope
+	var env testGeminiEnvelope
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +192,8 @@ func TestChatFunctionCall(t *testing.T) {
 	}
 	var parsed struct {
 		Choices []struct {
-			Message chatMessage `json:"message"`
-			Finish  string      `json:"finish_reason"`
+			Message testChatMessage `json:"message"`
+			Finish  string          `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(resp.Raw, &parsed); err != nil {
@@ -176,7 +211,7 @@ func TestChatFunctionCall(t *testing.T) {
 func TestGeminiTextStreamFinish(t *testing.T) {
 	var out bytes.Buffer
 	in := "data: " + `{"candidates":[{"content":{"parts":[{"text":"hello"}]}}]}` + "\n\ndata: [DONE]\n\n"
-	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
+	if err := geminiStream(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"role":"assistant"`, `"content":"hello"`, `"finish_reason":"stop"`, "data: [DONE]"} {
@@ -208,7 +243,7 @@ func TestGeminiStreamWritesNothingBeforeUpstreamEvent(t *testing.T) {
 	var out bytes.Buffer
 	in := &observedReader{Reader: strings.NewReader("data: " + `{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}` + "\n\n"), out: &out}
 	// When translating the stream.
-	if err := geminiSSEToOpenAI(in, &out, "gemini-3-flash"); err != nil {
+	if err := geminiStream(in, &out, "gemini-3-flash"); err != nil {
 		t.Fatal(err)
 	}
 	// Then no client bytes precede the first upstream event, so the gateway's
@@ -225,7 +260,7 @@ func TestGeminiStreamWritesNothingBeforeUpstreamEvent(t *testing.T) {
 
 func TestGeminiEmptyStreamStillCloses(t *testing.T) {
 	var out bytes.Buffer
-	if err := geminiSSEToOpenAI(strings.NewReader(""), &out, "gemini-3-flash"); err != nil {
+	if err := geminiStream(strings.NewReader(""), &out, "gemini-3-flash"); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"role":"assistant"`, `"finish_reason":"stop"`, "data: [DONE]"} {
@@ -246,7 +281,7 @@ func TestGeminiStreamErrorPayloadFailsTheStream(t *testing.T) {
 			// Given a stream that fails after part of the answer.
 			var out bytes.Buffer
 			// When translating it.
-			err := geminiSSEToOpenAI(strings.NewReader(text+"data: "+tc.event+"\n\n"), &out, "gemini-3-flash")
+			err := geminiStream(strings.NewReader(text+"data: "+tc.event+"\n\n"), &out, "gemini-3-flash")
 			// Then it fails instead of closing the partial answer as complete.
 			if err == nil {
 				t.Fatalf("error event swallowed: %s", out.String())
@@ -259,7 +294,7 @@ func TestGeminiStreamErrorPayloadFailsTheStream(t *testing.T) {
 			// Given a stream whose first event is a quota error.
 			var out bytes.Buffer
 			// When translating it.
-			err := geminiSSEToOpenAI(strings.NewReader("data: "+tc.event+"\n\n"), &out, "gemini-3-flash")
+			err := geminiStream(strings.NewReader("data: "+tc.event+"\n\n"), &out, "gemini-3-flash")
 			// Then it fails as a model-scoped 429 with the reset hint and writes
 			// nothing, so the gateway can cool the model and fail over.
 			var he adapter.HTTPError
@@ -275,7 +310,7 @@ func TestGeminiStreamErrorPayloadFailsTheStream(t *testing.T) {
 		// Given a first event whose error carries only the google.rpc status name.
 		var out bytes.Buffer
 		// When translating the stream.
-		err := geminiSSEToOpenAI(strings.NewReader("data: "+`{"error":{"message":"Internal error encountered.","status":"INTERNAL"}}`+"\n\n"), &out, "gemini-3-flash")
+		err := geminiStream(strings.NewReader("data: "+`{"error":{"message":"Internal error encountered.","status":"INTERNAL"}}`+"\n\n"), &out, "gemini-3-flash")
 		// Then it fails as the HTTP status that name means on a non-streaming
 		// reply, so the gateway classifies it the same way, and writes nothing.
 		var he adapter.HTTPError
@@ -295,7 +330,7 @@ func TestGeminiStreamMaxTokensDuringToolCall(t *testing.T) {
 			// Given a function call cut off by the output token limit.
 			var out bytes.Buffer
 			// When translating the stream.
-			if err := geminiSSEToOpenAI(strings.NewReader(tc.in), &out, "gemini-3-flash"); err != nil {
+			if err := geminiStream(strings.NewReader(tc.in), &out, "gemini-3-flash"); err != nil {
 				t.Fatal(err)
 			}
 			// Then the terminal chunk reports truncation, not a finished tool turn.
@@ -355,7 +390,7 @@ func TestGeminiChatMaxTokensDuringToolCall(t *testing.T) {
 func streamFinishReason(t *testing.T, in string) string {
 	t.Helper()
 	var out bytes.Buffer
-	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
+	if err := geminiStream(strings.NewReader(in), &out, "gemini-3-flash"); err != nil {
 		t.Fatal(err)
 	}
 	finish := ""
@@ -512,7 +547,7 @@ func TestGeminiToolOnlyAssistant(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var env geminiEnvelope
+		var env testGeminiEnvelope
 		if err := json.Unmarshal(body, &env); err != nil {
 			t.Fatal(err)
 		}
@@ -537,7 +572,7 @@ func TestGeminiEmptyToolCallArgumentsBecomeEmptyObject(t *testing.T) {
 				t.Fatalf("blank arguments rejected: %v", err)
 			}
 			// Then the call sends empty-object args and keeps its result paired.
-			var env geminiEnvelope
+			var env testGeminiEnvelope
 			if err := json.Unmarshal(body, &env); err != nil {
 				t.Fatal(err)
 			}
@@ -800,7 +835,7 @@ func TestSanitizeGeminiSchemaCollapsesOptionalArray(t *testing.T) {
 	in := `{"type":"object","properties":{"sorts":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"title":"sorts","type":"array"},
 		"pick":{"anyOf":[{"type":"string"},{"type":"integer"},{"type":"null"}]}}}`
 	var got map[string]any
-	if err := json.Unmarshal(sanitizeGeminiSchema(json.RawMessage(in)), &got); err != nil {
+	if err := json.Unmarshal(translate.SanitizeGeminiSchema(json.RawMessage(in)), &got); err != nil {
 		t.Fatal(err)
 	}
 	want := `{"properties":{"pick":{"anyOf":[{"type":"string"},{"type":"integer"}],"nullable":true},"sorts":{"items":{"type":"string"},"nullable":true,"title":"sorts","type":"array"}},"type":"object"}`
@@ -812,7 +847,7 @@ func TestSanitizeGeminiSchemaCollapsesOptionalArray(t *testing.T) {
 
 func TestProHighSlotsUseLiveUpstreamID(t *testing.T) {
 	for in, want := range map[string]string{"gemini-3.1-pro-high": "gemini-pro-agent", "gemini-3-pro-high": "gemini-pro-agent", "gemini-3.1-pro-low": "gemini-3.1-pro-low"} {
-		if got := upstreamModelID(in); got != want {
+		if got := translate.GeminiUpstreamModelID(in); got != want {
 			t.Fatalf("%s -> %s, want %s", in, got, want)
 		}
 	}
@@ -870,7 +905,7 @@ func TestSanitizeGeminiSchemaKeepsOnlyProtoFields(t *testing.T) {
 		"list":{"type":"array","items":{"type":"object","additionalProperties":{"type":"string"},"properties":{"title":{"type":"string","title":"T"}}}}
 	},"required":["count"]}`
 	var got map[string]any
-	if err := json.Unmarshal(sanitizeGeminiSchema(json.RawMessage(in)), &got); err != nil {
+	if err := json.Unmarshal(translate.SanitizeGeminiSchema(json.RawMessage(in)), &got); err != nil {
 		t.Fatal(err)
 	}
 	want := `{"properties":{"count":{"maximum":9,"minimum":0,"type":"integer"},"list":{"items":{"properties":{"title":{"title":"T","type":"string"}},"type":"object"},"type":"array"},"mode":{"anyOf":[{"enum":["a"],"type":"string"},{"maximum":5,"type":"number"}]},"type":{"enum":["fixed"],"nullable":true,"type":"string"}},"required":["count"],"type":"object"}`
@@ -883,7 +918,7 @@ func TestSanitizeGeminiSchemaKeepsOnlyProtoFields(t *testing.T) {
 func sanitizedSchema(t *testing.T, in string) string {
 	t.Helper()
 	var got map[string]any
-	if err := json.Unmarshal(sanitizeGeminiSchema(json.RawMessage(in)), &got); err != nil {
+	if err := json.Unmarshal(translate.SanitizeGeminiSchema(json.RawMessage(in)), &got); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := json.Marshal(got)
@@ -1130,7 +1165,7 @@ func TestStreamErrorWithoutCodeStillClassifies(t *testing.T) {
 func TestGeminiStreamReportsUsage(t *testing.T) {
 	in := "data: " + `{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":7,"totalTokenCount":19}}` + "\n\n"
 	var out bytes.Buffer
-	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-2.5-flash-lite"); err != nil {
+	if err := geminiStream(strings.NewReader(in), &out, "gemini-2.5-flash-lite"); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()

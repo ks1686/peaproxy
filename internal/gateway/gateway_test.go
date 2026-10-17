@@ -111,15 +111,15 @@ func TestSharedModelSkipsZenAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account != "openai-oauth" || resp.Content != "from-sub" || hitsZen != 0 || hitsSub == 0 {
-		t.Fatalf("alias route account=%s content=%q sub=%d zen=%d err=%v", account, resp.Content, hitsSub, hitsZen, err)
+	if account.Account != "openai-oauth" || resp.Content != "from-sub" || hitsZen != 0 || hitsSub == 0 {
+		t.Fatalf("alias route account=%s content=%q sub=%d zen=%d err=%v", account.Account, resp.Content, hitsSub, hitsZen, err)
 	}
 	resp, account, err = gw.Chat(context.Background(), []byte(`{"model":"big-pickle","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account != "opencode-zen" || hitsZen == 0 {
-		t.Fatalf("zen-only model account=%s hits=%d content=%q", account, hitsZen, resp.Content)
+	if account.Account != "opencode-zen" || hitsZen == 0 {
+		t.Fatalf("zen-only model account=%s hits=%d content=%q", account.Account, hitsZen, resp.Content)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestChatFailsover429ToNextAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp.Content != "from-b" {
-		t.Fatalf("content %q account %s", resp.Content, account)
+		t.Fatalf("content %q account %s", resp.Content, account.Account)
 	}
 	if hitsA == 0 || hitsB == 0 {
 		t.Fatalf("expected both accounts, a=%d b=%d", hitsA, hitsB)
@@ -365,7 +365,7 @@ func TestResponsesTranslatesToChatCompletions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account == "" {
+	if account.Account == "" {
 		t.Fatal("missing account")
 	}
 	if !strings.Contains(string(chatBody), `"messages"`) || strings.Contains(string(chatBody), `"input"`) {
@@ -661,7 +661,7 @@ func TestChatFailsover401Then429ThenSucceeds(t *testing.T) {
 	gw.Refresh(context.Background())
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
 	if err != nil || resp.Content != "from-c" {
-		t.Fatalf("%v %#v account=%s", err, resp, account)
+		t.Fatalf("%v %#v account=%s", err, resp, account.Account)
 	}
 	ids := map[string]bool{}
 	for _, cd := range gw.Cooldowns() {
@@ -819,8 +819,8 @@ func TestFillFirstAlwaysStartsAtFirstHotAccount(t *testing.T) {
 	gw := policyGateway(t, "fill-first", countOK(&hitsA, "from-a"), countOK(&hitsB, "from-b"))
 	for i := 0; i < 3; i++ {
 		resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
-		if err != nil || resp.Content != "from-a" || account != "acct-a" {
-			t.Fatalf("fill-first %d: %v %#v account=%s", i, err, resp, account)
+		if err != nil || resp.Content != "from-a" || account.Account != "acct-a" {
+			t.Fatalf("fill-first %d: %v %#v account=%s", i, err, resp, account.Account)
 		}
 	}
 	if hitsA != 3 || hitsB != 0 {
@@ -848,8 +848,8 @@ func TestStickyStaysOnLastSuccessAfterCooldownExpires(t *testing.T) {
 		countOK(&hitsB, "from-b"),
 	)
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
-	if err != nil || resp.Content != "from-b" || account != "acct-b" {
-		t.Fatalf("first sticky: %v %#v account=%s", err, resp, account)
+	if err != nil || resp.Content != "from-b" || account.Account != "acct-b" {
+		t.Fatalf("first sticky: %v %#v account=%s", err, resp, account.Account)
 	}
 	if hitsA != 1 || hitsB != 1 {
 		t.Fatalf("first pass a=%d b=%d", hitsA, hitsB)
@@ -861,8 +861,8 @@ func TestStickyStaysOnLastSuccessAfterCooldownExpires(t *testing.T) {
 	time.Sleep(40 * time.Millisecond)
 	aBefore, bBefore := hitsA, hitsB
 	resp, account, err = gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
-	if err != nil || resp.Content != "from-b" || account != "acct-b" {
-		t.Fatalf("second sticky: %v %#v account=%s", err, resp, account)
+	if err != nil || resp.Content != "from-b" || account.Account != "acct-b" {
+		t.Fatalf("second sticky: %v %#v account=%s", err, resp, account.Account)
 	}
 	if hitsA != aBefore {
 		t.Fatalf("sticky should not return to acct-a after cooldown a=%d→%d", aBefore, hitsA)
@@ -898,14 +898,14 @@ func TestFillFirstReturnsToPrimaryAfterCooldownExpires(t *testing.T) {
 		},
 		countOK(&hitsB, "from-b"),
 	)
-	if _, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`)); err != nil || account != "acct-b" {
-		t.Fatalf("failover: %v account=%s", err, account)
+	if _, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`)); err != nil || account.Account != "acct-b" {
+		t.Fatalf("failover: %v account=%s", err, account.Account)
 	}
 	time.Sleep(40 * time.Millisecond)
 	aOK = true
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
-	if err != nil || resp.Content != "from-a" || account != "acct-a" {
-		t.Fatalf("fill-first should resume primary: %v %#v account=%s", err, resp, account)
+	if err != nil || resp.Content != "from-a" || account.Account != "acct-a" {
+		t.Fatalf("fill-first should resume primary: %v %#v account=%s", err, resp, account.Account)
 	}
 	if hitsA < 2 {
 		t.Fatalf("expected acct-a retried after cooldown, hits=%d", hitsA)
@@ -975,8 +975,8 @@ func TestChatFailsoverOnOverloadedAndAuthBodies(t *testing.T) {
 		},
 	)
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[]}`))
-	if err != nil || resp.Content != "from-c" || account != "acct-c" {
-		t.Fatalf("%v %#v account=%s", err, resp, account)
+	if err != nil || resp.Content != "from-c" || account.Account != "acct-c" {
+		t.Fatalf("%v %#v account=%s", err, resp, account.Account)
 	}
 	if hits != 1 {
 		t.Fatalf("hits c=%d", hits)
@@ -1049,8 +1049,8 @@ func TestGenerateImageProxiesTaggedModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account != "acct-a" {
-		t.Fatalf("account %s", account)
+	if account.Account != "acct-a" {
+		t.Fatalf("account %s", account.Account)
 	}
 	if genHits != 1 {
 		t.Fatalf("hits %d", genHits)
@@ -1127,8 +1127,8 @@ func TestCreateEmbeddingsProxiesTaggedModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account != "acct-a" {
-		t.Fatalf("account %s", account)
+	if account.Account != "acct-a" {
+		t.Fatalf("account %s", account.Account)
 	}
 	if embedHits != 1 {
 		t.Fatalf("hits %d", embedHits)

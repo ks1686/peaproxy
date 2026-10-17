@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/ks1686/peaproxy/internal/adapter"
-	"github.com/ks1686/peaproxy/internal/adapter/openai_oauth"
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
@@ -97,7 +96,7 @@ func (a *Adapter) chatViaWire(ctx context.Context, req adapter.ChatRequest) (ada
 	}
 	switch wireOf(req.Model) {
 	case wireResponses:
-		rb, err := openai_oauth.ChatToResponses(chat, req.Model, true)
+		rb, err := translate.ChatToResponses(chat, req.Model, true)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
@@ -105,11 +104,11 @@ func (a *Adapter) chatViaWire(ctx context.Context, req adapter.ChatRequest) (ada
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
-		body, err := openai_oauth.ResponsesStreamToJSON(raw)
+		body, err := translate.ResponsesStreamToJSON(raw)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
-		oa, content, err := openai_oauth.ResponsesToChatCompletion(req.Model, body)
+		oa, content, err := translate.ResponsesToChatCompletion(req.Model, body)
 		if err != nil {
 			return adapter.ChatResponse{}, err
 		}
@@ -145,7 +144,7 @@ func (a *Adapter) streamViaWire(ctx context.Context, req adapter.ChatRequest, w 
 	}
 	switch wireOf(req.Model) {
 	case wireResponses:
-		rb, err := openai_oauth.ChatToResponses(chat, req.Model, true)
+		rb, err := translate.ChatToResponses(chat, req.Model, true)
 		if err != nil {
 			return err
 		}
@@ -154,7 +153,7 @@ func (a *Adapter) streamViaWire(ctx context.Context, req adapter.ChatRequest, w 
 			return err
 		}
 		defer func() { _ = resp.Body.Close() }()
-		return openai_oauth.ResponsesSSEToOpenAI(resp.Body, w, req.Model)
+		return translate.ResponsesSSEToOpenAI(resp.Body, w, req.Model)
 	case wireMessages:
 		mb, err := translate.ToClaude(chat, true)
 		if err != nil {

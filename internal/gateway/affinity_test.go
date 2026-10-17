@@ -60,7 +60,7 @@ func TestAutomaticRouteBindsAffinityOnSuccess(t *testing.T) {
 	if _, account, err := gw.Chat(context.Background(),
 		[]byte(`{"model":"pea/auto","session_id":"sess-2","messages":[{"role":"user","content":"hi"}]}`)); err != nil {
 		t.Fatal(err)
-	} else if account == "" {
+	} else if account.Account == "" {
 		t.Fatal("no account served the request")
 	}
 

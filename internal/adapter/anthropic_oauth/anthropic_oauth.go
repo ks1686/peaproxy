@@ -407,29 +407,20 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if resp.StatusCode >= 300 {
 		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
-	var list struct {
-		Data []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"display_name"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	parsed, err := catalog.ParseAnthropicList(body)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]catalog.Model, 0, len(list.Data))
-	for _, m := range list.Data {
-		out = append(out, catalog.Model{
-			ID:                m.ID,
-			DisplayName:       m.DisplayName,
-			Provider:          Name,
-			AccountID:         a.id,
-			Tier:              catalog.TierPaid,
-			Modalities:        catalog.InferModalities(m.ID),
-			Status:            "ready",
-			SubscriptionOAuth: true,
-			Exposed:           true,
-			Routable:          true,
-		})
+	out := make([]catalog.Model, 0, len(parsed))
+	for _, m := range parsed {
+		m.Provider = Name
+		m.AccountID = a.id
+		m.Tier = catalog.TierPaid
+		m.Status = "ready"
+		m.SubscriptionOAuth = true
+		m.Exposed = true
+		m.Routable = true
+		out = append(out, m)
 	}
 	return out, nil
 }

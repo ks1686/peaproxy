@@ -46,8 +46,8 @@ func TestChatStreamFailsOverWhenTheModelRefusesTheProtocol(t *testing.T) {
 	if first == 0 || second == 0 {
 		t.Fatalf("attempts first=%d second=%d", first, second)
 	}
-	if account != "acct-b" {
-		t.Fatalf("served by %q, want the account that can answer", account)
+	if account.Account != "acct-b" {
+		t.Fatalf("served by %q, want the account that can answer", account.Account)
 	}
 	if !strings.Contains(out.String(), "ok") {
 		t.Errorf("the client did not get the healthy account's answer: %s", out.String())
@@ -60,7 +60,7 @@ func TestChatStreamFailsOverWhenTheModelRefusesTheProtocol(t *testing.T) {
 }
 
 // Providers report an exhausted quota as HTTP 400 with a usage-limit phrase.
-// That is a reason to try the next account, not a malformed request.
+// That is a reason to try the next account.Account, not a malformed request.
 func TestChatStreamFailsOverOnAUsageLimit400(t *testing.T) {
 	var first, second int
 	limit := `{"error":{"message":"You have reached your usage limit","type":"invalid_request_error"}}`

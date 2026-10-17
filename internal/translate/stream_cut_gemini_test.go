@@ -1,4 +1,4 @@
-package antigravity
+package translate
 
 import (
 	"errors"
@@ -9,8 +9,8 @@ import (
 // The same guarantee the openai_oauth wire makes: a stream cut after bytes
 // reached the client is announced rather than left to look like a quiet
 // finish. This is the google-oauth account's path.
-func TestCutMidStreamIsNotSilent(t *testing.T) {
-	r := &errAfterReader{
+func TestGeminiCutMidStreamIsNotSilent(t *testing.T) {
+	r := &geminiErrAfterReader{
 		data: strings.Join([]string{
 			`data: {"candidates":[{"content":{"parts":[{"text":"partial"}]},"index":0}],"modelVersion":"m"}`,
 			``,
@@ -20,7 +20,7 @@ func TestCutMidStreamIsNotSilent(t *testing.T) {
 	}
 
 	var out strings.Builder
-	_ = geminiSSEToOpenAI(r, &out, "gemini-3.1-pro")
+	_ = GeminiSSEToOpenAI(r, &out, "gemini-3.1-pro")
 	got := out.String()
 
 	if !strings.Contains(got, "partial") {
@@ -35,7 +35,7 @@ func TestCutMidStreamIsNotSilent(t *testing.T) {
 }
 
 // A clean end still finishes normally. The error path must not leak into it.
-func TestCleanEndStillFinishesNormally(t *testing.T) {
+func TestGeminiCleanEndStillFinishesNormally(t *testing.T) {
 	in := strings.Join([]string{
 		`data: {"candidates":[{"content":{"parts":[{"text":"complete"}]},"index":0}],"modelVersion":"m"}`,
 		``,
@@ -44,7 +44,7 @@ func TestCleanEndStillFinishesNormally(t *testing.T) {
 	}, "\n")
 
 	var out strings.Builder
-	if err := geminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-3.1-pro"); err != nil {
+	if err := GeminiSSEToOpenAI(strings.NewReader(in), &out, "gemini-3.1-pro"); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -56,13 +56,13 @@ func TestCleanEndStillFinishesNormally(t *testing.T) {
 	}
 }
 
-type errAfterReader struct {
+type geminiErrAfterReader struct {
 	data string
 	err  error
 	done bool
 }
 
-func (r *errAfterReader) Read(p []byte) (int, error) {
+func (r *geminiErrAfterReader) Read(p []byte) (int, error) {
 	if r.done {
 		return 0, r.err
 	}

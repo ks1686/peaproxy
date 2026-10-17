@@ -434,6 +434,8 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 		if m.vision() {
 			mods = append(mods, "image_in")
 		}
+		window, ceiling := m.windows()
+		efforts := catalog.NormalizeEfforts(m.efforts())
 		out = append(out, catalog.Model{
 			ID:                m.ID,
 			DisplayName:       m.Name,
@@ -445,6 +447,11 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 			Exposed:           true,
 			Routable:          true,
 			SubscriptionOAuth: true,
+			ContextWindow:     window,
+			MaxContextWindow:  ceiling,
+			MaxTokens:         m.maxTokens(),
+			Reasoning:         catalog.HasSelectableEffort(efforts),
+			Efforts:           efforts,
 		})
 	}
 	return out, nil
@@ -458,8 +465,14 @@ type copilotModel struct {
 		State string `json:"state"`
 	} `json:"policy"`
 	Capabilities *struct {
+		Limits *struct {
+			MaxContextWindowTokens json.RawMessage `json:"max_context_window_tokens"`
+			MaxPromptTokens        json.RawMessage `json:"max_prompt_tokens"`
+			MaxOutputTokens        json.RawMessage `json:"max_output_tokens"`
+		} `json:"limits"`
 		Supports *struct {
-			Vision bool `json:"vision"`
+			Vision          bool            `json:"vision"`
+			ReasoningEffort json.RawMessage `json:"reasoning_effort"`
 		} `json:"supports"`
 	} `json:"capabilities"`
 }
@@ -476,6 +489,34 @@ func (m copilotModel) listed() bool {
 
 func (m copilotModel) vision() bool {
 	return m.Capabilities != nil && m.Capabilities.Supports != nil && m.Capabilities.Supports.Vision
+}
+
+func (m copilotModel) windows() (window, ceiling int) {
+	if m.Capabilities == nil || m.Capabilities.Limits == nil {
+		return 0, 0
+	}
+	return catalog.AssignWindows(
+		catalog.TokensFromJSON(m.Capabilities.Limits.MaxPromptTokens),
+		catalog.TokensFromJSON(m.Capabilities.Limits.MaxContextWindowTokens),
+	)
+}
+
+func (m copilotModel) maxTokens() int {
+	if m.Capabilities == nil || m.Capabilities.Limits == nil {
+		return 0
+	}
+	return catalog.TokensFromJSON(m.Capabilities.Limits.MaxOutputTokens)
+}
+
+func (m copilotModel) efforts() []string {
+	if m.Capabilities == nil || m.Capabilities.Supports == nil || len(m.Capabilities.Supports.ReasoningEffort) == 0 {
+		return nil
+	}
+	var levels []string
+	if json.Unmarshal(m.Capabilities.Supports.ReasoningEffort, &levels) != nil {
+		return nil
+	}
+	return levels
 }
 
 func (a *Adapter) Chat(ctx context.Context, req adapter.ChatRequest) (adapter.ChatResponse, error) {

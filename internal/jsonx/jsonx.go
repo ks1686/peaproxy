@@ -12,8 +12,9 @@ import (
 // Peek is a typed extract from a client body. Unmarshal into structs is safe;
 // never round-trip request JSON through map[string]any (VibeProxy #292).
 type Peek struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Model           string `json:"model"`
+	Stream          bool   `json:"stream"`
+	ReasoningEffort string `json:"reasoning_effort"`
 }
 
 // PeekBody reads model/stream without reserializing the rest of the document.

@@ -20,7 +20,7 @@ import (
 // fail before the change and pass after it.
 
 func TestImagesTakeAnAdmissionSlotSoMaxInFlightBoundsThem(t *testing.T) {
-	// The limit is per account, so the measurement is too. Two accounts at
+	// The limit is per account.Account, so the measurement is too. Two accounts at
 	// maxInFlight=1 legitimately show two calls at once -- one each -- and
 	// asserting a global peak of one would fail on correct behaviour.
 	var mu sync.Mutex
@@ -72,7 +72,9 @@ func TestImagesTakeAnAdmissionSlotSoMaxInFlightBoundsThem(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	close(release)
 	for i := 0; i < callers; i++ {
-		<-done
+		if err := <-done; err != nil {
+			t.Fatalf("image call failed: %v", err)
+		}
 	}
 
 	mu.Lock()

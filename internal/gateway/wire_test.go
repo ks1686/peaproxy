@@ -34,8 +34,8 @@ func TestRouteEchoesClientModel(t *testing.T) {
 	)
 	gw.cfg.Routes = map[string]string{"code": "llama3.2"}
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"code","messages":[{"role":"user","content":"hi"}]}`))
-	if err != nil || account != "acct-a" || resp.Content != "ok" {
-		t.Fatalf("%v %s %#v", err, account, resp)
+	if err != nil || account.Account != "acct-a" || resp.Content != "ok" {
+		t.Fatalf("%v %s %#v", err, account.Account, resp)
 	}
 	if !strings.Contains(string(got), `"model":"llama3.2"`) {
 		t.Fatalf("upstream %s", got)
@@ -72,8 +72,8 @@ func TestTransientRetriesSameAccountOnce(t *testing.T) {
 		},
 	)
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`))
-	if err != nil || account != "acct-a" || resp.Content != "ok" || hitsA != 2 || hitsB != 0 {
-		t.Fatalf("err %v account %s hits %d/%d content %q", err, account, hitsA, hitsB, resp.Content)
+	if err != nil || account.Account != "acct-a" || resp.Content != "ok" || hitsA != 2 || hitsB != 0 {
+		t.Fatalf("err %v account %s hits %d/%d content %q", err, account.Account, hitsA, hitsB, resp.Content)
 	}
 }
 
