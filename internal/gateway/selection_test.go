@@ -95,3 +95,29 @@ func TestPrepareRewritesContextCeilingAndEffortSibling(t *testing.T) {
 		t.Fatalf("effort: client=%s upstream=%s body=%s", client, upstream, body)
 	}
 }
+
+// The Responses and Messages wires spell effort differently from chat. A
+// sibling choice that only read reasoning_effort sent every Codex and Claude
+// Code request for an effort base to the medium sibling.
+func TestPrepareReadsEffortOnEveryWire(t *testing.T) {
+	g := &Gateway{models: []catalog.Model{
+		{ID: "gemini-3.8-flash-low", Exposed: true, Routable: true},
+		{ID: "gemini-3.8-flash-medium", Exposed: true, Routable: true},
+		{ID: "gemini-3.8-flash-high", Exposed: true, Routable: true},
+	}}
+	for _, tc := range []struct{ wire, body string }{
+		{"chat", `{"model":"gemini-3.8-flash","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`},
+		{"responses", `{"model":"gemini-3.8-flash","reasoning":{"effort":"high"},"input":"hi"}`},
+		{"messages", `{"model":"gemini-3.8-flash","max_tokens":64,"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`},
+	} {
+		t.Run(tc.wire, func(t *testing.T) {
+			upstream, client, _, _, err := g.prepare([]byte(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client != "gemini-3.8-flash" || upstream != "gemini-3.8-flash-high" {
+				t.Fatalf("client=%s upstream=%s, want the high sibling", client, upstream)
+			}
+		})
+	}
+}

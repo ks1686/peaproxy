@@ -21,6 +21,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
+// Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, Call, error) {
 	ctx, cancel := g.requestContext(ctx)
 	defer cancel()
@@ -646,13 +647,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, Call, erro
 		}
 		if callErr != nil {
 			last = callErr
-			if admissionRejection(callErr) {
-				// Busy is not broken. Skip without cooling (#74).
-				st.AdmissionSkipped = true
-				continue
-			}
-			if retryable(callErr) || router.Transient(callErr) {
-				g.markCooldown(inst.Provider.ID, model, callErr)
+			if g.noteAttempt(callErr, inst.Provider.ID, model, &st, failPolicy{Protocol: true}) {
 				continue
 			}
 			return nil, Call{Account: lastAccount, Deployment: model}, callErr
@@ -677,6 +672,9 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, Call, erro
 	}
 	if last == nil {
 		last = router.ErrNoAccount
+	}
+	if st.Refused {
+		return nil, Call{Account: lastAccount, Deployment: model}, errModelRefusesChat
 	}
 	if st.AdmissionSkipped {
 		return nil, Call{Account: lastAccount, Deployment: model}, last
@@ -900,8 +898,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, Call, err
 		})
 		if err != nil {
 			last = err
-			if retryable(err) {
-				g.markCooldown(inst.Provider.ID, model, err)
+			if g.noteAttempt(err, inst.Provider.ID, model, &st, failPolicy{Protocol: true}) {
 				continue
 			}
 			return nil, Call{Account: lastAccount, Deployment: model}, err
@@ -932,6 +929,9 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, Call, err
 	}
 	if last == nil {
 		last = router.ErrNoAccount
+	}
+	if st.Refused {
+		return nil, Call{Account: lastAccount, Deployment: model}, errModelRefusesChat
 	}
 	if st.AdmissionSkipped {
 		return nil, Call{Account: lastAccount, Deployment: model}, last

@@ -100,3 +100,16 @@ func TestFromClaude(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+// OpenAI's minimal is not one of Claude's effort levels, and Claude answers an
+// unknown output_config.effort with a 400. It is the lowest level asked for,
+// so it becomes Claude's lowest.
+func TestToClaudeMinimalEffortIsLow(t *testing.T) {
+	out, err := ToClaude([]byte(`{"model":"claude-opus-5-5","reasoning_effort":"minimal","messages":[{"role":"user","content":"hi"}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"effort":"low"`)) || bytes.Contains(out, []byte(`minimal`)) {
+		t.Fatalf("minimal effort not mapped to low: %s", out)
+	}
+}

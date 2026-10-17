@@ -31,7 +31,7 @@ func (g *Gateway) prepare(raw []byte) (upstream, client string, body []byte, bud
 	g.mu.RLock()
 	idx := g.clientIndexLocked()
 	g.mu.RUnlock()
-	selected := idx.Target(strings.TrimSpace(peek.Model), peek.ReasoningEffort)
+	selected := idx.Target(strings.TrimSpace(peek.Model), peek.Effort())
 	if selected != strings.TrimSpace(peek.Model) {
 		quoted, mErr := json.Marshal(selected)
 		if mErr != nil {

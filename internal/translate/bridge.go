@@ -181,12 +181,15 @@ func ToClaude(raw []byte, stream bool) ([]byte, error) {
 // applyReasoningEffort carries a chat reasoning_effort onto Claude's
 // output_config.effort with adaptive thinking. off and none leave thinking
 // unset: the client asked for no effort, and a disabled thinking block is a
-// different request some models reject.
+// different request some models reject. minimal is OpenAI's level below low;
+// Claude has no such level and rejects the name, so it is sent as low.
 func applyReasoningEffort(out *claudePost, effort string) {
 	effort = strings.ToLower(strings.TrimSpace(effort))
 	switch effort {
 	case "", "off", "none":
 		return
+	case "minimal":
+		effort = "low"
 	}
 	out.Thinking = &claudeThinking{Type: "adaptive", Display: "summarized"}
 	out.OutputConfig = &claudeOutputConfig{Effort: effort}
