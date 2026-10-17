@@ -13,10 +13,12 @@ import (
 	"github.com/ks1686/peaproxy/internal/translate"
 )
 
-// prepare strips an opt-in -thinking-N suffix, resolves route names, and
-// returns the upstream model plus the id the client should see in the response.
+// prepare strips an opt-in -thinking-N suffix, resolves a context-ceiling
+// alias or an effort sibling, resolves route names, and returns the upstream
+// model plus the id the client should see in the response.
 func (g *Gateway) prepare(raw []byte) (upstream, client string, body []byte, budget int, err error) {
-	client = strings.TrimSpace(jsonx.PeekBody(raw).Model)
+	peek := jsonx.PeekBody(raw)
+	client = strings.TrimSpace(peek.Model)
 	base, budget := translate.SplitThinkingSuffix(client)
 	if base != client {
 		quoted, mErr := json.Marshal(base)
@@ -24,8 +26,23 @@ func (g *Gateway) prepare(raw []byte) (upstream, client string, body []byte, bud
 			return "", "", nil, 0, mErr
 		}
 		raw = jsonx.SetTopLevelRaw(raw, "model", quoted)
+		peek = jsonx.PeekBody(raw)
+	}
+	g.mu.RLock()
+	idx := g.clientIndexLocked()
+	g.mu.RUnlock()
+	selected := idx.Target(strings.TrimSpace(peek.Model), peek.Effort())
+	if selected != strings.TrimSpace(peek.Model) {
+		quoted, mErr := json.Marshal(selected)
+		if mErr != nil {
+			return "", "", nil, 0, mErr
+		}
+		raw = jsonx.SetTopLevelRaw(raw, "model", quoted)
 	}
 	upstream, body, err = g.resolveBody(raw)
+	if err != nil {
+		return "", "", nil, 0, err
+	}
 	return upstream, client, body, budget, err
 }
 

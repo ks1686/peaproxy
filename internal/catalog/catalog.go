@@ -53,17 +53,30 @@ type Model struct {
 	// EmbeddingsReady is true when this row is tagged embeddings and the
 	// account's adapter can proxy POST /v1/embeddings. Listing overlay only.
 	EmbeddingsReady bool `json:"embeddingsReady,omitempty"`
-	// AliasOf is the live catalog id a stable route name forwards to.
-	// Empty on rows that came from ListModels.
+	// AliasOf is the live id a client-facing name calls when effort does not
+	// select a sibling. Routes set it to their target. Selection rows set it
+	// to the same live id the resolve table uses. Empty on rows from ListModels.
 	AliasOf string `json:"aliasOf,omitempty"`
 	// Price is present only when a live payload or an explicit override verified it.
 	Price Price `json:"price,omitempty"`
 	// ContextWindow is the provider's published context length in tokens, and
 	// is omitted from JSON when the provider publishes none. Zero means
-	// unknown, never "small": /v1/models on OpenAI, Anthropic and most others
-	// carries no context length at all, and inferring one from the model name
-	// would hand a harness a number it would believe (#81).
+	// unknown, never "small": a listing that omits the length stays unknown,
+	// and inferring one from the model name would hand a harness a number it
+	// would believe (#81).
 	ContextWindow int `json:"contextWindow,omitempty"`
+	// MaxContextWindow is a larger ceiling published beside ContextWindow.
+	// Equal or smaller values are omitted: there is no second size to select.
+	MaxContextWindow int `json:"maxContextWindow,omitempty"`
+	// MaxTokens is the provider's published output cap.
+	MaxTokens int `json:"maxTokens,omitempty"`
+	// Reasoning is true when the provider published an effort level other
+	// than off or none. It is not inferred from the model name.
+	Reasoning bool `json:"reasoning,omitempty"`
+	// Efforts are the provider's published reasoning levels, in a stable order.
+	Efforts []string `json:"efforts,omitempty"`
+	// HideEffortOff means the provider said thinking cannot be turned off.
+	HideEffortOff bool `json:"hideEffortOff,omitempty"`
 }
 
 // Query is the hide/filter/expose pass applied before serving /v1/models.
@@ -246,11 +259,21 @@ type OpenAIModelList struct {
 }
 
 // OpenAIModel is a single /v1/models entry. OwnedBy is always peaproxy so
-// clients do not bind to an upstream vendor name.
+// clients do not bind to an upstream vendor name. The extra fields are the
+// provider's published context and effort facts; they are omitted when the
+// provider did not publish them, and OpenAI clients ignore the ones they
+// do not know.
 type OpenAIModel struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	OwnedBy string `json:"owned_by"`
+	ID               string   `json:"id"`
+	Object           string   `json:"object"`
+	OwnedBy          string   `json:"owned_by"`
+	DisplayName      string   `json:"display_name,omitempty"`
+	ContextWindow    int      `json:"context_window,omitempty"`
+	MaxContextWindow int      `json:"max_context_window,omitempty"`
+	MaxTokens        int      `json:"max_tokens,omitempty"`
+	Reasoning        bool     `json:"reasoning,omitempty"`
+	Efforts          []string `json:"efforts,omitempty"`
+	HideEffortOff    bool     `json:"hide_effort_off,omitempty"`
 }
 
 // ApplyRoutes appends stable route names whose targets are currently routable.
@@ -301,28 +324,36 @@ func ApplyRoutes(listed, all []Model, q Query, routes map[string]string) []Model
 }
 
 // ToOpenAIList converts filtered catalog models into the OpenAI list shape.
-// ToOpenAIList renders the client-facing model list. One entry per id: a model
-// three accounts can serve is one model, and OpenAI clients key on id, so the
-// duplicates showed up as three rows in every picker (#53). First occurrence
-// wins, and the input is already pin-sorted, so the pinned row is the one kept.
+// One entry per id: a model three accounts can serve is one model, and OpenAI
+// clients key on id, so the duplicates showed up as three rows in every
+// picker (#53). First occurrence keeps the order, and the input is already
+// pin-sorted, so the pinned row stays first. Published numbers are the maxima
+// across accounts, so a later larger window is not dropped.
 //
 // The per-account rows are still what /admin/catalog reports -- that is three
 // facts about three accounts, which is a different question.
 func ToOpenAIList(models []Model) OpenAIModelList {
-	data := make([]OpenAIModel, 0, len(models))
-	seen := make(map[string]bool, len(models))
-	for _, m := range models {
-		if seen[m.ID] {
-			continue
-		}
-		seen[m.ID] = true
-		data = append(data, OpenAIModel{
-			ID:      m.ID,
-			Object:  "model",
-			OwnedBy: "peaproxy",
-		})
+	combined := combineByID(models)
+	data := make([]OpenAIModel, 0, len(combined))
+	for _, m := range combined {
+		data = append(data, openAIModel(m))
 	}
 	return OpenAIModelList{Object: "list", Data: data}
+}
+
+func openAIModel(m Model) OpenAIModel {
+	return OpenAIModel{
+		ID:               m.ID,
+		Object:           "model",
+		OwnedBy:          "peaproxy",
+		DisplayName:      m.DisplayName,
+		ContextWindow:    m.ContextWindow,
+		MaxContextWindow: m.MaxContextWindow,
+		MaxTokens:        m.MaxTokens,
+		Reasoning:        m.Reasoning,
+		Efforts:          m.Efforts,
+		HideEffortOff:    m.HideEffortOff,
+	}
 }
 
 // InferModalities tags text and optional image_in / image_out / embeddings from

@@ -162,3 +162,18 @@ func TestDropTopLevelKeysTable(t *testing.T) {
 		})
 	}
 }
+
+func TestPeekEffortOnEveryWire(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"model":"m","reasoning_effort":"high"}`:             "high",
+		`{"model":"m","reasoning":{"effort":"low"}}`:          "low",
+		`{"model":"m","output_config":{"effort":"max"}}`:      "max",
+		`{"model":"m","reasoning":true,"output_config":"x"}`:  "",
+		`{"model":"m","reasoning_effort":" ","reasoning":{}}`: "",
+	} {
+		p := PeekBody([]byte(body))
+		if p.Model != "m" || p.Effort() != want {
+			t.Fatalf("%s: model=%q effort=%q, want %q", body, p.Model, p.Effort(), want)
+		}
+	}
+}

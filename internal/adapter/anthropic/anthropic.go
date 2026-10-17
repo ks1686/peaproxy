@@ -84,28 +84,19 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if resp.StatusCode >= 300 {
 		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
-	var list struct {
-		Data []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"display_name"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &list); err != nil {
+	parsed, err := catalog.ParseAnthropicList(body)
+	if err != nil {
 		return nil, err
 	}
-	out := make([]catalog.Model, 0, len(list.Data))
-	for _, m := range list.Data {
-		out = append(out, catalog.Model{
-			ID:          m.ID,
-			DisplayName: m.DisplayName,
-			Provider:    Name,
-			AccountID:   a.id,
-			Tier:        catalog.TierPaid,
-			Modalities:  catalog.InferModalities(m.ID),
-			Status:      "ready",
-			Exposed:     true,
-			Routable:    true,
-		})
+	out := make([]catalog.Model, 0, len(parsed))
+	for _, m := range parsed {
+		m.Provider = Name
+		m.AccountID = a.id
+		m.Tier = catalog.TierPaid
+		m.Status = "ready"
+		m.Exposed = true
+		m.Routable = true
+		out = append(out, m)
 	}
 	return out, nil
 }
@@ -230,6 +221,7 @@ func withThinking(raw []byte, budget int) []byte {
 
 func setBetas(req *http.Request, raw []byte) {
 	setThinkingBeta(req, raw)
+	setEffortBeta(req, raw)
 	mergeClientBetas(req)
 }
 
@@ -237,7 +229,24 @@ func setThinkingBeta(req *http.Request, raw []byte) {
 	if !bytes.Contains(raw, []byte(`"budget_tokens"`)) {
 		return
 	}
-	const beta = "interleaved-thinking-2025-05-14"
+	appendBeta(req, "interleaved-thinking-2025-05-14")
+}
+
+// setEffortBeta matches the OAuth lane: output_config.effort needs
+// effort-2025-11-24. A body without that field is left alone.
+func setEffortBeta(req *http.Request, raw []byte) {
+	var probe struct {
+		OutputConfig struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || strings.TrimSpace(probe.OutputConfig.Effort) == "" {
+		return
+	}
+	appendBeta(req, "effort-2025-11-24")
+}
+
+func appendBeta(req *http.Request, beta string) {
 	cur := req.Header.Get("anthropic-beta")
 	if strings.Contains(cur, beta) {
 		return

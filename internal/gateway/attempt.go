@@ -118,3 +118,78 @@ func ambiguousDelivery(err error) error {
 	}
 	return nil
 }
+
+// failPolicy says how a loop reads one upstream error.
+type failPolicy struct {
+	// Protocol enables the protocol-refusal branch. Only non-stream loops and
+	// translated tails use it; stream loops take it after the prelude check.
+	Protocol bool
+	// Replay reports whether the error allows another account. Nil means
+	// retryable(err) || router.Transient(err).
+	Replay func(error) bool
+}
+
+// failState is what one request has learned from its failed attempts.
+type failState struct {
+	Refused          bool
+	AdmissionSkipped bool
+	SlowPrelude      bool
+}
+
+func (p failPolicy) replay(err error) bool {
+	if p.Replay != nil {
+		return p.Replay(err)
+	}
+	return retryable(err) || router.Transient(err)
+}
+
+// noteAttempt records one failed attempt and reports whether the loop should
+// try the next account. A true result has already recorded a cooldown or a
+// protocol refusal.
+//
+// Order for non-stream loops: protocol refusal, admission, replay.
+func (g *Gateway) noteAttempt(err error, account, model string, st *failState, p failPolicy) bool {
+	if p.Protocol && protocolRefused(err) {
+		g.markModelNotChat(account, model)
+		st.Refused = true
+		return true
+	}
+	if admissionRejection(err) {
+		st.AdmissionSkipped = true
+		return true
+	}
+	if p.replay(err) {
+		g.markCooldown(account, model, err)
+		return true
+	}
+	return false
+}
+
+// noteStreamAttempt applies the stream order to one failed attempt. proceed
+// means try the next account. A non-nil returned error means return it now.
+//
+// Order: admission, bytes already written to the client, slow prelude, protocol
+// refusal, then failoverOn.
+func (g *Gateway) noteStreamAttempt(err error, wrote bool, account, model string, st *failState) (proceed bool, returned error) {
+	if admissionRejection(err) {
+		st.AdmissionSkipped = true
+		return true, nil
+	}
+	if wrote {
+		return false, err
+	}
+	if slowPrelude(err) {
+		st.SlowPrelude = true
+		return true, nil
+	}
+	if protocolRefused(err) {
+		g.markModelNotChat(account, model)
+		st.Refused = true
+		return true, nil
+	}
+	if failoverOn(err) {
+		g.markCooldown(account, model, err)
+		return true, nil
+	}
+	return false, err
+}

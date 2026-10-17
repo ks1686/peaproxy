@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/ks1686/peaproxy/internal/sizehint"
 )
@@ -12,8 +13,29 @@ import (
 // Peek is a typed extract from a client body. Unmarshal into structs is safe;
 // never round-trip request JSON through map[string]any (VibeProxy #292).
 type Peek struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Model           string `json:"model"`
+	Stream          bool   `json:"stream"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	// Reasoning and OutputConfig are the Responses and Messages spellings of
+	// the same request. A value of another JSON type is skipped, not fatal.
+	Reasoning struct {
+		Effort string `json:"effort"`
+	} `json:"reasoning"`
+	OutputConfig struct {
+		Effort string `json:"effort"`
+	} `json:"output_config"`
+}
+
+// Effort is the reasoning effort the body asked for, in whichever wire's
+// spelling it used: chat reasoning_effort, Responses reasoning.effort, or
+// Messages output_config.effort. Empty means the body named none.
+func (p Peek) Effort() string {
+	for _, e := range []string{p.ReasoningEffort, p.Reasoning.Effort, p.OutputConfig.Effort} {
+		if e = strings.TrimSpace(e); e != "" {
+			return e
+		}
+	}
+	return ""
 }
 
 // PeekBody reads model/stream without reserializing the rest of the document.

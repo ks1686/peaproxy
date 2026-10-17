@@ -203,3 +203,79 @@ func TestAdminPolicyReportsEstimatedSpendSeparately(t *testing.T) {
 		t.Error("the panel does not report spend held by requests in flight")
 	}
 }
+
+// A client id that prepare rewrites is priced from the deployment it ran as.
+// The quote exists only on the live id, so an estimate that appears was priced
+// from the deployment rather than from the client id.
+func TestPricedModelIsTheDeployment(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list", "data": []map[string]string{{"id": "m1"}},
+			})
+		case "/v1/chat/completions":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "chatcmpl-test", "model": "m1",
+				"choices": []map[string]any{{
+					"message":       map[string]string{"role": "assistant", "content": "hi"},
+					"finish_reason": "stop",
+				}},
+				"usage": json.RawMessage(`{"prompt_tokens":1000,"completion_tokens":100}`),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(up.Close)
+
+	in, out := 3.0, 15.0
+	cfg := config.Config{
+		SchemaVersion: 1,
+		Bind:          "127.0.0.1",
+		Port:          8317,
+		Providers: []config.Provider{{
+			ID: "acct", Adapter: "openai_compat", Tier: "paid", BaseURL: up.URL + "/v1",
+		}},
+		AutomaticRoutes: config.AutomaticRoutePrefs{
+			Prices: map[string]config.PriceQuote{
+				"acct/m1": {Input: &in, Output: &out, Verified: true},
+			},
+		},
+	}
+	gw, err := gateway.New(cfg, "", adapters.DefaultRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := usage.Open("")
+	gw.SetUsage(store)
+	gw.Refresh(context.Background())
+	s := New(Options{Gateway: gw})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"m1-thinking-4","messages":[{"role":"user","content":"hi"}]}`))
+	req.RemoteAddr = "127.0.0.1:4321"
+	req.Host = "127.0.0.1:8317"
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+
+	events := store.Recent()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(events))
+	}
+	e := events[0]
+	if e.Model != "m1-thinking-4" {
+		t.Fatalf("event model = %q, want the client id", e.Model)
+	}
+	if e.EstimatedUSD == nil {
+		t.Fatal("no estimate: the live deployment's quote was not used")
+	}
+	want := 1000*3.0/1e6 + 100*15.0/1e6
+	if diff := *e.EstimatedUSD - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("estimated = %v, want %v", *e.EstimatedUSD, want)
+	}
+}

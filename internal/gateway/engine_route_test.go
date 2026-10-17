@@ -151,8 +151,8 @@ func TestAutomaticSkipsCooledAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account != "acct-b" || hitsA != 0 || hitsB == 0 {
-		t.Fatalf("account=%s hits a=%d b=%d", account, hitsA, hitsB)
+	if account.Account != "acct-b" || hitsA != 0 || hitsB == 0 {
+		t.Fatalf("account=%s hits a=%d b=%d", account.Account, hitsA, hitsB)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestAutomaticSessionStable(t *testing.T) {
 	body := []byte(`{"model":"pea/auto","session_id":"sess-1","messages":[{"role":"user","content":"hi"}]}`)
 	if _, account, err := gw.Chat(context.Background(), body); err != nil {
 		t.Fatal(err)
-	} else if account == "" {
+	} else if account.Account == "" {
 		t.Fatal("missing account")
 	}
 	firstA, firstB := hitsA, hitsB
@@ -589,8 +589,8 @@ func TestSlowPreludeFailsOverWithoutCooldown(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if account != "acct-b" || hitsA != 1 || hitsB != 1 {
-		t.Fatalf("account=%s hits a=%d b=%d", account, hitsA, hitsB)
+	if account.Account != "acct-b" || hitsA != 1 || hitsB != 1 {
+		t.Fatalf("account=%s hits a=%d b=%d", account.Account, hitsA, hitsB)
 	}
 	if len(gw.Cooldowns()) != 0 {
 		t.Fatalf("slow prelude cooled the account: %+v", gw.Cooldowns())

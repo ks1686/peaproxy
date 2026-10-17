@@ -113,6 +113,38 @@ func TestAdapterOperationsAndErrors(t *testing.T) {
 	}
 }
 
+func TestChatEffortReachesClaudeWithEffortBeta(t *testing.T) {
+	var beta string
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		beta = r.Header.Get("anthropic-beta")
+		body, _ = io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, `{"type":"message","content":[{"type":"text","text":"ok"}]}`)
+	}))
+	t.Cleanup(srv.Close)
+	adp, err := New(adapter.Options{BaseURL: srv.URL, APIKey: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adp.Chat(context.Background(), adapter.ChatRequest{
+		Model: "claude-opus-5-5",
+		Raw:   []byte(`{"model":"claude-opus-5-5","reasoning_effort":"max","messages":[{"role":"user","content":"hi"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(beta, "effort-2025-11-24") {
+		t.Fatalf("effort beta missing: %q", beta)
+	}
+	if !bytes.Contains(body, []byte(`"effort":"max"`)) || !bytes.Contains(body, []byte(`"type":"adaptive"`)) {
+		t.Fatalf("upstream body: %s", body)
+	}
+}
+
 func TestListModelsAndMessagesReturnHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

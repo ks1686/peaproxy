@@ -344,6 +344,51 @@ func testAdapter(t *testing.T, srv *httptest.Server) *Adapter {
 	return a
 }
 
+func TestListModelsReadsPublishedContextAndEffort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{
+					"id":   "gpt-5.6-sol",
+					"name": "GPT-5.6 Sol",
+					"capabilities": map[string]any{
+						"limits": map[string]any{
+							"max_prompt_tokens":         272000,
+							"max_context_window_tokens": 1050000,
+							"max_output_tokens":         128000,
+						},
+						"supports": map[string]any{
+							"vision":           true,
+							"reasoning_effort": []string{"low", "high", "xhigh"},
+						},
+					},
+				},
+				{
+					"id":           "plain",
+					"capabilities": map[string]any{"supports": map[string]any{"vision": false, "reasoning_effort": true}},
+				},
+			},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	a.token = oauth.Token{AccessToken: "tid=session", ExpiresAt: time.Now().Add(time.Hour)}
+	models, err := a.ListModels(context.Background())
+	if err != nil || len(models) != 2 {
+		t.Fatalf("%v %#v", err, models)
+	}
+	got := models[0]
+	if got.ID != "gpt-5.6-sol" || got.ContextWindow != 272000 || got.MaxContextWindow != 1050000 || got.MaxTokens != 128000 || !got.Reasoning {
+		t.Fatalf("%+v", got)
+	}
+	if !contains(got.Efforts, "low") || !contains(got.Efforts, "xhigh") || contains(got.Efforts, "medium") {
+		t.Fatalf("efforts %v", got.Efforts)
+	}
+	if models[1].Reasoning || models[1].ContextWindow != 0 {
+		t.Fatalf("a boolean reasoning_effort invented facts: %+v", models[1])
+	}
+}
+
 func contains(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {

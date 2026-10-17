@@ -117,15 +117,15 @@ func TestStreamedResponsesBindTheContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account == "" {
+	if account.Account == "" {
 		t.Fatal("no account reported")
 	}
 	emitted := responseIDFromStream(t, out.String())
 	if emitted == "" {
 		t.Fatalf("the stream carried no response id:\n%s", out.String())
 	}
-	if got := g.continuationAccount(emitted, "m"); got != account {
-		t.Errorf("the streamed id %q bound to %q, want %q: a previous_response_id follow-up would not return to this account", emitted, got, account)
+	if got := g.continuationAccount(emitted, "m"); got != account.Account {
+		t.Errorf("the streamed id %q bound to %q, want %q: a previous_response_id follow-up would not return to this account", emitted, got, account.Account)
 	}
 }
 

@@ -50,18 +50,18 @@ func TestLastAccountExcludesUnattemptedCandidates(t *testing.T) {
 	}{
 		{"responses_stream", `{"model":"m","input":[]}`, (*Gateway).ResponsesStream},
 		{"messages_stream", `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`, (*Gateway).ClaudeChatStream},
-		{"responses", `{"model":"m","input":[]}`, func(g *Gateway, ctx context.Context, raw []byte, _ io.Writer) (string, error) {
-			_, account, err := g.Responses(ctx, raw)
-			return account, err
+		{"responses", `{"model":"m","input":[]}`, func(g *Gateway, ctx context.Context, raw []byte, _ io.Writer) (Call, error) {
+			_, call, err := g.Responses(ctx, raw)
+			return call, err
 		}},
-		{"messages", `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`, func(g *Gateway, ctx context.Context, raw []byte, _ io.Writer) (string, error) {
-			_, account, err := g.ClaudeChat(ctx, raw)
-			return account, err
+		{"messages", `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}`, func(g *Gateway, ctx context.Context, raw []byte, _ io.Writer) (Call, error) {
+			_, call, err := g.ClaudeChat(ctx, raw)
+			return call, err
 		}},
 		{"chat_stream_budget", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, (*Gateway).ChatStream},
-		{"chat_budget", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, func(g *Gateway, ctx context.Context, raw []byte, _ io.Writer) (string, error) {
-			_, account, err := g.Chat(ctx, raw)
-			return account, err
+		{"chat_budget", `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, func(g *Gateway, ctx context.Context, raw []byte, _ io.Writer) (Call, error) {
+			_, call, err := g.Chat(ctx, raw)
+			return call, err
 		}},
 	} {
 		for _, status := range []int{http.StatusTooManyRequests, http.StatusBadRequest} {
@@ -83,14 +83,14 @@ func TestLastAccountExcludesUnattemptedCandidates(t *testing.T) {
 				gw.Refresh(context.Background())
 
 				// When native fails and compat is skipped for translation or budget.
-				account, err := tc.call(gw, context.Background(), []byte(tc.body), io.Discard)
+				call, err := tc.call(gw, context.Background(), []byte(tc.body), io.Discard)
 
 				// Then attribution stays on the sole attempted account.
 				if err == nil || native.calls.Load() != 1 || compat.calls.Load() != 0 {
 					t.Fatalf("err=%v native calls=%d compat calls=%d", err, native.calls.Load(), compat.calls.Load())
 				}
-				if account != "native" {
-					t.Fatalf("account=%q, want native (compat was never called)", account)
+				if call.Account != "native" {
+					t.Fatalf("account=%q, want native (compat was never called)", call.Account)
 				}
 			})
 		}

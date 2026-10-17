@@ -14,14 +14,65 @@ import (
 )
 
 // PiImportModel is one live model to add to a Pi models.json provider. Only
-// the fields Pi needs for an openai-completions custom provider are kept.
+// the fields Pi's models.json schema accepts are kept. ThinkingLevelMap uses
+// nil for a level Pi should hide.
 type PiImportModel struct {
-	ID            string   `json:"id"`
-	AccountID     string   `json:"accountId,omitempty"`
-	Reasoning     bool     `json:"reasoning,omitempty"`
-	Input         []string `json:"input,omitempty"`
-	ContextWindow int      `json:"contextWindow,omitempty"`
-	MaxTokens     int      `json:"maxTokens,omitempty"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name,omitempty"`
+	AccountID        string         `json:"accountId,omitempty"`
+	Reasoning        bool           `json:"reasoning,omitempty"`
+	Input            []string       `json:"input,omitempty"`
+	ContextWindow    int            `json:"contextWindow,omitempty"`
+	MaxTokens        int            `json:"maxTokens,omitempty"`
+	ThinkingLevelMap map[string]any `json:"thinkingLevelMap,omitempty"`
+}
+
+// piThinkingLevels are the levels Pi's selector knows. A published effort
+// outside this set stays on the catalog for other clients and is not offered
+// here.
+var piThinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// piThinkingLevelMap turns published effort names into Pi's thinkingLevelMap.
+// A listed level maps to itself. "none" is Pi's off. Unlisted levels are null
+// so the selector hides them. hideOff hides off when the provider said
+// thinking cannot be disabled and did not publish an off value.
+func piThinkingLevelMap(efforts []string, hideOff bool) map[string]any {
+	if len(efforts) == 0 {
+		return nil
+	}
+	have := map[string]struct{}{}
+	for _, effort := range efforts {
+		have[strings.ToLower(strings.TrimSpace(effort))] = struct{}{}
+	}
+	out := map[string]any{}
+	selectable := false
+	for _, level := range piThinkingLevels {
+		switch level {
+		case "off":
+			if _, ok := have["none"]; ok {
+				out["off"] = "none"
+				continue
+			}
+			if _, ok := have["off"]; ok {
+				out["off"] = "off"
+				continue
+			}
+			if hideOff {
+				out["off"] = nil
+			}
+		default:
+			if _, ok := have[level]; ok {
+				out[level] = level
+				selectable = true
+				continue
+			}
+			out[level] = nil
+		}
+	}
+	if !selectable {
+		return nil
+	}
+	return out
 }
 
 // piBuiltinPrefixes are the families Pi already serves with its own built-in
@@ -181,9 +232,14 @@ func FetchPiModels(ctx context.Context, origin, adminToken string) ([]PiImportMo
 	var doc struct {
 		Models []struct {
 			ID            string   `json:"id"`
+			DisplayName   string   `json:"displayName"`
 			AccountID     string   `json:"accountId"`
 			Modalities    []string `json:"modalities"`
 			ContextWindow int      `json:"contextWindow"`
+			MaxTokens     int      `json:"maxTokens"`
+			Reasoning     bool     `json:"reasoning"`
+			Efforts       []string `json:"efforts"`
+			HideEffortOff bool     `json:"hideEffortOff"`
 			Routable      bool     `json:"routable"`
 			Hidden        bool     `json:"hidden"`
 		} `json:"models"`
@@ -202,7 +258,22 @@ func FetchPiModels(ctx context.Context, origin, adminToken string) ([]PiImportMo
 				input = append(input, "image")
 			}
 		}
-		out = append(out, PiImportModel{ID: m.ID, AccountID: m.AccountID, Input: input, ContextWindow: m.ContextWindow})
+		imported := PiImportModel{
+			ID:            m.ID,
+			AccountID:     m.AccountID,
+			Input:         input,
+			ContextWindow: m.ContextWindow,
+			MaxTokens:     m.MaxTokens,
+			Reasoning:     m.Reasoning,
+		}
+		if m.DisplayName != "" && m.DisplayName != m.ID {
+			imported.Name = m.DisplayName
+		}
+		if len(m.Efforts) > 0 {
+			imported.ThinkingLevelMap = piThinkingLevelMap(m.Efforts, m.HideEffortOff)
+			imported.Reasoning = imported.ThinkingLevelMap != nil
+		}
+		out = append(out, imported)
 	}
 	return out, nil
 }

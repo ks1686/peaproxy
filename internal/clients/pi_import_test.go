@@ -92,6 +92,50 @@ func TestPiImportRefusesUserOwnedAccountProvider(t *testing.T) {
 	}
 }
 
+func TestPiThinkingLevelMapHidesUnpublishedLevels(t *testing.T) {
+	got := piThinkingLevelMap([]string{"low", "high", "xhigh", "none"}, false)
+	if got["off"] != "none" || got["low"] != "low" || got["high"] != "high" || got["xhigh"] != "xhigh" {
+		t.Fatalf("mapped levels: %#v", got)
+	}
+	if got["minimal"] != nil || got["medium"] != nil || got["max"] != nil {
+		t.Fatalf("unpublished levels should be hidden: %#v", got)
+	}
+	hidden := piThinkingLevelMap([]string{"high", "max"}, true)
+	if _, ok := hidden["off"]; !ok || hidden["off"] != nil {
+		t.Fatalf("off should be hidden: %#v", hidden)
+	}
+	if piThinkingLevelMap(nil, true) != nil {
+		t.Fatal("no published efforts should not invent a map")
+	}
+}
+
+func TestFetchPiModelsCarriesPublishedEffort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"models":[{"id":"gemini-3.8-flash","displayName":"Gemini 3.8 Flash","accountId":"work","modalities":["text"],"contextWindow":1048576,"maxTokens":65536,"reasoning":true,"efforts":["low","high","max"],"hideEffortOff":true,"routable":true}]}`)
+	}))
+	defer server.Close()
+	models, err := FetchPiModels(context.Background(), server.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("%+v", models)
+	}
+	m := models[0]
+	if m.Name != "Gemini 3.8 Flash" || m.ContextWindow != 1048576 || m.MaxTokens != 65536 || !m.Reasoning {
+		t.Fatalf("%+v", m)
+	}
+	if m.ThinkingLevelMap["low"] != "low" || m.ThinkingLevelMap["high"] != "high" || m.ThinkingLevelMap["max"] != "max" || m.ThinkingLevelMap["off"] != nil {
+		t.Fatalf("thinking map %#v", m.ThinkingLevelMap)
+	}
+	written := importModels(t, `{}`, "work", "http://127.0.0.1:8317", models)
+	for _, want := range []string{`"reasoning":true`, `"contextWindow":1048576`, `"maxTokens":65536`, `"low":"low"`, `"max":"max"`, `"off":null`} {
+		if !strings.Contains(written, want) {
+			t.Fatalf("import missing %s:\n%s", want, written)
+		}
+	}
+}
+
 func TestFetchPiModelsUsesAdminCatalogAndPreservesAccountMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/admin/catalog" || r.URL.Query().Get("filter") != "all" {

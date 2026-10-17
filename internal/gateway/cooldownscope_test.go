@@ -118,7 +118,7 @@ func TestHealthReportsCooldownWhileAnySlotIsActive(t *testing.T) {
 }
 
 // The cooldownCause message an account gets when it is the only one left should
-// name the account, and a cooldown for a different model is not a reason to
+// name the account.Account, and a cooldown for a different model is not a reason to
 // hold up this request.
 func TestCooldownCauseIgnoresAnotherModelsCooldown(t *testing.T) {
 	g := cooldownGateway(t)

@@ -64,7 +64,7 @@ func TestConfigWatcherAdoptsAnAccountAddedElsewhere(t *testing.T) {
 	if got.Providers[1].ID != "b" {
 		t.Fatalf("adopted %+v", got.Providers)
 	}
-	// Secrets are hydrated for the adopted account, not just its metadata.
+	// Secrets are hydrated for the adopted account.Account, not just its metadata.
 	if got.Providers[1].APIKey == "" {
 		t.Error("the adopted account has no api key; it would fail every request")
 	}

@@ -18,6 +18,32 @@ func TestLooksLikeClaude(t *testing.T) {
 	}
 }
 
+func TestToClaudeCarriesReasoningEffort(t *testing.T) {
+	out, err := ToClaude([]byte(`{"model":"claude-opus-5-5","reasoning_effort":" high ","max_completion_tokens":32000,"messages":[{"role":"user","content":"hi"}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"effort":"high"`)) || !bytes.Contains(out, []byte(`"type":"adaptive"`)) {
+		t.Fatalf("effort was dropped: %s", out)
+	}
+	if !bytes.Contains(out, []byte(`"max_tokens":32000`)) {
+		t.Fatalf("max_completion_tokens was dropped: %s", out)
+	}
+	if bytes.Contains(out, []byte(`reasoning_effort`)) {
+		t.Fatalf("chat field leaked: %s", out)
+	}
+}
+
+func TestToClaudeOffDoesNotInventThinking(t *testing.T) {
+	out, err := ToClaude([]byte(`{"model":"claude-opus-5-5","reasoning_effort":"none","messages":[{"role":"user","content":"hi"}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(out, []byte(`"thinking"`)) || bytes.Contains(out, []byte(`"output_config"`)) {
+		t.Fatalf("off invented thinking: %s", out)
+	}
+}
+
 func TestToClaudeVisionDataURL(t *testing.T) {
 	in := []byte(`{"model":"claude-sonnet","messages":[{"role":"user","content":[{"type":"text","text":"see"},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,abc"}}]}]}`)
 	out, err := ToClaude(in, false)
@@ -72,5 +98,18 @@ func TestFromClaude(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"object":"chat.completion"`) || !strings.Contains(string(out), `"hi"`) {
 		t.Fatalf("%s", out)
+	}
+}
+
+// OpenAI's minimal is not one of Claude's effort levels, and Claude answers an
+// unknown output_config.effort with a 400. It is the lowest level asked for,
+// so it becomes Claude's lowest.
+func TestToClaudeMinimalEffortIsLow(t *testing.T) {
+	out, err := ToClaude([]byte(`{"model":"claude-opus-5-5","reasoning_effort":"minimal","messages":[{"role":"user","content":"hi"}]}`), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out, []byte(`"effort":"low"`)) || bytes.Contains(out, []byte(`minimal`)) {
+		t.Fatalf("minimal effort not mapped to low: %s", out)
 	}
 }

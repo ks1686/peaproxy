@@ -45,12 +45,23 @@ func LooksLikeClaude(raw []byte) bool {
 }
 
 type claudePost struct {
-	Model     string          `json:"model"`
-	MaxTokens int             `json:"max_tokens"`
-	Messages  []claudePostMsg `json:"messages"`
-	System    string          `json:"system,omitempty"`
-	Stream    bool            `json:"stream"`
-	Tools     json.RawMessage `json:"tools,omitempty"`
+	Model        string              `json:"model"`
+	MaxTokens    int                 `json:"max_tokens"`
+	Messages     []claudePostMsg     `json:"messages"`
+	System       string              `json:"system,omitempty"`
+	Stream       bool                `json:"stream"`
+	Tools        json.RawMessage     `json:"tools,omitempty"`
+	Thinking     *claudeThinking     `json:"thinking,omitempty"`
+	OutputConfig *claudeOutputConfig `json:"output_config,omitempty"`
+}
+
+type claudeThinking struct {
+	Type    string `json:"type"`
+	Display string `json:"display,omitempty"`
+}
+
+type claudeOutputConfig struct {
+	Effort string `json:"effort"`
 }
 
 type claudePostMsg struct {
@@ -59,11 +70,13 @@ type claudePostMsg struct {
 }
 
 type openAIIn struct {
-	Model     string          `json:"model"`
-	Stream    bool            `json:"stream"`
-	MaxTokens int             `json:"max_tokens"`
-	Tools     json.RawMessage `json:"tools"`
-	Messages  []openAIInMsg   `json:"messages"`
+	Model           string          `json:"model"`
+	Stream          bool            `json:"stream"`
+	MaxTokens       int             `json:"max_tokens"`
+	MaxCompletion   int             `json:"max_completion_tokens"`
+	ReasoningEffort string          `json:"reasoning_effort"`
+	Tools           json.RawMessage `json:"tools"`
+	Messages        []openAIInMsg   `json:"messages"`
 }
 
 type openAIInMsg struct {
@@ -95,9 +108,13 @@ func ToClaude(raw []byte, stream bool) ([]byte, error) {
 	}
 	maxTok := in.MaxTokens
 	if maxTok <= 0 {
+		maxTok = in.MaxCompletion
+	}
+	if maxTok <= 0 {
 		maxTok = 4096
 	}
 	out := claudePost{Model: CanonicalClaudeModel(in.Model), MaxTokens: maxTok, Stream: stream}
+	applyReasoningEffort(&out, in.ReasoningEffort)
 	if len(in.Tools) > 0 && string(in.Tools) != "null" {
 		converted, err := toolsToClaude(in.Tools)
 		if err != nil {
@@ -159,6 +176,23 @@ func ToClaude(raw []byte, stream bool) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(out)
+}
+
+// applyReasoningEffort carries a chat reasoning_effort onto Claude's
+// output_config.effort with adaptive thinking. off and none leave thinking
+// unset: the client asked for no effort, and a disabled thinking block is a
+// different request some models reject. minimal is OpenAI's level below low;
+// Claude has no such level and rejects the name, so it is sent as low.
+func applyReasoningEffort(out *claudePost, effort string) {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	switch effort {
+	case "", "off", "none":
+		return
+	case "minimal":
+		effort = "low"
+	}
+	out.Thinking = &claudeThinking{Type: "adaptive", Display: "summarized"}
+	out.OutputConfig = &claudeOutputConfig{Effort: effort}
 }
 
 type claudeToolUseBlock struct {

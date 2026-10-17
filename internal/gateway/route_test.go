@@ -36,8 +36,8 @@ func TestRouteNameRewritesUpstreamModelAndListsAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Content != "ok" || account != "acct-a" {
-		t.Fatalf("resp %q account %s", resp.Content, account)
+	if resp.Content != "ok" || account.Account != "acct-a" {
+		t.Fatalf("resp %q account %s", resp.Content, account.Account)
 	}
 	if !strings.Contains(string(gotBody), `"model":"llama3.2"`) || strings.Contains(string(gotBody), `"model":"code"`) {
 		t.Fatalf("upstream body %s", gotBody)

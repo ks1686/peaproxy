@@ -85,7 +85,7 @@ func TestQuoteIgnoresModelsTheRouteCannotUse(t *testing.T) {
 }
 
 // An unpriced catalog row with a configured price for the same deployment is
-// still priceable: the user stated the figure for that account, which is more
+// still priceable: the user stated the figure for that account.Account, which is more
 // specific than the catalog's account-agnostic view.
 func TestQuotePrefersAConfiguredDeploymentPrice(t *testing.T) {
 	in, out := 7.0, 21.0
