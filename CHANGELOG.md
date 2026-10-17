@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.2.0
+
+- Published context and effort facts. `GET /v1/models` carries `context_window`, `max_context_window`, `max_tokens`, `reasoning`, `efforts`, and `hide_effort_off` when the provider published them (Anthropic, Codex, Copilot). Nothing is inferred from a model name.
+- Context-ceiling ids. A model whose provider published a larger ceiling than its default window is also listed as `{model}@{ceiling}`, which calls the same live model. Pi import carries these, with `thinkingLevelMap` from the published efforts.
+- Effort siblings. Live ids that differ only by an effort suffix (`gemini-3.8-flash-low`, `-medium`, `-high`) gain a base id when the base is not already live. The request's effort picks the sibling: `reasoning_effort` on chat, `reasoning.effort` on Responses, `output_config.effort` on Messages, and `medium` when none is named.
+- A chat `reasoning_effort` reaches Claude as `output_config.effort` with adaptive thinking and the `effort-2025-11-24` beta. OpenAI's `minimal` is sent as `low`.
+- Usage is priced from the model the winning attempt actually called. The client-facing id stays on the response and on the usage event.
+- One failover policy across the nine request paths. Native and translated Responses and Messages now skip a busy account without a cooldown and treat a protocol refusal as a property of the model, as Chat already did.
+- Internal: request methods move to `internal/gateway/dispatch.go`, and the Codex and Gemini codecs move into `internal/translate`.
+
 ## 3.1.2
 
 Documented release on main. Not tagged.
