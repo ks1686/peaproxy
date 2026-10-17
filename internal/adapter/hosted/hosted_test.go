@@ -39,6 +39,9 @@ func TestKnownSpecsHaveBaseURLAndTier(t *testing.T) {
 		"together":      {url: "https://api.together.xyz/v1", tier: catalog.TierPaid},
 		"fireworks":     {url: "https://api.fireworks.ai/inference/v1", tier: catalog.TierPaid},
 		"cohere":        {url: "https://api.cohere.ai/compatibility/v1", tier: catalog.TierPaid},
+		// Issue #145: subscription plans that issue ordinary API keys.
+		"mimo":  {url: "https://token-plan-sgp.xiaomimimo.com/v1", tier: catalog.TierPaid},
+		"hyper": {url: "https://hyper.charm.land/v1", tier: catalog.TierPaid},
 	}
 	for _, spec := range All() {
 		got, ok := want[spec.Name]

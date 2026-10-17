@@ -112,6 +112,8 @@ func AccountPresets() []AccountPreset {
 		hostedPreset("together-key", "Together AI", hosted.Together),
 		hostedPreset("fireworks-key", "Fireworks AI", hosted.Fireworks),
 		hostedPreset("cohere-key", "Cohere", hosted.Cohere),
+		hostedPreset("mimo-token-plan", "Xiaomi MiMo Token Plan", hosted.MiMo),
+		hostedPreset("hyper-key", "Charm Hyper", hosted.Hyper),
 		hostedPreset("ollama-cloud", "Ollama Cloud", hosted.OllamaCloud),
 		{ID: "openrouter", Adapter: openrouter.Name, Label: "OpenRouter", BaseURL: openrouter.DefaultBaseURL, Tier: string(catalog.TierFreemium), EnvKey: "OPENROUTER_API_KEY", Note: "Model ids ending :free are tagged free automatically.", Group: GroupOther},
 		{ID: "opencode-zen", Adapter: opencodezen.Name, Label: "OpenCode Zen", BaseURL: opencodezen.DefaultBaseURL, Tier: string(catalog.TierFree), EnvKey: "OPENCODE_API_KEY", Warn: "OpenCode Zen free models may train on prompts (Nemotron, Big Pickle, MiMo, Muse). Prefer an official API key from opencode.ai.", Group: GroupOther},
