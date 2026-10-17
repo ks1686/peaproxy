@@ -26,6 +26,8 @@ Adapters in this repo today (2.0.x):
 | `together` | Hosted OpenAI-compat: Together AI. Pay per token; not a free tier. Not live-verified by PeaProxy | API key (`TOGETHER_API_KEY`) | `https://api.together.xyz/v1` |
 | `fireworks` | Hosted OpenAI-compat: Fireworks AI inference. Pay per token. Not live-verified by PeaProxy | API key (`FIREWORKS_API_KEY`) | `https://api.fireworks.ai/inference/v1` |
 | `cohere` | Hosted OpenAI-compat: Cohere OpenAI compatibility layer. Trial keys are rate limited. Live-verified 2026-10-05: listing, chat, streaming termination and streaming tool calls | API key (`COHERE_API_KEY`) | `https://api.cohere.ai/compatibility/v1` |
+| `mimo` | Hosted OpenAI-compat: Xiaomi MiMo Token Plan. A `tp-`/`ttp-` key works only on its own cluster; use the base URL the Token Plan page shows (China `token-plan-cn`, Europe `token-plan-ams`). Not live-verified by PeaProxy | API key (`MIMO_API_KEY`) | `https://token-plan-sgp.xiaomimimo.com/v1` |
+| `hyper` | Hosted OpenAI-compat: Charm Hyper. Not live-verified by PeaProxy | API key (`HYPER_API_KEY`) | `https://hyper.charm.land/v1` |
 | `xai` | Thin OpenAI-compat wrapper | API key | `https://api.x.ai/v1` |
 | `huggingface` | Thin OpenAI-compat wrapper | token | `https://router.huggingface.co/v1` |
 | `nim` | Thin OpenAI-compat wrapper | API key | `https://integrate.api.nvidia.com/v1` |
@@ -78,7 +80,7 @@ Antigravity details:
 
 **P0 OAuth (shipped):** Anthropic Claude Pro/Max/Team/Enterprise, OpenAI ChatGPT/Codex, Google Gemini / Antigravity, xAI Grok, Moonshot Kimi, Meta Muse, **GitHub Copilot**. **May violate ToS; authors are not liable** — [OAUTH.md](OAUTH.md). Prefer official API keys.
 
-**P0 OAuth (not yet):** Qwen consumer OAuth is stubbed (no CPA flow). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (browser login exists upstream, but chat is a Windsurf/Codeium protocol, not a generic chat upstream).
+**P0 OAuth (not yet):** Qwen free-tier consumer OAuth was discontinued upstream on 2026-04-15; `qwen_oauth` stays registered only so a saved row fails with that reason (use an API key or the Alibaba Coding Plan preset). Factory/Droid consumer chat OAuth is stubbed (no public chat OAuth). Do not reverse-engineer a new flow for 1.0. Devin skipped (browser login exists upstream, but chat is a Windsurf/Codeium protocol, not a generic chat upstream).
 
 **P0 keys:** `anthropic`, `openai`, `google`/`gemini`, `xai`, `groq`, `cerebras`, `huggingface`, `nim`, `sambanova`, `openrouter`, `workers_ai`, `ollama_cloud`, `opencode_zen`, **`opencode_go`**, plus the named v3 presets below.
 
@@ -96,8 +98,10 @@ Eight first-class presets added in v3, grouped in the Accounts UI:
 | Together | `api.together.xyz/v1` | `openai_compat` | `TOGETHER_API_KEY` |
 | Fireworks | `api.fireworks.ai/inference/v1` | `openai_compat` | `FIREWORKS_API_KEY` |
 | Cohere | `api.cohere.ai/compatibility/v1` | `openai_compat` | `COHERE_API_KEY` |
+| Xiaomi MiMo Token Plan | `token-plan-sgp.xiaomimimo.com/v1` (or your cluster's) | `openai_compat` | `MIMO_API_KEY` |
+| Charm Hyper | `hyper.charm.land/v1` | `openai_compat` | `HYPER_API_KEY` |
 
-**Verification status matters here.** Only **Cohere** is live-verified (2026-10-05): model listing, chat, streaming termination and streaming tool calls, exercised through PeaProxy's own adapter path. The other seven are **documented-only** and display `(not verified)`. The marker stays until a real account confirms the endpoint, because a preset marked as working that nobody has called is exactly the claim this catalog refuses to make.
+**Verification status matters here.** Only **Cohere** is live-verified (2026-10-05): model listing, chat, streaming termination and streaming tool calls, exercised through PeaProxy's own adapter path. The other nine are **documented-only** and display `(not verified)`. The marker stays until a real account confirms the endpoint, because a preset marked as working that nobody has called is exactly the claim this catalog refuses to make.
 
 OpenAI-compatibility is a family resemblance, not a guarantee. Real per-provider divergences exist: DeepSeek `reasoning_content`, Z.AI `thinking`, Alibaba `enable_thinking`.
 

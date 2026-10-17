@@ -8,6 +8,8 @@
 - A chat `reasoning_effort` reaches Claude as `output_config.effort` with adaptive thinking and the `effort-2025-11-24` beta. OpenAI's `minimal` is sent as `low`.
 - Usage is priced from the model the winning attempt actually called. The client-facing id stays on the response and on the usage event.
 - One failover policy across the nine request paths. Native and translated Responses and Messages now skip a busy account without a cooldown and treat a protocol refusal as a property of the model, as Chat already did.
+- Two subscription key presets (#145): Xiaomi MiMo Token Plan (`mimo`, `MIMO_API_KEY`, Singapore cluster by default; China and Europe keys use their own cluster's base URL) and Charm Hyper (`hyper`, `HYPER_API_KEY`). Both are marked not verified until a real account calls them.
+- PROVIDERS.md says Qwen consumer OAuth was discontinued upstream; `qwen_oauth` stays registered only so a saved row fails with that reason.
 - Internal: request methods move to `internal/gateway/dispatch.go`, and the Codex and Gemini codecs move into `internal/translate`.
 
 ## 3.1.2

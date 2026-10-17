@@ -233,10 +233,33 @@ var (
 	}
 )
 
+// Subscription API keys from issue #145. Each plan hands out an ordinary key
+// for an OpenAI-compatible endpoint, so they are key presets, not OAuth.
+var (
+	MiMo = Spec{
+		Name:           "mimo",
+		DefaultBaseURL: "https://token-plan-sgp.xiaomimimo.com/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "MIMO_API_KEY",
+		Notes:          "Xiaomi MiMo Token Plan (tp- or ttp- key). The key works only on its own cluster: use the base URL your Token Plan page shows (China https://token-plan-cn.xiaomimimo.com/v1, Europe https://token-plan-ams.xiaomimimo.com/v1). Pay-as-you-go sk- keys use https://api.xiaomimimo.com/v1 instead. Not live-verified by PeaProxy.",
+		Unverified:     true,
+		Group:          GroupAPIKey,
+	}
+	Hyper = Spec{
+		Name:           "hyper",
+		DefaultBaseURL: "https://hyper.charm.land/v1",
+		DefaultTier:    catalog.TierPaid,
+		EnvKey:         "HYPER_API_KEY",
+		Notes:          "Charm Hyper (sk-hyper- key from the Hyper dashboard). The model list publishes context windows and reasoning levels. Not live-verified by PeaProxy.",
+		Unverified:     true,
+		Group:          GroupAPIKey,
+	}
+)
+
 // All returns the hosted specs in UI order.
 func All() []Spec {
 	return []Spec{LMStudio, LlamaCpp, VLLM, Jan, GPT4All, Groq, Cerebras, Google, XAI, HuggingFace, NIM, WorkersAI, OllamaCloud, SambaNova,
-		AlibabaCoding, DeepSeek, Mistral, ZAI, MiniMax, Together, Fireworks, Cohere}
+		AlibabaCoding, DeepSeek, Mistral, ZAI, MiniMax, Together, Fireworks, Cohere, MiMo, Hyper}
 }
 
 // Lookup returns a named hosted spec.

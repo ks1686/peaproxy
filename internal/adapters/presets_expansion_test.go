@@ -93,7 +93,8 @@ func TestNewPresetsAreNotClaimedVerified(t *testing.T) {
 		}
 		switch p.ID {
 		case "deepseek-key", "mistral-key", "zai-key", "minimax-key",
-			"together-key", "fireworks-key", "cohere-key", "alibaba-coding-plan":
+			"together-key", "fireworks-key", "cohere-key", "alibaba-coding-plan",
+			"mimo-token-plan", "hyper-key":
 			if !p.Unverified {
 				t.Errorf("%s must be marked unverified until PeaProxy calls it live", p.ID)
 			}
