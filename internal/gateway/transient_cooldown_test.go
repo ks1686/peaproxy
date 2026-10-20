@@ -47,8 +47,8 @@ var tlsBlip = &url.Error{Op: "Post", URL: "https://api.example.test/v1/messages"
 // with the account and there was nowhere else to send them.
 func TestATransportBlipDoesNotCoolTheOnlyAccount(t *testing.T) {
 	gw := soleAccountGateway(t, func(w http.ResponseWriter, r *http.Request) { listsModelM(w, r) })
-	gw.markCooldown("only", "m", tlsBlip)
-	gw.markCooldown("only", "m", adapter.HTTPError{Status: http.StatusBadGateway, Body: "bad gateway"})
+	gw.markCooldown("only", "m", tlsBlip, true)
+	gw.markCooldown("only", "m", adapter.HTTPError{Status: http.StatusBadGateway, Body: "bad gateway"}, true)
 	if cs := gw.Cooldowns(); len(cs) != 0 {
 		t.Fatalf("a transport failure cooled the only account: %+v", cs)
 	}
@@ -65,7 +65,7 @@ func TestTheOnlyAccountStillCoolsWhenTheUpstreamSaysSo(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			gw := soleAccountGateway(t, func(w http.ResponseWriter, r *http.Request) { listsModelM(w, r) })
-			gw.markCooldown("only", "m", err)
+			gw.markCooldown("only", "m", err, true)
 			if len(gw.Cooldowns()) != 1 {
 				t.Fatalf("%v did not cool the only account", err)
 			}
@@ -77,7 +77,7 @@ func TestTheOnlyAccountStillCoolsWhenTheUpstreamSaysSo(t *testing.T) {
 func TestATransportBlipStillCoolsAnAccountWithCompany(t *testing.T) {
 	a, b := 0, 0
 	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
-	gw.markCooldown("acct-a", "m", adapter.HTTPError{Status: http.StatusServiceUnavailable, Body: "upstream connect error or disconnect/reset before headers. reset reason: connection timeout"})
+	gw.markCooldown("acct-a", "m", adapter.HTTPError{Status: http.StatusServiceUnavailable, Body: "upstream connect error or disconnect/reset before headers. reset reason: connection timeout"}, false)
 	cs := gw.Cooldowns()
 	if len(cs) != 1 || cs[0].AccountID != "acct-a" {
 		t.Fatalf("cooldowns=%+v, want one on acct-a", cs)
@@ -177,5 +177,72 @@ func TestAStreamReleasesTheProbeWhenItCommits(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("stream did not finish")
+	}
+}
+
+// Sole means the request's candidates, not the accounts listing one model id.
+// An automatic route mixes models, so each candidate is usually the only
+// account for its own id; judged by id, no transient failure on such a route
+// ever cooled anything, and every later request paid a retry and a failover
+// on the same broken account first.
+func TestSoleCandidateCountsTheRouteNotTheModelID(t *testing.T) {
+	a := instance{Provider: config.Provider{ID: "acct-a"}, upstreamModel: "alpha"}
+	a2 := instance{Provider: config.Provider{ID: "acct-a"}, upstreamModel: "beta"}
+	b := instance{Provider: config.Provider{ID: "acct-b"}, upstreamModel: "gamma"}
+	if !soleCandidate([]instance{a}) || !soleCandidate([]instance{a, a2}) {
+		t.Fatal("one account is the sole candidate, whatever models it offers")
+	}
+	if soleCandidate([]instance{a, b}) {
+		t.Fatal("a route with two accounts on different model ids has company")
+	}
+	if soleCandidate(nil) {
+		t.Fatal("no candidates is not a sole candidate")
+	}
+}
+
+const edgeTimeout = "upstream connect error or disconnect/reset before headers. reset reason: connection timeout"
+
+// Through the request path: with a second account to move to, the account
+// that hit the edge timeout is cooled so the next request starts elsewhere.
+func TestATransportBlipCoolsWhenTheRequestHadCompany(t *testing.T) {
+	hitsB := 0
+	gw := policyGateway(t, "fill-first",
+		func(w http.ResponseWriter, r *http.Request) {
+			if listsModelM(w, r) {
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(edgeTimeout))
+		},
+		countOK(&hitsB, "b"),
+	)
+	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)); err != nil {
+		t.Fatalf("request did not fail over: %v", err)
+	}
+	cs := gw.Cooldowns()
+	if hitsB != 1 || len(cs) != 1 || cs[0].AccountID != "acct-a" {
+		t.Fatalf("hitsB=%d cooldowns=%+v, want acct-a cooled after failing over", hitsB, cs)
+	}
+}
+
+// Through the request path: with nowhere else to go, the same failure fails
+// this request but leaves the account in rotation for the next one.
+func TestATransportBlipLeavesTheSoleCandidateInRotation(t *testing.T) {
+	gw := soleAccountGateway(t, func(w http.ResponseWriter, r *http.Request) {
+		if listsModelM(w, r) {
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(edgeTimeout))
+	})
+	if _, _, err := gw.Chat(context.Background(), []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)); err == nil {
+		t.Fatal("want the edge failure")
+	}
+	var out strings.Builder
+	if _, err := gw.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), &out); err == nil {
+		t.Fatal("want the edge failure on the stream path")
+	}
+	if cs := gw.Cooldowns(); len(cs) != 0 {
+		t.Fatalf("the sole candidate was cooled: %+v", cs)
 	}
 }

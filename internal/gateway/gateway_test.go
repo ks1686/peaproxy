@@ -574,9 +574,7 @@ func TestResponsesToolsRoundTripViaChat(t *testing.T) {
 
 func TestChatAll429DoesNotStormCooledAccounts(t *testing.T) {
 	hitsA, hitsB := 0, 0
-	// fill-first keeps acct-a first on every request, so a hit on acct-b can
-	// only be a failover and a missing hit on acct-a only a cooldown.
-	gw := policyGateway(t, "fill-first",
+	gw := twoAccountGateway(t,
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/v1/models" {
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m"}}})
@@ -1372,7 +1370,7 @@ func TestModelCooldownDoesNotDisableOtherModels(t *testing.T) {
 		http.NotFound(w, r)
 	}
 	gw := twoAccountGateway(t, models, models)
-	gw.markCooldown("acct-a", "alpha", adapter.HTTPError{Status: http.StatusTooManyRequests, Scope: adapter.ScopeModel})
+	gw.markCooldown("acct-a", "alpha", adapter.HTTPError{Status: http.StatusTooManyRequests, Scope: adapter.ScopeModel}, false)
 	for _, cand := range mustCandidates(t, gw, "beta") {
 		if cand.Provider.ID == "acct-a" {
 			goto cooledAlpha
@@ -1497,11 +1495,16 @@ func TestExtraUsageRefusalNeitherFailsOverNorCools(t *testing.T) {
 			t.Fatalf("request %d: want the extra-usage refusal, got %v", i, err)
 		}
 	}
+	// The stream loops read failures through their own policy.
+	var out strings.Builder
+	if _, err := gw.ChatStream(context.Background(), []byte(`{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`), &out); !router.ExtraUsageRequired(err) {
+		t.Fatalf("stream: want the extra-usage refusal, got %v", err)
+	}
 	if hitsB != 0 {
 		t.Fatalf("failed over %d time(s) to the second account", hitsB)
 	}
-	if hitsA != 2 {
-		t.Fatalf("first account hit %d times, want 2 (once per request, no retry, no cooldown)", hitsA)
+	if hitsA != 3 {
+		t.Fatalf("first account hit %d times, want 3 (once per request, no retry, no cooldown)", hitsA)
 	}
 	if cd := gw.Cooldowns(); len(cd) != 0 {
 		t.Fatalf("refusal started a cooldown: %#v", cd)

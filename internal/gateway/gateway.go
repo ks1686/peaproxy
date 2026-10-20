@@ -872,7 +872,9 @@ func (g *Gateway) cooldownCause(model string) error {
 	return errors.New(strings.Join(parts, "; "))
 }
 
-func (g *Gateway) markCooldown(id, model string, err error) {
+// markCooldown cools account id after err. sole says the request had no other
+// candidate account to move to.
+func (g *Gateway) markCooldown(id, model string, err error, sole bool) {
 	if g.admission != nil {
 		g.admission.EndHalfOpen(id)
 	}
@@ -894,11 +896,15 @@ func (g *Gateway) markCooldown(id, model string, err error) {
 	defer g.mu.Unlock()
 	g.noteStatLocked(id, err, 0)
 	// A transport failure says nothing about the account, and a cooldown only
-	// helps by steering the next request elsewhere. With no other account for
-	// the model there is nowhere to steer it, so one TLS or edge blip used to
-	// fail every concurrent request ("after failover, Ns left") and then the
-	// recovery probe. An upstream Retry-After is still honoured.
-	if router.Transient(err) && he.RetryAfter <= 0 && g.soleAccountLocked(id, model) {
+	// helps by steering the next request elsewhere. With no other candidate
+	// there is nowhere to steer it, so one TLS or edge blip used to fail every
+	// concurrent request ("after failover, Ns left") and then the recovery
+	// probe. An upstream Retry-After is still honoured.
+	//
+	// Sole is the request's candidate list, not the accounts listing this
+	// model id: an automatic route mixes models, so each candidate is often
+	// the only account for its own id while the route has others to try.
+	if sole && router.Transient(err) && he.RetryAfter <= 0 {
 		return
 	}
 	slots := g.cool[id]
@@ -906,10 +912,18 @@ func (g *Gateway) markCooldown(id, model string, err error) {
 	g.cool[id] = slots
 }
 
-// soleAccountLocked reports whether id is the only account serving model.
-func (g *Gateway) soleAccountLocked(id, model string) bool {
-	accounts := catalog.AccountsForModel(g.models, g.queryLocked(), model)
-	return len(accounts) == 1 && accounts[0] == id
+// soleCandidate reports whether every candidate is the same account, so a
+// failure leaves the request nowhere else to go.
+func soleCandidate(cands []instance) bool {
+	if len(cands) == 0 {
+		return false
+	}
+	for _, c := range cands[1:] {
+		if c.Provider.ID != cands[0].Provider.ID {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *Gateway) observeLatency(account string, latency time.Duration, err error) {

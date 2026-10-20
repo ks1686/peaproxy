@@ -57,12 +57,12 @@ func (g *Gateway) coolingFor(model string) bool {
 
 func TestAModelScopedCooldownDoesNotReplaceAnAccountWideOne(t *testing.T) {
 	g := cooldownGateway(t)
-	g.markCooldown("a", "model-one", accountWide(time.Minute))
+	g.markCooldown("a", "model-one", accountWide(time.Minute), false)
 	if !g.coolingFor("model-one") {
 		t.Fatal("the account-wide cooldown was not recorded")
 	}
 	// A 429 scoped to a different model must not narrow it away.
-	g.markCooldown("a", "model-two", modelScoped(time.Minute))
+	g.markCooldown("a", "model-two", modelScoped(time.Minute), false)
 	if !g.coolingFor("model-one") {
 		t.Error("a model-scoped cooldown on another model replaced the account-wide one; model-one became eligible again")
 	}
@@ -73,8 +73,8 @@ func TestAModelScopedCooldownDoesNotReplaceAnAccountWideOne(t *testing.T) {
 
 func TestTwoModelScopedCooldownsCoexist(t *testing.T) {
 	g := cooldownGateway(t)
-	g.markCooldown("a", "model-one", modelScoped(time.Minute))
-	g.markCooldown("a", "model-two", modelScoped(2*time.Minute))
+	g.markCooldown("a", "model-one", modelScoped(time.Minute), false)
+	g.markCooldown("a", "model-two", modelScoped(2*time.Minute), false)
 	for _, m := range []string{"model-one", "model-two"} {
 		if !g.coolingFor(m) {
 			t.Errorf("%s is not cooling: the second model-scoped cooldown replaced the first", m)
@@ -84,7 +84,7 @@ func TestTwoModelScopedCooldownsCoexist(t *testing.T) {
 
 func TestAModelScopedCooldownDoesNotCoolOtherModels(t *testing.T) {
 	g := cooldownGateway(t)
-	g.markCooldown("a", "model-one", modelScoped(time.Minute))
+	g.markCooldown("a", "model-one", modelScoped(time.Minute), false)
 	if g.coolingFor("model-two") {
 		t.Error("a model-scoped cooldown leaked to a different model")
 	}
@@ -93,8 +93,8 @@ func TestAModelScopedCooldownDoesNotCoolOtherModels(t *testing.T) {
 // An expired cooldown must not keep the account out, whichever slot it is in.
 func TestExpiredCooldownsDoNotBlock(t *testing.T) {
 	g := cooldownGateway(t)
-	g.markCooldown("a", "model-one", accountWide(10*time.Millisecond))
-	g.markCooldown("a", "model-two", modelScoped(10*time.Millisecond))
+	g.markCooldown("a", "model-one", accountWide(10*time.Millisecond), false)
+	g.markCooldown("a", "model-two", modelScoped(10*time.Millisecond), false)
 	time.Sleep(30 * time.Millisecond)
 	if g.coolingFor("model-one") || g.coolingFor("model-two") {
 		t.Error("an expired cooldown still blocks the account")
@@ -105,7 +105,7 @@ func TestExpiredCooldownsDoNotBlock(t *testing.T) {
 // the reported reason should be one a person can act on.
 func TestHealthReportsCooldownWhileAnySlotIsActive(t *testing.T) {
 	g := cooldownGateway(t)
-	g.markCooldown("a", "model-one", modelScoped(time.Minute))
+	g.markCooldown("a", "model-one", modelScoped(time.Minute), false)
 	var found bool
 	for _, c := range g.Cooldowns() {
 		if c.AccountID == "a" && c.Model == "model-one" {
@@ -122,7 +122,7 @@ func TestHealthReportsCooldownWhileAnySlotIsActive(t *testing.T) {
 // hold up this request.
 func TestCooldownCauseIgnoresAnotherModelsCooldown(t *testing.T) {
 	g := cooldownGateway(t)
-	g.markCooldown("a", "model-one", modelScoped(time.Minute))
+	g.markCooldown("a", "model-one", modelScoped(time.Minute), false)
 	if err := g.cooldownCause("model-two"); err != nil {
 		t.Errorf("a cooldown for model-one blocked model-two: %v", err)
 	}
