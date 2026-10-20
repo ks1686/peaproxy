@@ -55,3 +55,20 @@ func TestAFreshConfigPrefersTheKeychainAndFallsBackToTheFile(t *testing.T) {
 		t.Fatalf("fresh dir without a keychain: %v, %v", s, err)
 	}
 }
+
+// Prune writes an index even when the keychain holds nothing, so "[]" proves
+// nothing about where this config's secrets are.
+func TestAnEmptyKeychainIndexDoesNotPinTheKeychain(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, IndexFileName), []byte(`[]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, EncryptedFileName), []byte(Magic+"x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withKeyringOpener(t, func(string) (*Store, error) { return nil, errors.New("locked") })
+	s, err := openAuto(dir)
+	if err != nil || s.Backend() != BackendFile {
+		t.Fatalf("empty index with a file store: %v, %v; want the file backend", s, err)
+	}
+}

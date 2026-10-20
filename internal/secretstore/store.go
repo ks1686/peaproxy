@@ -133,7 +133,7 @@ var openKeyringFn = openKeyring
 // keychain answered again.
 func openAuto(dir string) (*Store, error) {
 	switch {
-	case nonEmptyFile(filepath.Join(dir, IndexFileName)):
+	case keyringIndexHasKeys(dir):
 		s, err := openKeyringFn(dir)
 		if err != nil {
 			return nil, fmt.Errorf("secretstore: this config's secrets are in the OS keychain, which is unavailable: %w", err)
@@ -146,6 +146,18 @@ func openAuto(dir string) (*Store, error) {
 		return s, nil
 	}
 	return OpenFile(dir)
+}
+
+// keyringIndexHasKeys reports whether this directory's keychain index names any
+// secret. Prune writes an index even when the keychain holds nothing, so an
+// empty one says nothing about where secrets live; an unreadable one is taken
+// as holding keys, so a damaged index cannot divert writes to the file.
+func keyringIndexHasKeys(dir string) bool {
+	if !nonEmptyFile(filepath.Join(dir, IndexFileName)) {
+		return false
+	}
+	idx, err := (&Store{dir: dir}).loadIndex()
+	return err != nil || len(idx.keys) > 0
 }
 
 func nonEmptyFile(path string) bool {
