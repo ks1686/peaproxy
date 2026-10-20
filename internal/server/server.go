@@ -120,7 +120,7 @@ func New(opts Options) *Server {
 	}
 	s.http = &http.Server{
 		Addr:              addr,
-		Handler:           s.guard(mux),
+		Handler:           s.guard(withBodyDeadline(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s
