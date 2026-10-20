@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ import (
 // model has written it, and inventing a figure would make the hold a guess
 // dressed as a cap. What is held is the request's own input, which is knowable
 // now, and what it turns out to be is measured when the call completes.
-func (g *Gateway) holdSpend(account, model string, body []byte) error {
+func (g *Gateway) holdSpend(ctx context.Context, account, model string, body []byte) error {
 	ceiling := g.cfg.SpendCeiling()
 	store := g.Usage
 	if ceiling <= 0 || store == nil || account == "" {
@@ -50,7 +51,7 @@ func (g *Gateway) holdSpend(account, model string, body []byte) error {
 		// during routing; fabricating a hold here would only invent a number.
 		return nil
 	}
-	w, ok := store.HoldSpend(spendCeilingDays, func(w usage.SpendWindow) bool {
+	w, ok := store.HoldSpendOwned(usage.HoldsFrom(ctx), spendCeilingDays, func(w usage.SpendWindow) bool {
 		blocked, _ := g.ceilingBlocksIn(w, ceiling, estimate)
 		return !blocked
 	}, estimate)

@@ -105,6 +105,12 @@ type Event struct {
 	// already set -- and once the window is unmeasurable the ceiling refuses
 	// everything, forever, for a reason that has nothing to do with the prices.
 	NotDispatched bool `json:"notDispatched,omitempty"`
+	// Holds are the spend holds this event's request took, released when the
+	// event is recorded. HoldsTracked says the request carried a HoldSet, so an
+	// empty Holds means it held nothing (refused, cached, local) rather than
+	// that it came from an untracked caller.
+	Holds        []uint64 `json:"-"`
+	HoldsTracked bool     `json:"-"`
 	// Discarded marks a retrieval round PeaProxy fetched, was billed for, and
 	// then replaced before the client ever saw it.
 	//
@@ -201,7 +207,8 @@ type Store struct {
 	reserved float64
 	// holds are the in-flight reservations waiting for their events, oldest
 	// first. See consumeHoldLocked for why they are not matched to an event.
-	holds []spendHold
+	holds      []spendHold
+	nextHoldID uint64
 }
 
 // Open loads events from path if the file exists.
@@ -284,7 +291,11 @@ func (s *Store) Add(e Event) {
 	// key, and the keys disagree: a hold is taken against the deployment's model
 	// while the event records the name the client sent, which for an automatic
 	// route is the route name.
-	s.consumeHoldLocked()
+	if e.HoldsTracked {
+		s.releaseHoldsLocked(e.Holds)
+	} else {
+		s.consumeHoldLocked()
+	}
 	s.flushLocked()
 	s.appendLogLocked(e)
 }
@@ -714,6 +725,13 @@ type SpendWindow struct {
 //
 // decide must not call back into the store: it runs under the ledger lock.
 func (s *Store) HoldSpend(days int, decide func(SpendWindow) bool, usd float64) (SpendWindow, bool) {
+	return s.HoldSpendOwned(nil, days, decide, usd)
+}
+
+// HoldSpendOwned is HoldSpend for a tracked request: the hold is recorded in
+// set and released only by the event that carries its id. A nil set takes an
+// unowned hold, released oldest-first by an untracked event.
+func (s *Store) HoldSpendOwned(set *HoldSet, days int, decide func(SpendWindow) bool, usd float64) (SpendWindow, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := s.windowLocked(days)
@@ -722,7 +740,12 @@ func (s *Store) HoldSpend(days int, decide func(SpendWindow) bool, usd float64) 
 	}
 	w.USD += usd
 	s.reserved += usd
-	s.holds = append(s.holds, spendHold{usd: usd, at: time.Now()})
+	s.nextHoldID++
+	h := spendHold{id: s.nextHoldID, usd: usd, at: time.Now(), owned: set != nil}
+	s.holds = append(s.holds, h)
+	if set != nil {
+		set.add(h.id)
+	}
 	s.sweepHoldsLocked()
 	return w, true
 }
@@ -730,8 +753,10 @@ func (s *Store) HoldSpend(days int, decide func(SpendWindow) bool, usd float64) 
 // spendHold is one in-flight request's reservation, waiting for the event that
 // records what it actually cost.
 type spendHold struct {
-	usd float64
-	at  time.Time
+	id    uint64
+	usd   float64
+	at    time.Time
+	owned bool
 }
 
 // holdExpiry bounds how long a hold can outlive the call that took it.
@@ -742,16 +767,38 @@ type spendHold struct {
 // forever, which fails closed into a broken proxy rather than an expensive one.
 const holdExpiry = 2 * time.Minute
 
-// consumeHoldLocked releases the oldest hold, which the newest event has paid
-// for.
+// consumeHoldLocked releases the oldest unowned hold for an event recorded
+// outside a tracked request. An owned hold belongs to a request that will
+// release it itself.
 func (s *Store) consumeHoldLocked() {
-	if len(s.holds) == 0 {
+	for i, h := range s.holds {
+		if h.owned {
+			continue
+		}
+		s.dropHoldLocked(i)
 		return
 	}
-	s.reserved -= s.holds[0].usd
-	s.holds = s.holds[1:]
-	if s.reserved < 0 {
-		s.reserved = 0
+}
+
+// releaseHoldsLocked releases exactly the holds named by ids.
+func (s *Store) releaseHoldsLocked(ids []uint64) {
+	for _, id := range ids {
+		for i, h := range s.holds {
+			if h.id == id {
+				s.dropHoldLocked(i)
+				break
+			}
+		}
+	}
+}
+
+// dropHoldLocked removes hold i and recomputes reserved from what is left,
+// so repeated float subtraction cannot leave a phantom reservation behind.
+func (s *Store) dropHoldLocked(i int) {
+	s.holds = append(s.holds[:i], s.holds[i+1:]...)
+	s.reserved = 0
+	for _, h := range s.holds {
+		s.reserved += h.usd
 	}
 }
 

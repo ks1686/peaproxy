@@ -683,7 +683,7 @@ func admitted[T any](g *Gateway, ctx context.Context, account, model string, bod
 		return zero, usage.MarkNotDispatched(err)
 	}
 	defer release()
-	if err := g.holdSpend(account, model, body); err != nil {
+	if err := g.holdSpend(ctx, account, model, body); err != nil {
 		return zero, usage.MarkNotDispatched(err)
 	}
 	return f(ctx)
