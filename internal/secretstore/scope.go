@@ -60,7 +60,7 @@ func (s *Store) scopeTo(scope string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
-	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS) {
+	if readOnly(err) {
 		return s.scopeReadOnly(scope)
 	}
 	if err != nil {
@@ -68,6 +68,19 @@ func (s *Store) scopeTo(scope string) error {
 	}
 	defer unlock()
 	legacy := &Store{backend: s.backend, dir: s.dir, kr: s.kr, now: s.now}
+	err = s.scopeLocked(legacy, scope)
+	if readOnly(err) {
+		// A secrets.lock left by an earlier run opens even in a directory that
+		// has since become read-only, so the first failed create is where that
+		// shows. Nothing was written: the marker and the directory id are the
+		// first files a scope creates.
+		s.scope, s.krPrefix = "", ""
+		return s.scopeReadOnly(scope)
+	}
+	return err
+}
+
+func (s *Store) scopeLocked(legacy *Store, scope string) error {
 	s.scope = scope
 	if s.backend == BackendKeyring {
 		id, err := s.dirIDLocked()
@@ -77,6 +90,10 @@ func (s *Store) scopeTo(scope string) error {
 		s.krPrefix = id + "/" + scope + "/"
 	}
 	return s.migrateLocked(legacy)
+}
+
+func readOnly(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.EROFS)
 }
 
 // scopeReadOnly serves a directory PeaProxy cannot write to (reads are allowed
