@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.1
 
 - Claude OAuth: Anthropic's "Third-party apps now draw from extra usage, not plan limits" refusal reaches the client as error type (and OpenAI `code`) `extra_usage_required`, quoting Anthropic's sentence and `request_id` and naming the fix (an Anthropic API-key account, or extra usage from the workspace admin), instead of a bare `upstream HTTP 400`. It never retries, fails over or cools down: every retry gets the same answer, and the next account may be a metered key. Every other upstream body still stays out of client errors.
 - `peaproxy health` (24h) and `peaproxy errors summary` (`--since`) count those refusals per account, including records written by older builds. `health` says the count is unknown when `requestLog` is off.
