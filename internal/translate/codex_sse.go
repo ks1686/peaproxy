@@ -52,6 +52,7 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	// never completes leaves these zero and no usage frame is written, because
 	// an unmeasured call is a different thing from a call measured at zero.
 	promptTokens, completionTokens := 0, 0
+	finishOverride := ""
 	const id = "peaproxy-codex"
 	for sc.Scan() {
 		line := sc.Text()
@@ -67,6 +68,18 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 		}
 		if u, ok := responsesEventUsage(payload); ok {
 			promptTokens, completionTokens = u.prompt, u.completion
+		}
+		switch kind, detail := responsesTurnEnd(payload); kind {
+		case "failed":
+			// A failed turn must reach the client as a failure. Finishing it
+			// with "stop" tells the client a partial answer is complete.
+			if err := WriteOpenAIChatSSEError(w, "upstream response failed: "+detail); err != nil {
+				return err
+			}
+			return fmt.Errorf("upstream response failed: %s", detail)
+		case "incomplete":
+			finishOverride = detail
+			continue
 		}
 		chunk, ok, tools, err := responsesStreamChunkToChat(payload, model, callIndex, &nextIndex)
 		if err != nil {
@@ -108,6 +121,9 @@ func responsesSSEToOpenAI(r io.Reader, w io.Writer, model string) error {
 	reason := "stop"
 	if hadToolCalls {
 		reason = "tool_calls"
+	}
+	if finishOverride != "" {
+		reason = finishOverride
 	}
 	if len(reasoningRaw) > 0 {
 		opaque, err := CarryResponsesReasoning(reasoningRaw)
@@ -213,6 +229,10 @@ func responsesStreamChunkToChat(payload, model string, callIndex map[string]int,
 	}
 	var delta chatStreamDelta
 	switch {
+	case strings.Contains(ev.Type, "reasoning"):
+		// response.reasoning_summary_text.delta and response.reasoning_text.delta
+		// also end in "text.delta"; reasoning is carried as opaque items, never
+		// as answer text.
 	case strings.Contains(ev.Type, "output_text.delta"), strings.Contains(ev.Type, "text.delta"):
 		if ev.Delta != "" {
 			delta.Content = ev.Delta
@@ -305,4 +325,53 @@ func callIndexKeys(callID, itemID string, outputIndex int) []string {
 	}
 	keys = append(keys, fmt.Sprintf("output-index:%d", outputIndex))
 	return keys
+}
+
+// responsesTurnEnd classifies the Responses events that end a turn
+// without completing it. "failed" covers response.failed and a bare error
+// event, with the upstream message as detail; "incomplete" carries the chat
+// finish_reason the incomplete_details reason maps to.
+func responsesTurnEnd(payload string) (kind, detail string) {
+	var ev struct {
+		Type     string `json:"type"`
+		Message  string `json:"message"`
+		Code     string `json:"code"`
+		Response *struct {
+			Error *struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+			IncompleteDetails *struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
+		} `json:"response"`
+	}
+	if json.Unmarshal([]byte(payload), &ev) != nil {
+		return "", ""
+	}
+	switch ev.Type {
+	case "response.failed":
+		msg := "response.failed"
+		if ev.Response != nil && ev.Response.Error != nil {
+			msg = firstNonEmpty(ev.Response.Error.Message, ev.Response.Error.Code, msg)
+		}
+		return "failed", msg
+	case "error":
+		return "failed", firstNonEmpty(ev.Message, ev.Code, "error event")
+	case "response.incomplete":
+		if ev.Response != nil && ev.Response.IncompleteDetails != nil && ev.Response.IncompleteDetails.Reason == "content_filter" {
+			return "incomplete", "content_filter"
+		}
+		return "incomplete", "length"
+	}
+	return "", ""
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
