@@ -96,6 +96,11 @@ func (g *Gate) Acquire(ctx context.Context, account string) (func(), error) {
 			return nil, ErrAdmissionQueue
 		}
 		g.queued[account]++
+		// The channel must exist before it is captured: a nil channel never
+		// fires, and release only closes the channel it finds.
+		if g.wake == nil {
+			g.wake = make(chan struct{})
+		}
 		// One long wait, woken by release, instead of a 5ms poll that allocated
 		// a timer per waiter per spin and woke every waiter every 5ms whether or
 		// not anything had changed (#80).
