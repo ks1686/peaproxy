@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/ks1686/peaproxy/internal/jsonx"
 )
 
 // writeResponsesFailed ends a started Responses stream with response.failed.
@@ -231,13 +233,13 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				handedOut++
 				itemAt[messageItemID] = messageIndex
 				if err := emit("response.output_item.added", fmt.Sprintf(
-					`{"type":"response.output_item.added","output_index":%d,"item":{"type":"message","id":%q,"role":"assistant","content":[]}}`,
-					messageIndex, messageItemID)); err != nil {
+					`{"type":"response.output_item.added","output_index":%d,"item":{"type":"message","id":%s,"role":"assistant","content":[]}}`,
+					messageIndex, jsonx.Quote(messageItemID))); err != nil {
 					return err
 				}
 				if err := emit("response.content_part.added", fmt.Sprintf(
-					`{"type":"response.content_part.added","item_id":%q,"output_index":%d,"content_index":0,"part":{"type":"output_text","text":""}}`,
-					messageItemID, messageIndex)); err != nil {
+					`{"type":"response.content_part.added","item_id":%s,"output_index":%d,"content_index":0,"part":{"type":"output_text","text":""}}`,
+					jsonx.Quote(messageItemID), messageIndex)); err != nil {
 					return err
 				}
 			}
@@ -349,30 +351,30 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		}
 		pc.Closed = true
 		if err := emit("response.function_call_arguments.done", fmt.Sprintf(
-			`{"type":"response.function_call_arguments.done","item_id":%q,"output_index":%d,"arguments":%q}`,
-			pc.ItemID, pc.Index, pc.Arguments)); err != nil {
+			`{"type":"response.function_call_arguments.done","item_id":%s,"output_index":%d,"arguments":%s}`,
+			jsonx.Quote(pc.ItemID), pc.Index, jsonx.Quote(pc.Arguments))); err != nil {
 			return err
 		}
 		if err := emit("response.output_item.done", fmt.Sprintf(
-			`{"type":"response.output_item.done","output_index":%d,"item":{"type":"function_call","id":%q,"call_id":%q,"name":%q,"arguments":%q}}`,
-			pc.Index, pc.ItemID, pc.ID, pc.Name, pc.Arguments)); err != nil {
+			`{"type":"response.output_item.done","output_index":%d,"item":{"type":"function_call","id":%s,"call_id":%s,"name":%s,"arguments":%s}}`,
+			pc.Index, jsonx.Quote(pc.ItemID), jsonx.Quote(pc.ID), jsonx.Quote(pc.Name), jsonx.Quote(pc.Arguments))); err != nil {
 			return err
 		}
 	}
 	if messageStarted && !messageClosed {
 		if err := emit("response.output_text.done", fmt.Sprintf(
-			`{"type":"response.output_text.done","item_id":%q,"output_index":%d,"content_index":0,"text":%q}`,
-			messageItemID, messageIndex, text.String())); err != nil {
+			`{"type":"response.output_text.done","item_id":%s,"output_index":%d,"content_index":0,"text":%s}`,
+			jsonx.Quote(messageItemID), messageIndex, jsonx.Quote(text.String()))); err != nil {
 			return err
 		}
 		if err := emit("response.content_part.done", fmt.Sprintf(
-			`{"type":"response.content_part.done","item_id":%q,"output_index":%d,"content_index":0,"part":{"type":"output_text","text":%q}}`,
-			messageItemID, messageIndex, text.String())); err != nil {
+			`{"type":"response.content_part.done","item_id":%s,"output_index":%d,"content_index":0,"part":{"type":"output_text","text":%s}}`,
+			jsonx.Quote(messageItemID), messageIndex, jsonx.Quote(text.String()))); err != nil {
 			return err
 		}
 		if err := emit("response.output_item.done", fmt.Sprintf(
-			`{"type":"response.output_item.done","output_index":%d,"item":{"type":"message","id":%q,"role":"assistant","content":[{"type":"output_text","text":%q}]}}`,
-			messageIndex, messageItemID, text.String())); err != nil {
+			`{"type":"response.output_item.done","output_index":%d,"item":{"type":"message","id":%s,"role":"assistant","content":[{"type":"output_text","text":%s}]}}`,
+			messageIndex, jsonx.Quote(messageItemID), jsonx.Quote(text.String()))); err != nil {
 			return err
 		}
 	}
@@ -456,5 +458,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 // that are not the terminal one. The client only reads identity off it; the
 // full object arrives with response.completed.
 func responseStub(id, model string) string {
-	return fmt.Sprintf(`{"id":%q,"object":"response","status":"in_progress","model":%q}`, id, model)
+	return fmt.Sprintf(
+		`{"id":%s,"object":"response","status":"in_progress","model":%s}`,
+		jsonx.Quote(id), jsonx.Quote(model))
 }
