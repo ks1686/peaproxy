@@ -43,7 +43,7 @@ func TestADiscardedRoundReleasesItsSpendHold(t *testing.T) {
 	in, out := 3.0, 15.0
 	cfg := config.Config{
 		SchemaVersion: 1, Bind: "127.0.0.1", Port: 8317,
-		Providers: []config.Provider{{ID: "acct", Adapter: "openai_compat", Tier: "paid", BaseURL: up.URL + "/v1"}},
+		Providers:       []config.Provider{{ID: "acct", Adapter: "openai_compat", Tier: "paid", BaseURL: up.URL + "/v1"}},
 		AutomaticRoutes: config.AutomaticRoutePrefs{Prices: map[string]config.PriceQuote{"acct/m": {Input: &in, Output: &out, Verified: true}}},
 	}
 	cfg.Optimization.SpendCeilingUSD = 100
