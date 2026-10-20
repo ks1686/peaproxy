@@ -77,8 +77,14 @@ func ApplyPublishedUsage(e *Event, body []byte, cacheHit bool) {
 		return
 	}
 	if cacheHit {
+		// Nothing went upstream, so the cost is known and it is zero. Leaving it
+		// unset counted the hit as an unpriced call, and a spend ceiling then
+		// read the window as unmeasurable and refused every paid request.
+		zero := 0.0
 		e.CacheHit = true
 		e.TokensKnown = true
+		e.Costable = true
+		e.CostUSD = &zero
 		return
 	}
 	c, ok := ParseCounters(body)

@@ -74,3 +74,23 @@ func TestAnUntrackedEventLeavesOwnedHoldsAlone(t *testing.T) {
 		t.Fatalf("reserved = %v, want the owned 0.40 still held", got)
 	}
 }
+
+// A response-cache hit sent nothing upstream and cost nothing. Counting it as
+// a call whose cost is unknown made the window unmeasurable, and a ceiling then
+// refused every paid request for the rest of the window.
+func TestACacheHitIsAPricedZeroCostCall(t *testing.T) {
+	s := Open("")
+	cost := 0.02
+	s.Add(Event{AccountID: "a", Model: "m", TokensKnown: true, Costable: true, CostUSD: &cost})
+	var hit Event
+	hit.AccountID, hit.Model = "a", "m"
+	ApplyPublishedUsage(&hit, nil, true)
+	s.Add(hit)
+	w := s.SpentInLastDays(1)
+	if w.Priced != w.Total {
+		t.Fatalf("priced %d of %d calls after a cache hit; the hit must count as priced", w.Priced, w.Total)
+	}
+	if !near(w.USD, cost) {
+		t.Fatalf("window USD = %v, want only the paid call's %v", w.USD, cost)
+	}
+}
