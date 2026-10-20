@@ -109,3 +109,16 @@ func TestAProbeEndsWithItsAttempt(t *testing.T) {
 		t.Fatal("the probe outlived its attempt; acct-a stays out of rotation until it expires")
 	}
 }
+
+func TestExplainingARouteLeavesModelCooldownsAlone(t *testing.T) {
+	a, b := 0, 0
+	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
+	gw.cool["acct-a"] = cooldownSlots{models: map[string]Cooldown{
+		"m":     {AccountID: "acct-a", Until: time.Now().Add(-time.Millisecond)},
+		"other": {AccountID: "acct-a", Until: time.Now().Add(time.Hour)},
+	}}
+	_ = gw.ExplainRoute(context.Background(), "m")
+	if _, ok := gw.cool["acct-a"].models["m"]; !ok {
+		t.Fatal("explaining a route deleted an expired model cooldown; explain is read-only")
+	}
+}

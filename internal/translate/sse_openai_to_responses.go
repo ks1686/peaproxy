@@ -283,9 +283,10 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			if tc.Function.Name != "" {
 				pc.Name = tc.Function.Name
 			}
-			// Arguments that arrive before the item is announced are carried by
-			// output_item.added; a delta for an unannounced item would have
-			// nowhere to go in the client's accumulator.
+			// Arguments that arrive before the item is announced are buffered
+			// and sent as one arguments delta right after output_item.added; a
+			// delta for an unannounced item would have nowhere to go in the
+			// client's accumulator.
 			wasStarted := pc.Started
 			if !wasStarted {
 				pc.Arguments += tc.Function.Arguments

@@ -1110,6 +1110,11 @@ func (g *Gateway) candidatesFor(model, session string, peek bool) ([]instance, t
 		recovering = maps.Clone(g.recovering)
 	}
 	for id, slots := range g.cool {
+		if peek {
+			// prune deletes from the slot's map, which a read-only caller
+			// must not touch.
+			slots.models = maps.Clone(slots.models)
+		}
 		slots.prune(now)
 		if !peek {
 			g.cool[id] = slots
