@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -44,7 +45,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if !sessionSpecific {
-			if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
+			if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, cacheModel(model, budget), raw); ok {
 				hit.Raw = echoClientModel(hit.Raw, client, model)
 				if client != model {
 					hit.Model = client
@@ -144,7 +145,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
 			var shared bool
-			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
+			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, cacheModel(model, budget), "chat", raw), func(runCtx context.Context) ([]byte, error) {
 				once, err := callUpstream(runCtx)
 				if err != nil {
 					return nil, err
@@ -170,7 +171,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 				resp.Model = client
 			}
 			if !sessionSpecific {
-				g.storeChat(lastAccount, inst.Provider.BaseURL, model, raw, resp.Raw)
+				g.storeChat(lastAccount, inst.Provider.BaseURL, cacheModel(model, budget), raw, resp.Raw)
 			}
 			return resp, Call{Account: lastAccount, Deployment: model}, nil
 		}
@@ -1109,4 +1110,14 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += n
 	return n, err
+}
+
+// cacheModel is the model half of a response-cache or in-flight key. prepare
+// strips "-thinking-N" from the body before it is hashed, so the budget has to
+// be part of the key or a thinking request shares a non-thinking answer.
+func cacheModel(model string, budget int) string {
+	if budget <= 0 {
+		return model
+	}
+	return model + "\x00thinking=" + strconv.Itoa(budget)
 }
