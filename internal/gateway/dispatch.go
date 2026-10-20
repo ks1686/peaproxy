@@ -143,7 +143,8 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 		}
 		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
-			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
+			var shared bool
+			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
 				once, err := callUpstream(runCtx)
 				if err != nil {
 					return nil, err
@@ -151,7 +152,9 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 				return once.Raw, nil
 			})
 			if callErr == nil {
-				resp.Raw = body
+				// A caller that joined another's call made no upstream request;
+				// recording the shared usage again would bill it once per caller.
+				resp.Raw, resp.CacheHit = body, shared
 			}
 		} else {
 			resp, callErr = callUpstream(ctx)
@@ -525,7 +528,8 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		}
 		if g.flight != nil && g.cfg.RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
 			var body []byte
-			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
+			var shared bool
+			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
 				once, err := admitted(g, runCtx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
 					return callUpstream(c)
 				})
@@ -535,7 +539,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 				return once.Raw, nil
 			})
 			if callErr == nil {
-				resp.Raw = body
+				resp.Raw, resp.CacheHit = body, shared
 			}
 		} else {
 			resp, callErr = admitted(g, ctx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
