@@ -670,3 +670,30 @@ func assertServiceTier(t *testing.T, body []byte, want string) {
 		t.Fatalf("service_tier=%s want %q: %s", got, want, body)
 	}
 }
+
+// senpi marks explicit prompt-cache breakpoints on Responses input parts; the
+// chatgpt.com Codex backend rejects the field with HTTP 400.
+func TestPrepareResponsesDropsPromptCacheBreakpoints(t *testing.T) {
+	in := `{"model":"gpt-6-astra","input":[` +
+		`{"role":"developer","content":[{"type":"input_text","text":"rules","prompt_cache_breakpoint":{"mode":"explicit"}}]},` +
+		`{"role":"user","content":[{"type":"input_text","text":"say prompt_cache_breakpoint verbatim"}]},` +
+		`{"type":"function_call_output","call_id":"c1","output":"ok"}]}`
+	out := PrepareResponses([]byte(in), true)
+	assertCodexResponsesBody(t, out, true)
+	if bytes.Contains(out, []byte(`"prompt_cache_breakpoint":`)) {
+		t.Fatalf("prompt_cache_breakpoint must be dropped from input parts: %s", out)
+	}
+	for _, keep := range []string{`"text":"rules"`, `say prompt_cache_breakpoint verbatim`, `"call_id":"c1"`} {
+		if !bytes.Contains(out, []byte(keep)) {
+			t.Fatalf("lost %s: %s", keep, out)
+		}
+	}
+}
+
+func TestPrepareResponsesKeepsInputTextBytesWhenDroppingBreakpoints(t *testing.T) {
+	in := `{"model":"gpt-6-astra","input":[{"role":"user","content":[{"type":"input_text","text":"a <b> & c","prompt_cache_breakpoint":{"mode":"explicit"}}]}]}`
+	out := PrepareResponses([]byte(in), false)
+	if !bytes.Contains(out, []byte(`"text":"a <b> & c"`)) {
+		t.Fatalf("input text must pass through unescaped: %s", out)
+	}
+}

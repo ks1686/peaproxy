@@ -18,6 +18,9 @@ const (
 	fingerprintSalt       = "59cf53e54c78"
 	claudeCodeCLIIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
 	billingHeaderPrefix   = "x-anthropic-billing-header:"
+	// maxCacheBreakpoints is Anthropic's per-request cache_control limit; one
+	// more is an HTTP 400, so the cloak only marks blocks inside what is left.
+	maxCacheBreakpoints = 4
 )
 
 // claudeLegacySystemReminderModels are first-party IDs that reject a
@@ -68,26 +71,102 @@ func applyOAuthCloak(raw []byte) []byte {
 		return raw
 	}
 	forwarded := collectCallerSystemTexts(raw)
-	billing := generateBillingHeader(firstUserText(raw))
-	system := []cloakBlock{
-		{Type: "text", Text: billing},
-		{Type: "text", Text: claudeCodeCLIIdentity, CacheControl: &ephemeralCache},
+	model := translate.CanonicalClaudeModel(jsonx.PeekBody(raw).Model)
+	advisor := len(forwarded) > 0 && claudeHistoryHasAdvisor(raw)
+	midConversation := len(forwarded) > 0 && !advisor && !claudeUsesLegacySystemReminder(model)
+	relocated := 0
+	if midConversation {
+		relocated = len(forwarded)
 	}
+	// The caller's own system breakpoint goes away with its system field, so
+	// only tools and messages count against the budget.
+	identityCache, relocatedCache := planCloakBreakpoints(maxCacheBreakpoints-callerCacheBreakpoints(raw), relocated)
+
+	billing := generateBillingHeader(firstUserText(raw))
+	identity := cloakBlock{Type: "text", Text: claudeCodeCLIIdentity}
+	if identityCache {
+		identity.CacheControl = &ephemeralCache
+	}
+	system := []cloakBlock{{Type: "text", Text: billing}, identity}
 	raw = jsonx.SetTopLevelRaw(raw, "system", marshalJSON(system))
 	if len(forwarded) == 0 {
 		return raw
 	}
-	if claudeHistoryHasAdvisor(raw) {
+	if advisor {
 		for _, text := range forwarded {
 			system = append(system, cloakBlock{Type: "text", Text: text})
 		}
 		return jsonx.SetTopLevelRaw(raw, "system", marshalJSON(system))
 	}
-	model := translate.CanonicalClaudeModel(jsonx.PeekBody(raw).Model)
-	if claudeUsesLegacySystemReminder(model) {
+	if !midConversation {
 		return prependCallerSystemReminders(raw, forwarded)
 	}
-	return insertMidConversationSystem(raw, forwarded)
+	return insertMidConversationSystem(raw, forwarded, relocatedCache)
+}
+
+// planCloakBreakpoints spends the remaining cache_control budget on the blocks
+// the cloak adds. The last relocated caller system turn goes first: it closes
+// the largest stable prefix (tools, system, first user turn and the caller's
+// own system prompt). The one-line identity block comes next, then earlier
+// relocated turns.
+func planCloakBreakpoints(budget, relocated int) (identity bool, relocatedCache []bool) {
+	relocatedCache = make([]bool, relocated)
+	if budget > 0 && relocated > 0 {
+		relocatedCache[relocated-1] = true
+		budget--
+	}
+	if budget > 0 {
+		identity = true
+		budget--
+	}
+	for i := relocated - 2; i >= 0 && budget > 0; i-- {
+		relocatedCache[i] = true
+		budget--
+	}
+	return identity, relocatedCache
+}
+
+// callerCacheBreakpoints counts the cache_control markers the caller placed on
+// tools and message content blocks, including blocks nested in tool results.
+// It parses the body rather than counting bytes, so the text "cache_control"
+// inside a tool description or a message is not mistaken for a breakpoint.
+func callerCacheBreakpoints(raw []byte) int {
+	var probe struct {
+		Tools    []map[string]json.RawMessage `json:"tools"`
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(raw, &probe) != nil {
+		return 0
+	}
+	n := 0
+	for _, tool := range probe.Tools {
+		if _, ok := tool["cache_control"]; ok {
+			n++
+		}
+	}
+	for _, msg := range probe.Messages {
+		n += contentCacheBreakpoints(msg.Content)
+	}
+	return n
+}
+
+func contentCacheBreakpoints(content json.RawMessage) int {
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(content, &blocks) != nil {
+		return 0
+	}
+	n := 0
+	for _, block := range blocks {
+		if _, ok := block["cache_control"]; ok {
+			n++
+		}
+		if nested, ok := block["content"]; ok {
+			n += contentCacheBreakpoints(nested)
+		}
+	}
+	return n
 }
 
 func alreadyClaudeCodeCloak(raw []byte) bool {
@@ -192,7 +271,7 @@ func claudeUsesLegacySystemReminder(model string) bool {
 	return ok
 }
 
-func insertMidConversationSystem(raw []byte, texts []string) []byte {
+func insertMidConversationSystem(raw []byte, texts []string, cache []bool) []byte {
 	msgs := peekClaudeMessages(raw)
 	firstUser := firstUserIndex(msgs)
 	if firstUser < 0 || len(texts) == 0 {
@@ -215,10 +294,14 @@ func insertMidConversationSystem(raw []byte, texts []string) []byte {
 		}
 	}
 	inserted := make([]json.RawMessage, 0, len(texts))
-	for _, text := range texts {
+	for i, text := range texts {
+		block := cloakBlock{Type: "text", Text: text}
+		if i < len(cache) && cache[i] {
+			block.CacheControl = &ephemeralCache
+		}
 		inserted = append(inserted, marshalJSON(cloakMessage{
 			Role:    "system",
-			Content: []cloakBlock{{Type: "text", Text: text, CacheControl: &ephemeralCache}},
+			Content: []cloakBlock{block},
 		}))
 	}
 	out := make([]json.RawMessage, 0, sizehint.Sum(len(msgs), len(inserted)))
