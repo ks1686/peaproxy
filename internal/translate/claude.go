@@ -16,12 +16,16 @@ import (
 
 // ClaudeRequest is a subset of POST /v1/messages.
 type ClaudeRequest struct {
-	Model     string          `json:"model"`
-	Messages  []ClaudeMessage `json:"messages"`
-	System    json.RawMessage `json:"system"`
-	MaxTokens int             `json:"max_tokens"`
-	Stream    bool            `json:"stream"`
-	Tools     json.RawMessage `json:"tools"`
+	Model         string          `json:"model"`
+	Messages      []ClaudeMessage `json:"messages"`
+	System        json.RawMessage `json:"system"`
+	MaxTokens     int             `json:"max_tokens"`
+	Stream        bool            `json:"stream"`
+	Tools         json.RawMessage `json:"tools"`
+	ToolChoice    json.RawMessage `json:"tool_choice"`
+	Temperature   *float64        `json:"temperature"`
+	TopP          *float64        `json:"top_p"`
+	StopSequences []string        `json:"stop_sequences"`
 }
 
 // ClaudeMessage is one Anthropic turn. Content may be a string or a block list.
@@ -31,12 +35,16 @@ type ClaudeMessage struct {
 }
 
 type openAIRequest struct {
-	Model      string          `json:"model"`
-	Messages   []openAIMessage `json:"messages"`
-	Stream     bool            `json:"stream"`
-	MaxTokens  int             `json:"max_tokens,omitempty"`
-	Tools      json.RawMessage `json:"tools,omitempty"`
-	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	Model             string          `json:"model"`
+	Messages          []openAIMessage `json:"messages"`
+	Stream            bool            `json:"stream"`
+	MaxTokens         int             `json:"max_tokens,omitempty"`
+	Tools             json.RawMessage `json:"tools,omitempty"`
+	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	Temperature       *float64        `json:"temperature,omitempty"`
+	TopP              *float64        `json:"top_p,omitempty"`
+	Stop              []string        `json:"stop,omitempty"`
 }
 
 type openAIMessage struct {
@@ -132,11 +140,15 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 	}
 	msgs = append(msgs, converted...)
 	out := openAIRequest{
-		Model:     in.Model,
-		Messages:  msgs,
-		Stream:    in.Stream,
-		MaxTokens: in.MaxTokens,
+		Model:       in.Model,
+		Messages:    msgs,
+		Stream:      in.Stream,
+		MaxTokens:   in.MaxTokens,
+		Temperature: in.Temperature,
+		TopP:        in.TopP,
+		Stop:        in.StopSequences,
 	}
+	out.ToolChoice, out.ParallelToolCalls = claudeToolChoiceToOpenAI(in.ToolChoice)
 	if len(in.Tools) > 0 && string(in.Tools) != "null" {
 		converted, err := toolsToOpenAI(in.Tools)
 		if err != nil {
@@ -154,6 +166,42 @@ func ToOpenAI(raw []byte) ([]byte, adapter.ChatRequest, error) {
 		chatMsgs = append(chatMsgs, adapter.Message{Role: m.Role, Content: text})
 	}
 	return body, adapter.ChatRequest{Model: in.Model, Messages: chatMsgs, Stream: in.Stream, Raw: body}, nil
+}
+
+// claudeToolChoiceToOpenAI maps Anthropic's tool_choice onto the chat field,
+// with disable_parallel_tool_use as parallel_tool_calls=false.
+func claudeToolChoiceToOpenAI(raw json.RawMessage) (json.RawMessage, *bool) {
+	var tc struct {
+		Type                   string `json:"type"`
+		Name                   string `json:"name"`
+		DisableParallelToolUse bool   `json:"disable_parallel_tool_use"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &tc) != nil {
+		return nil, nil
+	}
+	var parallel *bool
+	if tc.DisableParallelToolUse {
+		f := false
+		parallel = &f
+	}
+	switch tc.Type {
+	case "auto":
+		return json.RawMessage(`"auto"`), parallel
+	case "any":
+		return json.RawMessage(`"required"`), parallel
+	case "none":
+		return json.RawMessage(`"none"`), parallel
+	case "tool":
+		if tc.Name == "" {
+			return nil, parallel
+		}
+		b, err := json.Marshal(map[string]any{"type": "function", "function": map[string]string{"name": tc.Name}})
+		if err != nil {
+			return nil, parallel
+		}
+		return b, parallel
+	}
+	return nil, parallel
 }
 
 // FromOpenAI maps a chat.completion JSON object to Anthropic messages JSON.
