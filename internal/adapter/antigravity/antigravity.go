@@ -150,6 +150,15 @@ func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 		return adapter.AuthSession{}, err
 	}
 	pending := &pendingAuth{state: state, redirectURI: RedirectURI}
+	// A new login supersedes one still waiting on the fixed callback port.
+	// Release that listener first, or binding the port again fails with
+	// "in use" until the old attempt times out.
+	a.mu.Lock()
+	if a.pending != nil && a.pending.lb != nil {
+		_ = a.pending.lb.Close()
+		a.pending.lb = nil
+	}
+	a.mu.Unlock()
 	if !a.skipLoopback {
 		lb, lerr := oauth.StartLoopback("127.0.0.1:"+callbackPort, callbackPath)
 		if lerr != nil {
