@@ -20,6 +20,13 @@ type call struct {
 	// billed is set by the first caller to collect the result, which records
 	// the upstream cost; every later receiver records a shared hit.
 	billed bool
+	// attach travels with the result to the billed receiver only (the
+	// gateway's spend holds for the call).
+	attach any
+	// finished is set once fn has returned; unclaimed then receives a result
+	// nobody collected.
+	finished  bool
+	unclaimed func(body []byte, attach any, err error)
 }
 
 // Do runs fn once per key.
@@ -39,6 +46,23 @@ func (f *Flight) Do(ctx context.Context, key string, fn func(context.Context) ([
 // them) but not its cancellation: one caller leaving must not cancel the call
 // for the rest.
 func (f *Flight) DoShared(ctx context.Context, key string, fn func(context.Context) ([]byte, error)) ([]byte, bool, error) {
+	body, _, shared, err := f.DoClaim(ctx, key, func(c context.Context) ([]byte, any, error) {
+		b, err := fn(c)
+		return b, nil, err
+	}, nil)
+	return body, shared, err
+}
+
+// DoClaim is DoShared with an attachment. fn returns one beside its result
+// (the gateway passes the call's spend holds), and only the billed receiver
+// gets it back: the holds have to leave with the event that records the cost.
+//
+// When the call finishes and nobody collects it (every waiter left, the last
+// one as it completed, or the flight cancelled it), unclaimed receives the
+// result and the attachment exactly once, so the cost of a call that was paid
+// for is still recorded and its holds released. A joiner's fn and unclaimed
+// are not used; the call's leader supplied them.
+func (f *Flight) DoClaim(ctx context.Context, key string, fn func(context.Context) ([]byte, any, error), unclaimed func([]byte, any, error)) ([]byte, any, bool, error) {
 	f.mu.Lock()
 	if f.calls == nil {
 		f.calls = map[string]*call{}
@@ -49,17 +73,31 @@ func (f *Flight) DoShared(ctx context.Context, key string, fn func(context.Conte
 		return f.wait(ctx, key, existing)
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	c := &call{done: make(chan struct{}), waiters: 1, cancel: cancel}
+	c := &call{done: make(chan struct{}), waiters: 1, cancel: cancel, unclaimed: unclaimed}
 	f.calls[key] = c
 	f.mu.Unlock()
 	go func() {
-		c.body, c.err = fn(runCtx)
-		close(c.done)
+		c.body, c.attach, c.err = fn(runCtx)
 		f.mu.Lock()
+		c.finished = true
+		orphan := f.orphanLocked(c)
 		f.forgetLocked(key, c)
 		f.mu.Unlock()
+		close(c.done)
+		if orphan {
+			c.unclaimed(c.body, c.attach, c.err)
+		}
 	}()
 	return f.wait(ctx, key, c)
+}
+
+// orphanLocked claims a finished call that has no waiter left for unclaimed.
+func (f *Flight) orphanLocked(c *call) bool {
+	if !c.finished || c.waiters > 0 || c.billed || c.unclaimed == nil {
+		return false
+	}
+	c.billed = true
+	return true
 }
 
 // forgetLocked removes c from the map if it is still the call for key.
@@ -78,11 +116,11 @@ func (f *Flight) waiters(key string) int {
 	return f.calls[key].waiters
 }
 
-func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, bool, error) {
+func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, any, bool, error) {
 	select {
 	case <-ctx.Done():
 		f.abandon(key, c)
-		return nil, true, ctx.Err()
+		return nil, nil, true, ctx.Err()
 	case <-c.done:
 	}
 	// select picks at random when the caller is already cancelled and the
@@ -90,17 +128,21 @@ func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, bool, e
 	// observe success, and must not cancel peers who are still waiting.
 	if err := ctx.Err(); err != nil {
 		f.abandon(key, c)
-		return nil, true, err
+		return nil, nil, true, err
 	}
 	f.mu.Lock()
 	c.waiters--
 	shared := c.billed
 	c.billed = true
 	f.mu.Unlock()
-	if c.err != nil {
-		return nil, shared, c.err
+	var attach any
+	if !shared {
+		attach = c.attach
 	}
-	return append([]byte(nil), c.body...), shared, nil
+	if c.err != nil {
+		return nil, attach, shared, c.err
+	}
+	return append([]byte(nil), c.body...), attach, shared, nil
 }
 
 func (f *Flight) abandon(key string, c *call) {
@@ -112,8 +154,12 @@ func (f *Flight) abandon(key string, c *call) {
 		// goroutine exits; that caller would inherit the cancellation.
 		f.forgetLocked(key, c)
 	}
+	orphan := f.orphanLocked(c)
 	f.mu.Unlock()
 	if last {
 		c.cancel()
+	}
+	if orphan {
+		c.unclaimed(c.body, c.attach, c.err)
 	}
 }

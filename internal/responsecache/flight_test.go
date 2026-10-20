@@ -150,3 +150,87 @@ func TestFlightJoinerDoesNotInheritAnAbandonedCall(t *testing.T) {
 		t.Fatal("joiner after abandonment joined the cancelled call instead of starting a fresh one")
 	}
 }
+
+// A call that finished while its last waiter was leaving was paid for upstream
+// and collected by nobody. The flight hands it to the unclaimed callback, once,
+// so the cost is recorded and its holds released.
+func TestFlightHandsAFinishedCallNobodyCollectedToUnclaimed(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		var f Flight
+		ctx, cancel := context.WithCancel(context.Background())
+		var unclaimed []string
+		var mu sync.Mutex
+		got := make(chan struct{}, 2)
+		_, attach, _, err := f.DoClaim(ctx, "k", func(context.Context) ([]byte, any, error) {
+			cancel()
+			return []byte("body"), "holds", nil
+		}, func(body []byte, attach any, err error) {
+			mu.Lock()
+			unclaimed = append(unclaimed, string(body)+"/"+attach.(string))
+			mu.Unlock()
+			got <- struct{}{}
+		})
+		if err == nil {
+			// The waiter collected it; it owns the attachment and nothing is unclaimed.
+			if attach != "holds" {
+				t.Fatalf("collector got attachment %v", attach)
+			}
+			continue
+		}
+		select {
+		case <-got:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a finished call nobody collected never reached unclaimed")
+		}
+		time.Sleep(10 * time.Millisecond)
+		mu.Lock()
+		if len(unclaimed) != 1 || unclaimed[0] != "body/holds" {
+			t.Fatalf("unclaimed = %v, want the call's body and attachment once", unclaimed)
+		}
+		mu.Unlock()
+	}
+}
+
+// The billed receiver gets the call's attachment; a shared one does not.
+func TestFlightGivesTheAttachmentOnlyToTheBilledReceiver(t *testing.T) {
+	var f Flight
+	release := make(chan struct{})
+	started := make(chan struct{})
+	type result struct {
+		attach any
+		shared bool
+	}
+	results := make(chan result, 2)
+	go func() {
+		_, a, shared, _ := f.DoClaim(context.Background(), "k", func(context.Context) ([]byte, any, error) {
+			close(started)
+			<-release
+			return []byte("b"), "holds", nil
+		}, nil)
+		results <- result{a, shared}
+	}()
+	<-started
+	go func() {
+		_, a, shared, _ := f.DoClaim(context.Background(), "k", nil, nil)
+		results <- result{a, shared}
+	}()
+	for f.waiters("k") < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	r1, r2 := <-results, <-results
+	billed := 0
+	for _, r := range []result{r1, r2} {
+		if !r.shared {
+			billed++
+			if r.attach != "holds" {
+				t.Fatalf("billed receiver got %v", r.attach)
+			}
+		} else if r.attach != nil {
+			t.Fatalf("a shared receiver got the attachment %v", r.attach)
+		}
+	}
+	if billed != 1 {
+		t.Fatalf("billed receivers = %d", billed)
+	}
+}

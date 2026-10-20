@@ -20,6 +20,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/streamguard"
 	"github.com/ks1686/peaproxy/internal/translate"
+	"github.com/ks1686/peaproxy/internal/usage"
 )
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
@@ -146,13 +147,16 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
 			var shared bool
-			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, cacheModel(model, budget), "chat", raw), func(runCtx context.Context) ([]byte, error) {
+			var attach any
+			account := inst.Provider.ID
+			body, attach, shared, callErr = g.flight.DoClaim(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, cacheModel(model, budget), "chat", raw), func(runCtx context.Context) ([]byte, any, error) {
+				runCtx = usage.WithOwnHolds(runCtx)
 				once, err := callUpstream(runCtx)
-				if err != nil {
-					return nil, err
-				}
-				return once.Raw, nil
+				return once.Raw, usage.HoldsFrom(runCtx), err
+			}, func(body []byte, attach any, err error) {
+				g.recordUnclaimed(account, model, "/v1/chat/completions", body, attach, err)
 			})
+			g.claimHolds(ctx, attach)
 			if callErr == nil {
 				// A caller that joined another's call made no upstream request;
 				// recording the shared usage again would bill it once per caller.
@@ -531,15 +535,18 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 		if g.flight != nil && g.live().RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
 			var body []byte
 			var shared bool
-			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
+			var attach any
+			account := inst.Provider.ID
+			body, attach, shared, callErr = g.flight.DoClaim(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, any, error) {
+				runCtx = usage.WithOwnHolds(runCtx)
 				once, err := admitted(g, runCtx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
 					return callUpstream(c)
 				})
-				if err != nil {
-					return nil, err
-				}
-				return once.Raw, nil
+				return once.Raw, usage.HoldsFrom(runCtx), err
+			}, func(body []byte, attach any, err error) {
+				g.recordUnclaimed(account, model, "/v1/embeddings", body, attach, err)
 			})
+			g.claimHolds(ctx, attach)
 			if callErr == nil {
 				resp.Raw, resp.CacheHit = body, shared
 			}

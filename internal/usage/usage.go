@@ -786,6 +786,17 @@ func (s *Store) consumeHoldLocked() {
 	}
 }
 
+// ReleaseHolds releases holds no event will carry (a coalesced call's holds
+// whose billed receiver is not a tracked request).
+func (s *Store) ReleaseHolds(ids []uint64) {
+	if s == nil || len(ids) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releaseHoldsLocked(ids)
+}
+
 // releaseHoldsLocked releases exactly the holds named by ids.
 func (s *Store) releaseHoldsLocked(ids []uint64) {
 	for _, id := range ids {
