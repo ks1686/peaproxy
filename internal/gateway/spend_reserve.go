@@ -102,7 +102,7 @@ func (g *Gateway) inputCostFor(account, model string, body []byte) float64 {
 // Only a discarded round is recorded here. The round returned to the client is
 // recorded by the ordinary path, and recording it twice would double-count the
 // one call a user can see.
-func (g *Gateway) recordDiscardedRound(account, model string, body []byte) {
+func (g *Gateway) recordDiscardedRound(ctx context.Context, account, model string, body []byte) {
 	if g.Usage == nil || account == "" {
 		return
 	}
@@ -121,6 +121,12 @@ func (g *Gateway) recordDiscardedRound(account, model string, body []byte) {
 	}
 	usage.ApplyPublishedUsage(&e, body, false)
 	g.PriceUsage(&e, account, model)
+	// The holds collected so far belong to rounds that have finished; this
+	// event records their cost, so they leave with it. The next round takes a
+	// hold of its own.
+	if holds := usage.HoldsFrom(ctx); holds != nil {
+		e.Holds, e.HoldsTracked = holds.Take(), true
+	}
 	g.Usage.Add(e)
 }
 

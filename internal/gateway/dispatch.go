@@ -103,7 +103,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 					// one call the ledger could not see -- and the round that
 					// ends a runaway loop is not a round anyone would notice
 					// going missing.
-					g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
+					g.recordDiscardedRound(runCtx, inst.Provider.ID, model, resp.Raw)
 					return adapter.ChatResponse{}, RoundLimitError{reason: rounds.Stop()}
 				}
 				results := contextopt.RunSearches(g.Artifacts, session, calls)
@@ -117,7 +117,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 				// This round's response is about to be replaced by the next
 				// one, so its usage has nowhere else to go. The provider billed
 				// it; the ledger has to know it happened.
-				g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
+				g.recordDiscardedRound(runCtx, inst.Provider.ID, model, resp.Raw)
 				first = false
 			}
 		}
