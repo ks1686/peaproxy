@@ -558,11 +558,26 @@ func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func noteStream(guard *streamguard.Guard, callErr error) error {
+	return noteStreamFinish(guard, callErr, false)
+}
+
+// noteStreamDone is noteStream for an attempt whose bytes reached the guard
+// directly (they are all written when the adapter returns), so a clean stream
+// with no event at all fails the attempt.
+func noteStreamDone(guard *streamguard.Guard, callErr error) error {
+	return noteStreamFinish(guard, callErr, true)
+}
+
+func noteStreamFinish(guard *streamguard.Guard, callErr error, complete bool) error {
 	if guard == nil {
 		return callErr
 	}
 	if callErr == nil {
-		if err := guard.Finish(); err != nil {
+		finish := guard.Finish
+		if complete {
+			finish = guard.Complete
+		}
+		if err := finish(); err != nil {
 			return err
 		}
 	}

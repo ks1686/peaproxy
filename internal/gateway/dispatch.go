@@ -256,7 +256,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 				// Drain any held partial token before the guard finishes, so the
 				// bytes reach the client in the order they arrived.
 				err := inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest)
-				return struct{}{}, noteStream(guard, flushAfter(dest, err))
+				return struct{}{}, noteStreamDone(guard, flushAfter(dest, err))
 			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
@@ -752,7 +752,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			streamBody := jsonx.SetStream(raw, true)
 			var streamErr error
 			_, streamErr = admitted(g, attemptCtx, inst.Provider.ID, model, streamBody, func(c context.Context) (struct{}, error) {
-				streamErr = noteStream(guard, flushAfter(dest, nr.ResponsesStream(c, streamBody, dest)))
+				streamErr = noteStreamDone(guard, flushAfter(dest, nr.ResponsesStream(c, streamBody, dest)))
 				return struct{}{}, streamErr
 			})
 			err := streamErr
@@ -807,6 +807,11 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		// (nil closes normally), so it never completes the partial turn.
 		_ = pw.CloseWithError(err)
 		convErr := <-errCh
+		if err == nil && convErr == nil {
+			// The translator has written everything now; an upstream that sent
+			// no chat event left nothing to translate.
+			err = guard.Complete()
+		}
 		// An error chunk that arrived before anything reached the client is a
 		// failed attempt, not a turn to hand back (#50). The adapter closed
 		// cleanly, so without this the account is credited with a success and
@@ -1001,7 +1006,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			inst.recordAttempt(&lastAccount)
 			_, err := admitted(g, attemptCtx, inst.Provider.ID, model, raw, func(c context.Context) (struct{}, error) {
 				err := nm.MessagesStream(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest)
-				return struct{}{}, noteStream(guard, flushAfter(dest, err))
+				return struct{}{}, noteStreamDone(guard, flushAfter(dest, err))
 			})
 			stop()
 			if err == nil {
@@ -1050,6 +1055,11 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		// (nil closes normally), so it never completes the partial turn.
 		_ = pw.CloseWithError(err)
 		convErr := <-errCh
+		if err == nil && convErr == nil {
+			// The translator has written everything now; an upstream that sent
+			// no chat event left nothing to translate.
+			err = guard.Complete()
+		}
 		// An error chunk that arrived before anything reached the client is a
 		// failed attempt, not a turn to hand back (#50). The adapter closed
 		// cleanly, so without this the account is credited with a success and
