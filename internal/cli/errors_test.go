@@ -199,3 +199,77 @@ func TestErrorsListPrintsOneLinePerFailure(t *testing.T) {
 		t.Fatalf("list is missing the class or account: %s", got)
 	}
 }
+
+// recordedExtraUsageError is the error text the store kept for Anthropic's
+// third-party refusal on 2026-10-20.
+const recordedExtraUsageError = `upstream HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going."},"request_id":"req_011CgDuNLLd4YqQovSY3S25g"}`
+
+// The refusals are stored as plain upstream 400s. Counted with them, they read
+// as a request-format bug, so the summary names them per account. Only the
+// matched phrase counts: not another 400, not a cancel, not one out of window.
+func TestErrorsSummaryCountsExtraUsageRefusalsApart(t *testing.T) {
+	now := time.Now()
+	cfgPath := seedErrorStore(t,
+		usage.Event{AccountID: "anthropic-oauth", Status: 400, Error: recordedExtraUsageError, Class: usage.ClassUpstreamError, Time: now.Add(-time.Hour)},
+		usage.Event{AccountID: "anthropic-oauth", Status: 400, Error: recordedExtraUsageError, Class: usage.ClassUpstreamError, Time: now.Add(-2 * time.Hour)},
+		usage.Event{AccountID: "anthropic-oauth", Status: 400, Error: recordedExtraUsageError, Class: usage.ClassUpstreamError, Time: now.Add(-48 * time.Hour)},
+		usage.Event{AccountID: "anthropic-oauth", Status: 400, Error: `upstream HTTP 400: {"error":{"message":"messages must be an array"}}`, Class: usage.ClassUpstreamError, Time: now},
+		usage.Event{AccountID: "openai-oauth", Status: 0, Error: "context canceled", Class: usage.ClassClientCancel, Time: now},
+	)
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"errors", "summary", "--config", cfgPath, "--since", "24h"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "anthropic-oauth third-party extra-usage rejections (24h): 2\n") {
+		t.Fatalf("extra-usage count missing or wrong:\n%s", got)
+	}
+	if strings.Contains(got, "openai-oauth third-party") {
+		t.Fatalf("a cancel counted as a refusal:\n%s", got)
+	}
+}
+
+func TestErrorsSummarySaysZeroExtraUsageRefusals(t *testing.T) {
+	cfgPath := seedErrorStore(t,
+		usage.Event{AccountID: "a", Status: 401, Class: usage.ClassAuthRevoked, Time: time.Now()},
+	)
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"errors", "summary", "--config", cfgPath, "--since", "7d"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "third-party extra-usage rejections (7d): 0\n") {
+		t.Fatalf("zero count not stated:\n%s", out.String())
+	}
+}
+
+// health reads the same store over a fixed 24h. With request logging off
+// nothing is recorded, and saying 0 would claim a fact nobody measured.
+func TestHealthCountsExtraUsageRefusals(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "peaproxy.yaml")
+	if err := os.WriteFile(path, []byte("schemaVersion: 1\nbind: 127.0.0.1\nport: 8317\nrequestLog: true\nproviders: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(usage.Event{AccountID: "anthropic-oauth", Status: 400, Error: recordedExtraUsageError, Class: usage.ClassUpstreamError, Time: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(usage.ErrorLogPath(dir), append(b, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"health", "--config", path}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "anthropic-oauth third-party extra-usage rejections (24h): 1\n") {
+		t.Fatalf("health missing the count:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := ExecuteWithArgs([]string{"health", "--config", writeEmptyCfg(t)}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "third-party extra-usage rejections (24h): unknown") {
+		t.Fatalf("health claimed a count with request logging off:\n%s", out.String())
+	}
+}

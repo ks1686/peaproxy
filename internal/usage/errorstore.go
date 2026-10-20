@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/adapter"
 	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
@@ -212,6 +213,10 @@ type ErrorSummary struct {
 	Cancels  int            `json:"cancels"`
 	ByClass  map[string]int `json:"byClass"`
 	ByAcct   map[string]int `json:"byAccount"`
+	// ExtraUsage counts Anthropic's "Third-party apps now draw from extra
+	// usage" refusals per account. They are recorded as ordinary upstream
+	// errors, so without this count they read as a request-format problem.
+	ExtraUsage map[string]int `json:"extraUsageByAccount"`
 }
 
 // SummarizeErrors counts records for the export header. Cancellations are
@@ -219,13 +224,16 @@ type ErrorSummary struct {
 // clients disconnecting, and a count that cannot tell them apart is a count
 // nobody reads.
 func SummarizeErrors(recs []Event) ErrorSummary {
-	s := ErrorSummary{ByClass: map[string]int{}, ByAcct: map[string]int{}}
+	s := ErrorSummary{ByClass: map[string]int{}, ByAcct: map[string]int{}, ExtraUsage: map[string]int{}}
 	for _, e := range recs {
 		s.ByClass[string(e.Class)]++
 		if e.Class == ClassClientCancel {
 			s.Cancels++
 		} else {
 			s.Failures++
+			if adapter.IsExtraUsageRefusal(e.Error) {
+				s.ExtraUsage[e.AccountID]++
+			}
 		}
 		if e.AccountID != "" {
 			s.ByAcct[e.AccountID]++

@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -90,6 +91,7 @@ Examples:
 			s := usage.SummarizeErrors(recs)
 			w := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(w, "failures: %d\ncancels:  %d\n", s.Failures, s.Cancels)
+			printExtraUsage(w, s.ExtraUsage, since)
 			if len(s.ByClass) > 0 {
 				_, _ = fmt.Fprintln(w, "\nby class:")
 				for _, c := range sortedKeys(s.ByClass) {
@@ -197,9 +199,14 @@ func readErrorRecordsFor(configPath, since string) ([]usage.Event, string, error
 	if err != nil {
 		return nil, store, err
 	}
+	out, err := errorRecordsSince(store, cutoff)
+	return out, store, err
+}
+
+func errorRecordsSince(store string, cutoff time.Time) ([]usage.Event, error) {
 	recs, err := usage.ReadErrorRecords(store)
 	if err != nil {
-		return nil, store, err
+		return nil, err
 	}
 	var out []usage.Event
 	for _, e := range recs {
@@ -207,7 +214,20 @@ func readErrorRecordsFor(configPath, since string) ([]usage.Event, string, error
 			out = append(out, e)
 		}
 	}
-	return out, store, nil
+	return out, nil
+}
+
+// printExtraUsage names Anthropic's third-party extra-usage refusals apart
+// from other failures. They are stored as plain upstream 400s, and read that
+// way they send people looking for a request-format bug that is not there.
+func printExtraUsage(w io.Writer, counts map[string]int, window string) {
+	if len(counts) == 0 {
+		_, _ = fmt.Fprintf(w, "third-party extra-usage rejections (%s): 0\n", window)
+		return
+	}
+	for _, a := range sortedKeys(counts) {
+		_, _ = fmt.Fprintf(w, "%s third-party extra-usage rejections (%s): %d\n", a, window, counts[a])
+	}
 }
 
 func sortedKeys(m map[string]int) []string {
