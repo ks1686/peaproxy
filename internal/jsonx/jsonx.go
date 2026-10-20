@@ -196,45 +196,35 @@ func DropTopLevelKeys(raw []byte, keys ...string) []byte {
 		want[k] = struct{}{}
 	}
 	spans := topLevelMembers(raw)
-	if len(spans) == 0 {
+	if len(spans) == 0 || !membersReachClose(raw, spans) {
+		return raw
+	}
+	// The object is rebuilt from the members it keeps. Cutting byte ranges in
+	// place panicked when two dropped members were adjacent at the front (the
+	// second cut started before the end of the first).
+	kept := make([][]byte, 0, len(spans))
+	for _, s := range spans {
+		if _, ok := want[s.key]; ok {
+			continue
+		}
+		kept = append(kept, raw[s.keyStart:s.valueEnd])
+	}
+	if len(kept) == len(spans) {
 		return raw
 	}
 	var b bytes.Buffer
 	b.Grow(len(raw))
-	pos := 0
-	dropped := false
-	for i, s := range spans {
-		if _, ok := want[s.key]; !ok {
-			continue
-		}
-		dropped = true
-		start, end := memberCut(raw, spans, i)
-		b.Write(raw[pos:start])
-		pos = end
-	}
-	if !dropped {
-		return raw
-	}
-	b.Write(raw[pos:])
+	b.WriteByte('{')
+	b.Write(bytes.Join(kept, []byte{','}))
+	b.WriteByte('}')
 	return b.Bytes()
 }
 
-// memberCut returns the byte range to delete for spans[i], including one
-// adjacent comma so the remaining object stays valid.
-func memberCut(raw []byte, spans []memberSpan, i int) (start, end int) {
-	s := spans[i]
-	start, end = s.keyStart, s.valueEnd
-	if i > 0 {
-		// Drop the comma between the previous member and this one.
-		prev := spans[i-1].valueEnd
-		return prev, end
-	}
-	// First member: drop a following comma if present.
-	j := skipSpace(raw, end)
-	if j < len(raw) && raw[j] == ',' {
-		end = j + 1
-	}
-	return start, end
+// membersReachClose reports whether spans cover the whole object, so a
+// rebuild cannot silently drop members a partial scan never reached.
+func membersReachClose(raw []byte, spans []memberSpan) bool {
+	j := skipSpace(raw, spans[len(spans)-1].valueEnd)
+	return j == len(raw)-1 && raw[j] == '}'
 }
 
 type memberSpan struct {
