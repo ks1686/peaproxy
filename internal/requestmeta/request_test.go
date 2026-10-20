@@ -2,6 +2,7 @@ package requestmeta
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -19,7 +20,7 @@ func TestWithRequestKeepsMetadataSeparateFromContextDeadline(t *testing.T) {
 	if !ok {
 		t.Fatal("request metadata missing")
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("metadata = %#v, want %#v", got, want)
 	}
 	gotDeadline, ok := gotCtx.Deadline()

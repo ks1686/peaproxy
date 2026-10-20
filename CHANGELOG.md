@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Claude OAuth: a request from a native Claude Code build (CLI, Agent SDK CLI or TypeScript SDK, VS Code) reaches Anthropic with that build's own User-Agent, Stainless headers (except the retry count), session id and betas, plus only `claude-code-20250219` and `oauth-2025-04-20`, instead of PeaProxy's fixed 2.1.280 profile. A request counts as native only when its headers (`User-Agent: claude-cli/x.y.z (external, <entrypoint>)`, `x-app: cli`) and its body (Claude Code's own billing block and `metadata.user_id`) both say so; every other client keeps the fixed profile. Credentials are never forwarded.
+
 ## 3.2.1
 
 - Claude OAuth: Anthropic's "Third-party apps now draw from extra usage, not plan limits" refusal reaches the client as error type (and OpenAI `code`) `extra_usage_required`, quoting Anthropic's sentence and `request_id` and naming the fix (an Anthropic API-key account, or extra usage from the workspace admin), instead of a bare `upstream HTTP 400`. It never retries, fails over or cools down: every retry gets the same answer, and the next account may be a metered key. Every other upstream body still stays out of client errors.

@@ -22,3 +22,21 @@ func TestRequestCtxCarriesClientAnthropicBeta(t *testing.T) {
 		t.Fatalf("AnthropicBeta = %q, want %q", meta.AnthropicBeta, want)
 	}
 }
+
+func TestRequestCtxCarriesNativeClaudeCodeHeadersOnly(t *testing.T) {
+	raw := []byte(`{"model":"claude-opus-5-5","messages":[]}`)
+	native := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(string(raw)))
+	native.Header.Set("User-Agent", "claude-cli/2.1.300 (external, cli)")
+	native.Header.Set("X-App", "cli")
+	meta, _ := requestmeta.FromContext(requestCtx(native, raw))
+	if len(meta.ClaudeCodeHeaders) != 1 || meta.ClaudeCodeHeaders[0].Value != "claude-cli/2.1.300 (external, cli)" {
+		t.Fatalf("native Claude Code headers = %#v", meta.ClaudeCodeHeaders)
+	}
+
+	other := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(string(raw)))
+	other.Header.Set("User-Agent", "opencode/1.0")
+	meta, _ = requestmeta.FromContext(requestCtx(other, raw))
+	if meta.ClaudeCodeHeaders != nil {
+		t.Fatalf("other client got Claude Code headers %#v", meta.ClaudeCodeHeaders)
+	}
+}

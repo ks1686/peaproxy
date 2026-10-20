@@ -178,6 +178,19 @@ func alreadyClaudeCodeCloak(raw []byte) bool {
 	return false
 }
 
+// hasClaudeCodeBillingBlock reports whether the caller's system already holds
+// a Claude Code billing block. Unlike alreadyClaudeCodeCloak, the identity line
+// alone does not count: other harnesses copy that sentence.
+func hasClaudeCodeBillingBlock(raw []byte) bool {
+	for _, text := range collectSystemTexts(raw, false) {
+		text = strings.TrimSpace(text)
+		if strings.HasPrefix(text, billingHeaderPrefix) && strings.Contains(text, "cc_version=") {
+			return true
+		}
+	}
+	return false
+}
+
 func collectCallerSystemTexts(raw []byte) []string {
 	return collectSystemTexts(raw, true)
 }

@@ -63,6 +63,10 @@ const (
 	oauthBetasToolChanges = "mid-conversation-tool-changes-2026-07-01"
 	oauthBetasEffort      = "effort-2025-11-24"
 	oauthBetasCacheTTL    = "extended-cache-ttl-2025-04-11"
+	// nativeOAuthBetas are the only betas added to a native Claude Code
+	// client's own list: the client may run on an API key against PeaProxy and
+	// so omit the OAuth beta the subscription token needs.
+	nativeOAuthBetas = "claude-code-20250219,oauth-2025-04-20"
 	// OAuthBetas is the sonnet-5 baseline with thinking enabled (includes effort).
 	OAuthBetas = oauthBetasPrefix + "," + oauthBetasEffort + "," + oauthBetasCacheTTL
 )
@@ -401,7 +405,7 @@ func (a *Adapter) ListModels(ctx context.Context) ([]catalog.Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.headers(req, "", a.sessionID, nil)
+	a.headers(req, "", a.sessionID, nil, nil)
 	c := *a.httpClient
 	c.Timeout = 8 * time.Second
 	resp, err := c.Do(req)
@@ -476,6 +480,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 	if err := a.ensureToken(ctx); err != nil {
 		return nil, err
 	}
+	native := nativeClaudeCode(ctx, raw)
 	raw = a.shapeOAuthBody(raw)
 	raw, restore := aliasOAuthToolNames(raw)
 	raw = jsonx.SetStream(raw, false)
@@ -484,7 +489,7 @@ func (a *Adapter) Messages(ctx context.Context, raw []byte) ([]byte, error) {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw), raw)
+	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw), raw, native)
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
@@ -505,6 +510,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 	if err := a.ensureToken(ctx); err != nil {
 		return err
 	}
+	native := nativeClaudeCode(ctx, raw)
 	raw = a.shapeOAuthBody(raw)
 	raw, restore := aliasOAuthToolNames(raw)
 	raw = jsonx.SetStream(raw, true)
@@ -513,7 +519,7 @@ func (a *Adapter) MessagesStream(ctx context.Context, raw []byte, w io.Writer) e
 		return err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw), raw)
+	a.headers(httpReq, jsonx.PeekBody(raw).Model, claudeSessionID(raw), raw, native)
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
 		return err
@@ -569,7 +575,12 @@ func (a *Adapter) messagesURL() string {
 	return a.baseURL + "/v1/messages?beta=true"
 }
 
-func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byte) {
+// headers sets Claude Code 2.1.280's inference fingerprint. native, when set,
+// is a real Claude Code client's own identity headers (nativeClaudeCode): they
+// replace the fixed profile, and its betas replace the 2.1.280 list apart from
+// the two a subscription token needs, so the request reaches Anthropic as the
+// build that made it.
+func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byte, native []requestmeta.Header) {
 	a.mu.Lock()
 	tok := a.token.AccessToken
 	a.mu.Unlock()
@@ -581,7 +592,11 @@ func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byt
 	// rejects it, and 1M context works without the beta.
 	meta, _ := requestmeta.FromContext(req.Context())
 	client := requestmeta.DropAnthropicBeta(meta.AnthropicBeta, "context-1m-")
-	req.Header.Set("anthropic-beta", requestmeta.MergeAnthropicBeta(oauthBetas(model, body), client))
+	own := oauthBetas(model, body)
+	if native != nil {
+		own = nativeOAuthBetas
+	}
+	req.Header.Set("anthropic-beta", requestmeta.MergeAnthropicBeta(own, client))
 	req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
 	req.Header.Set("x-app", "cli")
 	req.Header.Set("User-Agent", MessagesUserAgent)
@@ -596,9 +611,25 @@ func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byt
 	req.Header.Set("X-Stainless-Arch", stainlessArch())
 	req.Header.Set("X-Claude-Code-Session-Id", sessionID)
 	req.Header.Set("x-client-request-id", randomUUID())
+	for _, h := range native {
+		req.Header.Set(h.Name, h.Value)
+	}
 	if tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
+}
+
+// nativeClaudeCode returns the client's identity headers when the request came
+// from a native Claude Code build: its headers say so (requestmeta) and the
+// body, before shapeOAuthBody touches it, already carries Claude Code's billing
+// block and a well-formed metadata.user_id. A client that only copied the
+// User-Agent fails the body check and keeps the fixed profile.
+func nativeClaudeCode(ctx context.Context, raw []byte) []requestmeta.Header {
+	meta, _ := requestmeta.FromContext(ctx)
+	if meta.ClaudeCodeHeaders == nil || !hasValidClaudeUserID(raw) || !hasClaudeCodeBillingBlock(raw) {
+		return nil
+	}
+	return meta.ClaudeCodeHeaders
 }
 
 func (a *Adapter) shapeOAuthBody(raw []byte) []byte {

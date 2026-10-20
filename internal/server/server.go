@@ -1039,12 +1039,13 @@ func requestCtx(r *http.Request, raw []byte) context.Context {
 	}
 	peek := jsonx.PeekBody(raw)
 	return requestmeta.WithRequest(ctx, requestmeta.Request{
-		ID:            r.Header.Get("X-Request-Id"),
-		SessionID:     session,
-		Model:         peek.Model,
-		Wire:          wire,
-		Requirements:  requestmeta.RequirementsFromBody(wire, raw),
-		AnthropicBeta: requestmeta.NormalizeAnthropicBeta(strings.Join(r.Header.Values("anthropic-beta"), ",")),
+		ID:                r.Header.Get("X-Request-Id"),
+		SessionID:         session,
+		Model:             peek.Model,
+		Wire:              wire,
+		Requirements:      requestmeta.RequirementsFromBody(wire, raw),
+		AnthropicBeta:     requestmeta.NormalizeAnthropicBeta(strings.Join(r.Header.Values("anthropic-beta"), ",")),
+		ClaudeCodeHeaders: requestmeta.ClaudeCodeHeaders(r.Header),
 	})
 }
 
