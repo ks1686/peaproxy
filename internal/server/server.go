@@ -1235,6 +1235,9 @@ const (
 // A classified limit is named. "upstream HTTP 400" with a null code is what
 // makes a harness stop a turn it could have retried or explained.
 func clientMessage(err error) string {
+	if eu, ok := extraUsageOf(err); ok {
+		return eu.clientMessage()
+	}
 	if gateway.ModelRefusesChat(err) {
 		return err.Error()
 	}
@@ -1274,6 +1277,9 @@ func limitClientMessage(err error) (string, bool) {
 // clientCode is a stable wire code. Empty means the OpenAI envelope keeps
 // code null. Provider bodies are not copied into it.
 func clientCode(err error) string {
+	if router.ExtraUsageRequired(err) {
+		return extraUsageType
+	}
 	if gateway.ModelRefusesChat(err) {
 		return "unsupported_api_for_model"
 	}
@@ -1319,6 +1325,10 @@ func wireError(wr errWire, status int, err error) any {
 	if code == "usage_limit" || code == "rate_limit" {
 		typ = "rate_limit_error"
 	}
+	eu, extra := extraUsageOf(err)
+	if extra {
+		typ = extraUsageType
+	}
 	var codeVal any
 	if code != "" {
 		codeVal = code
@@ -1333,13 +1343,19 @@ func wireError(wr errWire, status int, err error) any {
 			"code":    codeVal,
 		}}
 	case wireAnthropic:
-		return map[string]any{
+		out := map[string]any{
 			"type": "error",
 			"error": map[string]any{
 				"type":    typ,
 				"message": msg,
 			},
 		}
+		// Anthropic's envelope carries request_id at the top level, and it is
+		// what Anthropic support asks for.
+		if extra && eu.RequestID != "" {
+			out["request_id"] = eu.RequestID
+		}
+		return out
 	default:
 		return map[string]string{"error": msg}
 	}

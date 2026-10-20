@@ -512,11 +512,11 @@ func TestEdgeTransport503IsRetriedAndCooledBriefly(t *testing.T) {
 		t.Fatalf("out=%q", out.String())
 	}
 
-	gw.markCooldown("only", "m", adapter.HTTPError{Status: http.StatusServiceUnavailable, Body: "upstream connect error or disconnect/reset before headers. reset reason: connection timeout"})
-	for _, c := range gw.Cooldowns() {
-		if c.RemainingMs > 5000 {
-			t.Fatalf("edge transport failure cooled the account for %dms, want at most 5s", c.RemainingMs)
-		}
+	// The 5s bound for an account that has company is pinned in
+	// transient_cooldown_test.go; the only account is not cooled at all.
+	gw.markCooldown("only", "m", adapter.HTTPError{Status: http.StatusServiceUnavailable, Body: "upstream connect error or disconnect/reset before headers. reset reason: connection timeout"}, true)
+	if cs := gw.Cooldowns(); len(cs) != 0 {
+		t.Fatalf("an edge transport failure cooled the only account: %+v", cs)
 	}
 }
 

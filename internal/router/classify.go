@@ -57,12 +57,29 @@ func Classify(err error) FailoverClass {
 	}
 	var he adapter.HTTPError
 	if errors.As(err, &he) {
+		if ExtraUsageRequired(err) {
+			return FailoverNone
+		}
 		if c := classifyStatus(he.Status); c != FailoverNone {
 			return c
 		}
 		return classifyBody(he.Body)
 	}
 	return FailoverNone
+}
+
+// ExtraUsageRequired reports Anthropic's refusal to bill a request against
+// the plan. Another try on the same account gets the same answer, and a
+// cooldown would only fail every request after it with a 503 that hides the
+// cause. Failing over is a spend decision: the next account may be a metered
+// API key. So it is never a failover class, whatever words a future pattern
+// list learns.
+func ExtraUsageRequired(err error) bool {
+	var he adapter.HTTPError
+	if !errors.As(err, &he) || he.Status < 400 || he.Status >= 500 {
+		return false
+	}
+	return adapter.IsExtraUsageRefusal(he.Body)
 }
 
 // Transient reports a 502, a 504, or a 503 whose body is an edge proxy's

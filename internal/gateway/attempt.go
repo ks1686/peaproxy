@@ -134,6 +134,8 @@ type failState struct {
 	Refused          bool
 	AdmissionSkipped bool
 	SlowPrelude      bool
+	// Sole is set when every candidate for the request is one account.
+	Sole bool
 }
 
 func (p failPolicy) replay(err error) bool {
@@ -159,7 +161,7 @@ func (g *Gateway) noteAttempt(err error, account, model string, st *failState, p
 		return true
 	}
 	if p.replay(err) {
-		g.markCooldown(account, model, err)
+		g.markCooldown(account, model, err, st.Sole)
 		return true
 	}
 	return false
@@ -188,7 +190,7 @@ func (g *Gateway) noteStreamAttempt(err error, wrote bool, account, model string
 		return true, nil
 	}
 	if failoverOn(err) {
-		g.markCooldown(account, model, err)
+		g.markCooldown(account, model, err, st.Sole)
 		return true, nil
 	}
 	return false, err

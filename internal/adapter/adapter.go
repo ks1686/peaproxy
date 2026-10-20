@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/catalog"
@@ -173,6 +174,18 @@ func (e HTTPError) Error() string {
 // Sanitized is safe for telemetry. It never includes the upstream body.
 func (e HTTPError) Sanitized() string {
 	return fmt.Sprintf("upstream HTTP %d", e.Status)
+}
+
+// extraUsagePhrase is how Anthropic refuses subscription traffic it counts as
+// a third-party app: the workspace plan limits do not cover it, only extra
+// usage the admin buys does.
+const extraUsagePhrase = "third-party apps now draw from extra usage"
+
+// IsExtraUsageRefusal reports whether text carries Anthropic's extra-usage
+// refusal. It reads an upstream body or a recorded error string, so the
+// router and the error store agree on what counts.
+func IsExtraUsageRefusal(text string) bool {
+	return strings.Contains(strings.ToLower(text), extraUsagePhrase)
 }
 
 // NewHTTPError records a completed HTTP response, including Retry-After when present.

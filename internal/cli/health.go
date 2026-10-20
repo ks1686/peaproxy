@@ -9,6 +9,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/adapters"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/gateway"
+	"github.com/ks1686/peaproxy/internal/usage"
 	"github.com/ks1686/peaproxy/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -16,10 +17,12 @@ import (
 func healthCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "health",
-		Short: "Adapter health, quota remaining, cooldowns, and bind flags matching GET /admin/health",
+		Short: "Adapter health, quota remaining, cooldowns, and bind flags matching GET /admin/health, plus extra-usage refusals",
 		Long: `Prints the same fields as GET /admin/health (no admin token on loopback).
 Refreshes live ListModels so adapterHealth, quota, and models match a running serve.
 Quota remaining is omitted when the provider does not report it (never invented as 0).
+One line GET /admin/health lacks: Anthropic third-party extra-usage refusals per
+account over the last 24h, from errors.jsonl (unknown when requestLog is off).
 
 Examples:
   peaproxy health
@@ -80,6 +83,20 @@ Examples:
 				}
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "  %s\treason=%s\tremainingMs=%d\tuntil=%s%s\n",
 					c.AccountID, c.Reason, c.RemainingMs, c.Until.UTC().Format(time.RFC3339), quotaBit)
+			}
+			// The window is fixed: health is a glance, and errors summary
+			// takes --since for anything longer. With request logging off no
+			// failure is recorded, so the count is unknown, not zero.
+			errorLog := ""
+			if gw.Usage != nil {
+				errorLog = gw.Usage.ErrorLogPath()
+			}
+			if errorLog == "" {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "third-party extra-usage rejections (24h): unknown (requestLog is off, so failures are not recorded)")
+			} else if recs, err := errorRecordsSince(errorLog, time.Now().Add(-24*time.Hour)); err != nil {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "third-party extra-usage rejections (24h): unknown (%v)\n", err)
+			} else {
+				printExtraUsage(cmd.OutOrStdout(), usage.SummarizeErrors(recs).ExtraUsage, "24h")
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cooldownTtlMs: %d\nallowNonLoopback: %v\nlan: %v\nadminTokenRequired: %v\n",
 				gateway.CooldownTTL.Milliseconds(), cfg.AllowNonLoopback, lan, adminRequired)

@@ -58,7 +58,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 	}
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	coalesce := g.live().RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
@@ -234,7 +234,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -244,6 +244,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 			continue
 		}
 		dest := newRouteRewriter(guard, model, client)
+		guard.OnCommit(g.probePassed(inst.Provider.ID))
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
 			if err := budgetAttempts.take(); err != nil {
@@ -327,7 +328,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	}
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	tried := false
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
@@ -416,7 +417,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	}
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	tried := false
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
@@ -504,7 +505,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	}
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	tried := false
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
@@ -613,7 +614,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, Call, erro
 	}
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -726,7 +727,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	guard := streamguard.New(watch, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeResponses](cands, xerr == nil)
 	for i, inst := range cands {
@@ -746,6 +747,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			}
 			guard.Reset()
 			watch.reset()
+			guard.OnCommit(g.probePassed(inst.Provider.ID))
 			if budgetAttempts.final(i, reachable) {
 				guard.Unbounded()
 			}
@@ -793,6 +795,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		}
 		guard.Reset()
 		watch.reset()
+		guard.OnCommit(g.probePassed(inst.Provider.ID))
 		if budgetAttempts.final(i, reachable) {
 			guard.Unbounded()
 		}
@@ -883,7 +886,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, Call, err
 	}
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -987,7 +990,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	guard := streamguard.New(cw, 0, g.streamPrelude(model))
 	var last error
 	var lastAccount string
-	var st failState
+	st := failState{Sole: soleCandidate(cands)}
 	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeMessages](cands, xerr == nil)
 	for i, inst := range cands {
@@ -1006,6 +1009,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 				return Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
 			}
 			guard.Reset()
+			guard.OnCommit(g.probePassed(inst.Provider.ID))
 			if budgetAttempts.final(i, reachable) {
 				guard.Unbounded()
 			}
@@ -1041,6 +1045,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			return Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
 		}
 		guard.Reset()
+		guard.OnCommit(g.probePassed(inst.Provider.ID))
 		if budgetAttempts.final(i, reachable) {
 			guard.Unbounded()
 		}
