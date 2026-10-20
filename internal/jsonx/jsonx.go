@@ -80,7 +80,33 @@ func SetTopLevelRaw(raw []byte, key string, value []byte) []byte {
 	if key == "" {
 		return raw
 	}
-	for _, s := range topLevelMembers(raw) {
+	spans := topLevelMembers(raw)
+	seen := 0
+	for _, s := range spans {
+		if s.key == key {
+			seen++
+		}
+	}
+	if seen > 1 && membersReachClose(raw, spans) {
+		// A decoder takes the last duplicate, so patching only the first would
+		// leave the old value in force. Keep the first position, drop the rest.
+		kept := make([][]byte, 0, len(spans))
+		first := true
+		for _, s := range spans {
+			if s.key != key {
+				kept = append(kept, raw[s.keyStart:s.valueEnd])
+				continue
+			}
+			if first {
+				member := append(append([]byte(nil), raw[s.keyStart:s.valueStart]...), value...)
+				kept = append(kept, member)
+				first = false
+			}
+		}
+		out := append([]byte{'{'}, bytes.Join(kept, []byte{','})...)
+		return append(out, '}')
+	}
+	for _, s := range spans {
 		if s.key != key {
 			continue
 		}

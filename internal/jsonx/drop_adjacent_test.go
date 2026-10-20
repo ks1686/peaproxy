@@ -55,3 +55,17 @@ func FuzzDropTopLevelKeys(f *testing.F) {
 		}
 	})
 }
+
+func TestSetTopLevelRawWinsOverDuplicateKeys(t *testing.T) {
+	out := SetStream([]byte(`{"stream":true,"model":"m","stream":false}`), true)
+	var p struct {
+		Stream bool   `json:"stream"`
+		Model  string `json:"model"`
+	}
+	if err := json.Unmarshal(out, &p); err != nil {
+		t.Fatalf("invalid JSON %q: %v", out, err)
+	}
+	if !p.Stream || p.Model != "m" {
+		t.Fatalf("SetStream(true) on duplicated keys decodes to stream=%v model=%q: %s", p.Stream, p.Model, out)
+	}
+}
