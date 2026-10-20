@@ -944,7 +944,7 @@ func (s *Server) settingsPayload() map[string]any {
 		usagePath = s.gw.Usage.Path()
 	}
 	backend := "file"
-	backendNote := "AES-GCM file next to the config (secrets.enc). Tokens are never shown here."
+	backendNote := "AES-GCM file next to the config (secrets.<config>.enc). Tokens are never shown here."
 	if path := s.gw.ConfigPath(); path != "" {
 		if store, err := config.OpenStore(path); err == nil && store != nil {
 			backend = string(store.Backend())

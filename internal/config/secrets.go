@@ -20,9 +20,10 @@ func configDir(path string) string {
 	return dir
 }
 
-// OpenStore opens the secret backend for a config file path.
+// OpenStore opens the secret store of a config file. Each config file has its
+// own; see secretstore.OpenFor.
 func OpenStore(configPath string) (*secretstore.Store, error) {
-	return secretstore.Open(configDir(configPath))
+	return secretstore.OpenFor(configPath)
 }
 
 type secretReader interface {
@@ -38,7 +39,7 @@ type secretWriter interface {
 // read back. SaveMerged needs that set to tell a corrupt secret apart from one
 // the user deliberately deleted (#54).
 func hydrateSecretsReporting(path string, cfg *Config) (unreadableSecrets, error) {
-	store, err := secretstore.Open(configDir(path))
+	store, err := secretstore.OpenFor(path)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +138,7 @@ func warnUnreadable(w io.Writer, id string, kind secretstore.Kind) {
 }
 
 func persistSecrets(path string, cfg Config) (Config, error) {
-	store, err := secretstore.Open(configDir(path))
+	store, err := secretstore.OpenFor(path)
 	if err != nil {
 		return Config{}, err
 	}

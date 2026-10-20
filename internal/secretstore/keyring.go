@@ -64,7 +64,7 @@ func probeKeyring(kr keyringAPI) error {
 // currentChunks reads the base item's header. Only not-found means "no
 // chunks"; any other read error propagates so callers never orphan chunks.
 func (s *Store) currentChunks(key string) (chunkRef, error) {
-	v, err := s.kr.Get(Service, key)
+	v, err := s.kr.Get(Service, s.krPrefix+key)
 	if err != nil {
 		if isNotFound(err) {
 			return chunkRef{}, nil
@@ -87,7 +87,7 @@ func (s *Store) replaceableChunks(key string) (chunkRef, error) {
 
 func (s *Store) dropChunks(key string, ref chunkRef) error {
 	for i := 0; i < ref.n; i++ {
-		if err := s.kr.Delete(Service, ref.key(key, i)); err != nil && !isNotFound(err) {
+		if err := s.kr.Delete(Service, s.krPrefix+ref.key(key, i)); err != nil && !isNotFound(err) {
 			return err
 		}
 	}
@@ -96,7 +96,7 @@ func (s *Store) dropChunks(key string, ref chunkRef) error {
 
 func (s *Store) writeChunks(key string, ref chunkRef, parts []string) error {
 	for i, part := range parts {
-		if err := s.kr.Set(Service, ref.key(key, i), part); err != nil {
+		if err := s.kr.Set(Service, s.krPrefix+ref.key(key, i), part); err != nil {
 			return err
 		}
 	}
@@ -142,7 +142,7 @@ func (s *Store) keyringSet(key, value string) error {
 		}
 		stored = fresh.header()
 	}
-	if err := s.kr.Set(Service, key, stored); err != nil {
+	if err := s.kr.Set(Service, s.krPrefix+key, stored); err != nil {
 		_ = s.settle(idx, mine, old)
 		return err
 	}
@@ -164,7 +164,7 @@ func (s *Store) keyringGet(key string) (string, error) {
 	}
 	var last string
 	for attempt := 0; attempt < 3; attempt++ {
-		v, err := s.kr.Get(Service, key)
+		v, err := s.kr.Get(Service, s.krPrefix+key)
 		if err != nil {
 			if isNotFound(err) {
 				return "", ErrNotFound
@@ -192,7 +192,7 @@ func (s *Store) keyringGet(key string) (string, error) {
 func (s *Store) readChunks(key string, ref chunkRef) (value string, missing int, err error) {
 	var b strings.Builder
 	for i := 0; i < ref.n; i++ {
-		part, err := s.kr.Get(Service, ref.key(key, i))
+		part, err := s.kr.Get(Service, s.krPrefix+ref.key(key, i))
 		if isNotFound(err) {
 			return "", i, nil
 		}
@@ -213,7 +213,7 @@ func (s *Store) deleteEntry(key string) error {
 	if err := s.dropChunks(key, ref); err != nil {
 		return err
 	}
-	if err := s.kr.Delete(Service, key); err != nil && !isNotFound(err) {
+	if err := s.kr.Delete(Service, s.krPrefix+key); err != nil && !isNotFound(err) {
 		return err
 	}
 	return nil

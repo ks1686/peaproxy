@@ -41,3 +41,36 @@ func TestGetFallsBackToUnlockedReadInReadOnlyDir(t *testing.T) {
 		t.Fatal("Set succeeded without the lock in a read-only dir")
 	}
 }
+
+// A config directory PeaProxy cannot write to cannot be migrated, so it is
+// read through the legacy store as it stands.
+func TestAnUnmigratedReadOnlyDirReadsTheLegacyStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block file creation on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	legacy, err := OpenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Set("acct", KindAPIKey, "sk-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, LockFileName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	s, err := OpenFor(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("OpenFor on a read-only, unmigrated dir: %v", err)
+	}
+	if v, err := s.Get("acct", KindAPIKey); err != nil || v != "sk-legacy" {
+		t.Fatalf("Get = %q, %v; want the legacy secret", v, err)
+	}
+}

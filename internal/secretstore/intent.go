@@ -121,8 +121,12 @@ func (s *Store) sweep(idx index) {
 }
 
 func (s *Store) loadIndex() (index, error) {
+	return loadIndexFile(s.indexPath())
+}
+
+func loadIndexFile(path string) (index, error) {
 	idx := index{keys: map[string]struct{}{}, pending: map[pending]struct{}{}}
-	b, err := os.ReadFile(s.indexPath())
+	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return idx, nil

@@ -70,3 +70,27 @@ func TestSaveMergedWorksWhenTheLANTokenComesFromTheEnvironment(t *testing.T) {
 		t.Fatalf("the environment's admin token was written into the config file:\n%s", b)
 	}
 }
+
+// Two config files in one directory: saving the second used to prune the
+// first one's secrets, because the store was per directory.
+func TestTwoConfigsInOneDirectoryKeepTheirOwnKeys(t *testing.T) {
+	dir := t.TempDir()
+	save := func(name, id, key string) string {
+		path := filepath.Join(dir, name)
+		cfg := Default()
+		cfg.Providers = []Provider{{ID: id, Adapter: "openai_compat", Tier: "paid", BaseURL: "http://127.0.0.1:1/v1", APIKey: key}}
+		if err := Save(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	a := save("a.yaml", "acct-a", "sk-a")
+	save("b.yaml", "acct-b", "sk-b")
+	cfg, err := Load(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Providers) != 1 || cfg.Providers[0].APIKey != "sk-a" {
+		t.Fatalf("a.yaml lost its key after b.yaml was saved: %+v", cfg.Providers)
+	}
+}

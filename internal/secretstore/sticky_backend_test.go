@@ -23,7 +23,7 @@ func TestAKeychainConfigDoesNotFallBackToTheFileOnAFailedProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	withKeyringOpener(t, func(string) (*Store, error) { return nil, errors.New("User interaction is not allowed") })
-	if s, err := openAuto(dir); err == nil {
+	if s, err := openAuto(dir, ""); err == nil {
 		t.Fatalf("opened the %v backend for a config whose secrets are in the keychain", s.Backend())
 	}
 }
@@ -36,7 +36,7 @@ func TestAFileConfigStaysOnTheFileWhenTheKeychainWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 	withKeyringOpener(t, func(d string) (*Store, error) { return &Store{backend: BackendKeyring, dir: d}, nil })
-	s, err := openAuto(dir)
+	s, err := openAuto(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +47,11 @@ func TestAFileConfigStaysOnTheFileWhenTheKeychainWorks(t *testing.T) {
 
 func TestAFreshConfigPrefersTheKeychainAndFallsBackToTheFile(t *testing.T) {
 	withKeyringOpener(t, func(d string) (*Store, error) { return &Store{backend: BackendKeyring, dir: d}, nil })
-	if s, err := openAuto(t.TempDir()); err != nil || s.Backend() != BackendKeyring {
+	if s, err := openAuto(t.TempDir(), ""); err != nil || s.Backend() != BackendKeyring {
 		t.Fatalf("fresh dir with a working keychain: %v, %v", s, err)
 	}
 	withKeyringOpener(t, func(string) (*Store, error) { return nil, errors.New("no keychain") })
-	if s, err := openAuto(t.TempDir()); err != nil || s.Backend() != BackendFile {
+	if s, err := openAuto(t.TempDir(), ""); err != nil || s.Backend() != BackendFile {
 		t.Fatalf("fresh dir without a keychain: %v, %v", s, err)
 	}
 }
@@ -67,7 +67,7 @@ func TestAnEmptyKeychainIndexDoesNotPinTheKeychain(t *testing.T) {
 		t.Fatal(err)
 	}
 	withKeyringOpener(t, func(string) (*Store, error) { return nil, errors.New("locked") })
-	s, err := openAuto(dir)
+	s, err := openAuto(dir, "")
 	if err != nil || s.Backend() != BackendFile {
 		t.Fatalf("empty index with a file store: %v, %v; want the file backend", s, err)
 	}
