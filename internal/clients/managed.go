@@ -173,7 +173,7 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 	case "codex":
 		return insertCodex(raw, baseURL, model), nil
 	case "continue":
-		return insertContinue(raw, baseURL, model), nil
+		return insertContinue(raw, baseURL, model)
 	case "pi":
 		return insertPi(raw, baseURL)
 	case "claude-code":
@@ -613,29 +613,62 @@ func removeCodex(text string) string {
 	return joined
 }
 
-func insertContinue(raw []byte, baseURL, model string) []byte {
+// continueWas marks a top-level models header PeaProxy rewrote; the original
+// line follows it, so disconnect can put it back.
+const continueWas = "# peaproxy-was: "
+
+func insertContinue(raw []byte, baseURL, model string) ([]byte, error) {
 	text := strings.TrimRight(removeContinue(string(raw)), "\n")
-	block := "  # peaproxy-owned-start\n  - name: PeaProxy\n    provider: openai\n    model: " + quote(model) + "\n    apiBase: " + quote(baseURL) + "\n    apiKey: peaproxy\n  # peaproxy-owned-end\n"
+	block := "  # peaproxy-owned-start\n  - name: PeaProxy\n    provider: openai\n    model: " + quote(model) + "\n    apiBase: " + quote(baseURL) + "\n    apiKey: peaproxy\n  # peaproxy-owned-end"
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "models:" {
-			out := append([]string{}, lines[:i+1]...)
-			out = append(out, strings.TrimRight(block, "\n"))
-			out = append(out, lines[i+1:]...)
-			return []byte(strings.Join(out, "\n") + "\n")
+		// Only the top-level key: an indented "models:" belongs to some other
+		// mapping, and adding PeaProxy there would configure nothing.
+		if !strings.HasPrefix(line, "models:") {
+			continue
 		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "models:"))
+		header := line
+		switch {
+		case rest == "" || strings.HasPrefix(rest, "#"):
+			// A block sequence header, possibly with a comment.
+		case strings.HasPrefix(rest, "[]"):
+			// An empty flow list becomes a block header; the original line is
+			// kept so disconnect restores it.
+			if tail := strings.TrimSpace(strings.TrimPrefix(rest, "[]")); tail != "" && !strings.HasPrefix(tail, "#") {
+				return nil, ErrGuidedSetup
+			}
+			header = "models: " + continueWas + line
+		default:
+			// A flow list with entries, an alias or a tag: not something to
+			// merge into by editing lines. Refuse rather than corrupt it.
+			return nil, ErrGuidedSetup
+		}
+		out := append([]string{}, lines[:i]...)
+		out = append(out, header, block)
+		out = append(out, lines[i+1:]...)
+		return []byte(strings.Join(out, "\n") + "\n"), nil
 	}
 	if text != "" {
 		text += "\n"
 	}
-	return []byte(text + "models:\n" + block)
+	// The key is PeaProxy's own here, so disconnect removes it with the block.
+	return []byte(text + continueOwnedKey + "\n" + block + "\n"), nil
 }
+
+const continueOwnedKey = "models: # peaproxy-owned-key"
 
 func removeContinue(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	skip := false
 	for _, line := range lines {
+		if line == continueOwnedKey {
+			continue
+		}
+		if strings.HasPrefix(line, "models: "+continueWas) {
+			line = strings.TrimPrefix(line, "models: "+continueWas)
+		}
 		trim := strings.TrimSpace(line)
 		if trim == "# peaproxy-owned-start" {
 			skip = true
