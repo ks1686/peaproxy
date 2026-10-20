@@ -601,9 +601,7 @@ func removeCodex(text string) string {
 		if strings.HasSuffix(trim, codexOwned) {
 			continue
 		}
-		if strings.HasPrefix(line, codexWas) {
-			line = strings.TrimPrefix(line, codexWas)
-		}
+		line = strings.TrimPrefix(line, codexWas)
 		out = append(out, line)
 	}
 	joined := strings.Join(out, "\n")
@@ -666,9 +664,7 @@ func removeContinue(text string) string {
 		if line == continueOwnedKey {
 			continue
 		}
-		if strings.HasPrefix(line, "models: "+continueWas) {
-			line = strings.TrimPrefix(line, "models: "+continueWas)
-		}
+		line = strings.TrimPrefix(line, "models: "+continueWas)
 		trim := strings.TrimSpace(line)
 		if trim == "# peaproxy-owned-start" {
 			skip = true
