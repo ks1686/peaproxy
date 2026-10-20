@@ -3,6 +3,7 @@ package anthropic_oauth
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -106,5 +107,26 @@ func TestMessagesStreamForwardsNativeClaudeCodeIdentity(t *testing.T) {
 	}
 	if gotUA != nativeUA {
 		t.Fatalf("stream User-Agent %q, want %q", gotUA, nativeUA)
+	}
+}
+
+func TestMessagesNativeKeepsLongClaudeCodeBetaList(t *testing.T) {
+	// A future Claude Code build may send more betas than today's 11; every
+	// one must reach Anthropic, since the 2.1.280 list no longer backs it up.
+	names := []string{"claude-code-20250219", "context-1m-2025-08-07"}
+	for i := 0; i < 18; i++ {
+		names = append(names, fmt.Sprintf("future-beta-%02d-2027-01-01", i))
+	}
+	h := http.Header{}
+	h.Set("User-Agent", nativeUA)
+	h.Set("X-App", "cli")
+	ctx := requestmeta.WithRequest(context.Background(), requestmeta.Request{
+		AnthropicBeta:     requestmeta.NormalizeAnthropicBeta(strings.Join(names, ",")),
+		ClaudeCodeHeaders: requestmeta.ClaudeCodeHeaders(h),
+	})
+	_, _, beta := captureMessagesCtx(t, ctx, "claude-sonnet-5", nativeBody)
+	want := "claude-code-20250219,oauth-2025-04-20," + strings.Join(names[2:], ",")
+	if beta != want {
+		t.Fatalf("anthropic-beta\n got %s\nwant %s", beta, want)
 	}
 }

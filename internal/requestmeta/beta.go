@@ -3,7 +3,12 @@ package requestmeta
 import "strings"
 
 const (
-	maxAnthropicBetas   = 16
+	// maxAnthropicBetas bounds the header, with headroom over what a client
+	// sends: a native Claude Code client's list is forwarded as its only
+	// betas, so a name cut here is a feature the request loses. Claude Code
+	// 2.1.304 sends 11. The cap counts names an adapter drops later
+	// (context-1m-, oauth-) too.
+	maxAnthropicBetas   = 32
 	maxAnthropicBetaLen = 64
 )
 

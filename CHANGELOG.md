@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Claude OAuth: a request from a native Claude Code build (CLI, Agent SDK CLI or TypeScript SDK, VS Code) reaches Anthropic with that build's own User-Agent, Stainless headers (except the retry count), session id and betas, plus only `claude-code-20250219` and `oauth-2025-04-20`, instead of PeaProxy's fixed 2.1.280 profile. A request counts as native only when its headers (`User-Agent: claude-cli/x.y.z (external, <entrypoint>)`, `x-app: cli`) and its body (Claude Code's own billing block and `metadata.user_id`) both say so; every other client keeps the fixed profile. Credentials are never forwarded.
+- A client's `anthropic-beta` list is kept up to 32 names (was 16), so a native Claude Code list cannot lose a beta it needs.
 
 ## 3.2.1
 
