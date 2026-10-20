@@ -85,3 +85,26 @@ func TestClassifyReasonOmitsSecrets(t *testing.T) {
 		t.Fatal("plain errors are not retryable")
 	}
 }
+
+// Anthropic's "Third-party apps now draw from extra usage" refusal answers the
+// same way on every retry, so it must never cool the account or fail over to
+// one that may be a metered API key. That holds even if the status changes or
+// a future pattern list learns the word "usage".
+func TestExtraUsageRefusalIsNeverAFailover(t *testing.T) {
+	const body = `{"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going."},"request_id":"req_011CUextra"}`
+	for _, status := range []int{http.StatusBadRequest, http.StatusForbidden, http.StatusTooManyRequests} {
+		err := adapter.HTTPError{Status: status, Body: body}
+		if !ExtraUsageRequired(err) {
+			t.Fatalf("%d: refusal not recognised", status)
+		}
+		if c := Classify(err); c != FailoverNone {
+			t.Fatalf("%d: classified as %s", status, c)
+		}
+		if Retryable(err) || Transient(err) || ClientCode(err) != "" {
+			t.Fatalf("%d: refusal treated as retryable", status)
+		}
+	}
+	if ExtraUsageRequired(adapter.HTTPError{Status: http.StatusBadRequest, Body: `{"error":{"message":"messages must be an array"}}`}) {
+		t.Fatal("ordinary 400 recognised as an extra-usage refusal")
+	}
+}
