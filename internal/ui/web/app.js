@@ -1255,7 +1255,7 @@ function settingsPage(root) {
       <p>Config path: <code id="cfg-path"></code> <button class="btn" id="copy-path">Copy path</button></p>
       <p>Secret backend: <strong id="secret-backend"></strong></p>
       <p class="muted" id="secret-note"></p>
-      <p class="muted">YAML lists accounts only. Tokens and inline API keys stay in the keychain or <code>secrets.enc</code> — never shown here.</p>
+      <p class="muted">YAML lists accounts only. Tokens and inline API keys stay in the keychain or the encrypted <code>secrets.&lt;config&gt;.enc</code> next to the config — never shown here.</p>
     </section>
     <section class="card">
       <h2>Request log</h2>

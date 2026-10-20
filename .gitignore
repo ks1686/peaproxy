@@ -39,6 +39,11 @@ scripts/node_modules/
 *.csr
 secrets.enc
 secrets.index
+secrets.*.enc
+secrets.*.index
+secrets.*.carry
+secrets.*.migrating
+secrets.id
 secrets.lock
 config.lock
 peaproxy.yaml
