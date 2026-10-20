@@ -686,6 +686,12 @@ func (g *Gateway) admit(ctx context.Context, account string) (func(), error) {
 	if g == nil || g.admission == nil {
 		return func() {}, nil
 	}
+	g.mu.RLock()
+	_, recovering := g.recovering[account]
+	g.mu.RUnlock()
+	if recovering && !g.admission.TryHalfOpen(account) {
+		return nil, errProbeBusy
+	}
 	release, err := g.admission.Acquire(ctx, account)
 	if err != nil {
 		g.admission.EndHalfOpen(account)
@@ -759,8 +765,13 @@ func admittedSlot[T any](g *Gateway, ctx context.Context, account string, f func
 // rather than something being wrong with it. Such an account is skipped, never
 // cooled down: one burst must not take an account out of rotation (#74).
 func admissionRejection(err error) bool {
-	return errors.Is(err, router.ErrAdmissionQueue) || errors.Is(err, router.ErrAdmissionWait)
+	return errors.Is(err, router.ErrAdmissionQueue) || errors.Is(err, router.ErrAdmissionWait) || errors.Is(err, errProbeBusy)
 }
+
+// errProbeBusy is an attempt on an account recovering from cooldown while
+// another request holds its half-open probe. Nothing was sent; the request
+// moves on like any other admission refusal.
+var errProbeBusy = errors.New("account is recovering from cooldown and another request is probing it")
 
 func (g *Gateway) bindAffinity(session, model, account string) {
 	if session == "" || model == "" || account == "" || !g.live().AffinityEnabled() {
@@ -1073,15 +1084,6 @@ func omitZenAlias(matched []instance) []instance {
 	return out
 }
 
-// probeLocked reports whether this request may use a recovering account: it
-// takes the half-open probe, or with peek only checks that nobody holds it.
-func (g *Gateway) probeLocked(account string, peek bool) bool {
-	if peek {
-		return !g.admission.Probing(account)
-	}
-	return g.admission.TryHalfOpen(account)
-}
-
 func containsID(ids []string, want string) bool {
 	for _, id := range ids {
 		if id == want {
@@ -1156,7 +1158,11 @@ func (g *Gateway) candidatesFor(model, session string, peek bool) ([]instance, t
 			}
 			continue
 		}
-		if _, rec := recovering[inst.Provider.ID]; rec && g.admission != nil && !g.probeLocked(inst.Provider.ID, peek) {
+		// The probe itself is taken in admit, when an attempt on the account
+		// actually starts. Taking it here held it for accounts a request listed
+		// but never tried, which shut every other request out of a healthy
+		// account until the probe expired.
+		if _, rec := recovering[inst.Provider.ID]; rec && g.admission != nil && g.admission.Probing(inst.Provider.ID) {
 			if until.IsZero() {
 				until = now.Add(time.Second)
 			}
