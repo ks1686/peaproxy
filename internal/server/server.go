@@ -281,7 +281,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if err != nil && !sw.started {
 			status = statusOf(err)
 		}
-		s.record(call.Account, call.Deployment, peek.Model, "openai", "/v1/chat/completions", true, status, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
+		s.record(call.Account, call.Deployment, peek.Model, "openai", "/v1/chat/completions", true, status, err, inspectorPreview(raw, ""), started, sw.usageBody(), sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireOpenAI, err)
 		}
@@ -319,7 +319,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		if err != nil && !sw.started {
 			status = statusOf(err)
 		}
-		s.record(call.Account, call.Deployment, peek.Model, "responses", "/v1/responses", true, status, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
+		s.record(call.Account, call.Deployment, peek.Model, "responses", "/v1/responses", true, status, err, inspectorPreview(raw, ""), started, sw.usageBody(), sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireOpenAI, err)
 		}
@@ -445,7 +445,7 @@ func (s *Server) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		if err != nil && !sw.started {
 			status = statusOf(err)
 		}
-		s.record(call.Account, call.Deployment, peek.Model, "claude", "/v1/messages", true, status, err, inspectorPreview(raw, ""), started, sw.usage, sw.terminal())
+		s.record(call.Account, call.Deployment, peek.Model, "claude", "/v1/messages", true, status, err, inspectorPreview(raw, ""), started, sw.usageBody(), sw.terminal())
 		if err != nil && !sw.started {
 			writeErr(w, wireAnthropic, err)
 		}
@@ -1389,7 +1389,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 type sseWriter struct {
 	http.ResponseWriter
 	started bool
-	usage   []byte
+	// Usage capture works on whole SSE lines, because a relayed stream is cut
+	// into writes at arbitrary byte boundaries. Counters are merged across
+	// frames by usage.ParseCounters (Claude puts input and cache counters in
+	// message_start and output tokens in the final message_delta), so the first
+	// usage line and the most recent ones are enough; keeping only those bounds
+	// memory on a long stream.
+	linePending []byte
+	usageFirst  []byte
+	usageRecent [][]byte
 	// tail is the last terminalTailBytes written to the client, used to say
 	// whether a turn actually ended with an event the client recognises.
 	tail []byte
@@ -1406,9 +1414,7 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 		s.Header().Set("Cache-Control", "no-cache")
 		s.started = true
 	}
-	if bytes.Contains(p, []byte(`"usage"`)) {
-		s.usage = append([]byte(nil), p...)
-	}
+	s.captureUsage(p)
 	// Keep only the tail, without reallocating on every write once the tail is
 	// full: append into the existing array and reslice from the front.
 	if len(p) >= terminalTailBytes {
@@ -1424,6 +1430,67 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 		f.Flush()
 	}
 	return n, err
+}
+
+const (
+	usageRecentLines = 8
+	// usagePendingMax drops a partial line that never ends; a usage frame is
+	// far smaller, and a Responses response.completed frame stays well under it.
+	usagePendingMax = 8 << 20
+)
+
+func (s *sseWriter) captureUsage(p []byte) {
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			if len(s.linePending)+len(p) > usagePendingMax {
+				s.linePending = s.linePending[:0]
+				return
+			}
+			s.linePending = append(s.linePending, p...)
+			return
+		}
+		line := p[:i]
+		if len(s.linePending) > 0 {
+			line = append(s.linePending, line...)
+			s.linePending = s.linePending[:0]
+		}
+		s.keepUsageLine(line)
+		p = p[i+1:]
+	}
+}
+
+func (s *sseWriter) keepUsageLine(line []byte) {
+	if !bytes.Contains(line, []byte(`"usage"`)) {
+		return
+	}
+	line = append([]byte(nil), bytes.TrimSpace(line)...)
+	if s.usageFirst == nil {
+		s.usageFirst = line
+		return
+	}
+	if len(s.usageRecent) == usageRecentLines {
+		copy(s.usageRecent, s.usageRecent[1:])
+		s.usageRecent = s.usageRecent[:usageRecentLines-1]
+	}
+	s.usageRecent = append(s.usageRecent, line)
+}
+
+// usageBody returns the captured usage lines, plus a trailing partial line
+// from a stream that ended without a newline, as one SSE-shaped body.
+func (s *sseWriter) usageBody() []byte {
+	lines := make([][]byte, 0, len(s.usageRecent)+2)
+	if s.usageFirst != nil {
+		lines = append(lines, s.usageFirst)
+	}
+	lines = append(lines, s.usageRecent...)
+	if bytes.Contains(s.linePending, []byte(`"usage"`)) {
+		lines = append(lines, bytes.TrimSpace(s.linePending))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return bytes.Join(lines, []byte("\n"))
 }
 
 type showcasePart struct {
