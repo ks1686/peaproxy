@@ -279,21 +279,12 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			if tc.Function.Name != "" {
 				pc.Name = tc.Function.Name
 			}
-			if tc.Function.Arguments != "" {
+			// Arguments that arrive before the item is announced are carried by
+			// output_item.added; a delta for an unannounced item would have
+			// nowhere to go in the client's accumulator.
+			wasStarted := pc.Started
+			if !wasStarted {
 				pc.Arguments += tc.Function.Arguments
-				ev := struct {
-					Type        string `json:"type"`
-					ItemID      string `json:"item_id"`
-					OutputIndex int    `json:"output_index"`
-					Delta       string `json:"delta"`
-				}{Type: "response.function_call_arguments.delta", ItemID: pc.ItemID, OutputIndex: pc.Index, Delta: tc.Function.Arguments}
-				raw, err := json.Marshal(ev)
-				if err != nil {
-					return err
-				}
-				if err := emit("response.function_call_arguments.delta", string(raw)); err != nil {
-					return err
-				}
 			}
 			if !pc.Started && (pc.ID != "" || pc.Name != "") {
 				// The item was created (and indexed) on the first delta; this is
@@ -305,7 +296,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 					CallID    string `json:"call_id"`
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
-				}{Type: "function_call", ID: pc.ItemID, CallID: pc.ID, Name: pc.Name, Arguments: pc.Arguments}
+				}{Type: "function_call", ID: pc.ItemID, CallID: pc.ID, Name: pc.Name}
 				added := struct {
 					Type        string `json:"type"`
 					OutputIndex int    `json:"output_index"`
@@ -322,6 +313,19 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 					return err
 				}
 				if err := emit("response.output_item.added", string(raw)); err != nil {
+					return err
+				}
+				// Announced with empty arguments, as OpenAI does; what was
+				// buffered before the announcement follows as one delta.
+				if pc.Arguments != "" {
+					if err := emitArgumentsDelta(emit, pc.ItemID, pc.Index, pc.Arguments); err != nil {
+						return err
+					}
+				}
+			}
+			if tc.Function.Arguments != "" && wasStarted {
+				pc.Arguments += tc.Function.Arguments
+				if err := emitArgumentsDelta(emit, pc.ItemID, pc.Index, tc.Function.Arguments); err != nil {
 					return err
 				}
 			}
@@ -452,6 +456,19 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		return err
 	}
 	return emit(event, string(raw))
+}
+
+func emitArgumentsDelta(emit func(string, string) error, itemID string, index int, delta string) error {
+	raw, err := json.Marshal(struct {
+		Type        string `json:"type"`
+		ItemID      string `json:"item_id"`
+		OutputIndex int    `json:"output_index"`
+		Delta       string `json:"delta"`
+	}{Type: "response.function_call_arguments.delta", ItemID: itemID, OutputIndex: index, Delta: delta})
+	if err != nil {
+		return err
+	}
+	return emit("response.function_call_arguments.delta", string(raw))
 }
 
 // responseStub is the minimal response object carried by the lifecycle events
