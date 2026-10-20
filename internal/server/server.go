@@ -38,6 +38,9 @@ import (
 
 const maxBody = 8 << 20
 
+// maxAdminBody bounds small admin JSON bodies, as the overlay handler does.
+const maxAdminBody = 1 << 20
+
 // Server is the localhost gateway (OpenAI + Claude + admin + UI).
 type Server struct {
 	gw         *gateway.Gateway
@@ -737,8 +740,13 @@ func (s *Server) handleHide(w http.ResponseWriter, r *http.Request) {
 		ID     string `json:"id"`
 		Hidden bool   `json:"hidden"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, errJSON(err))
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxAdminBody)).Decode(&body); err != nil {
+		status := http.StatusBadRequest
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, errJSON(err))
 		return
 	}
 	if err := s.gw.ToggleHide(body.Kind, body.ID, body.Hidden); err != nil {
