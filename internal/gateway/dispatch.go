@@ -703,6 +703,12 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if err != nil {
 		return Call{}, err
 	}
+	// A follow-up carrying previous_response_id has to return to the account
+	// that holds that response, streamed or not.
+	cands = continuationFirst(cands, g.continuationAccount(previousResponseID(raw), model))
+	if len(cands) == 0 {
+		return Call{}, router.ErrNoAccount
+	}
 	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
 	if xerr == nil {
 		oaReq.Raw = jsonx.SetStream(oaBody, true)
