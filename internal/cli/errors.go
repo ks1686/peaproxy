@@ -69,6 +69,10 @@ Client disconnects are retained but counted apart from failures: on a busy
 machine most recorded errors are an agent closing a stream, and a count that
 cannot tell those apart is a count nobody reads.
 
+summary also counts Anthropic's "Third-party apps now draw from extra usage"
+refusals per account. They are stored as upstream_error and matched by their
+text, so records from older builds count too.
+
 Examples:
   peaproxy errors summary
   peaproxy errors list --since 24h
@@ -88,10 +92,20 @@ Examples:
 			if err != nil {
 				return err
 			}
+			cfg, _, err := loadCfg(*configPath)
+			if err != nil {
+				return err
+			}
 			s := usage.SummarizeErrors(recs)
 			w := cmd.OutOrStdout()
 			_, _ = fmt.Fprintf(w, "failures: %d\ncancels:  %d\n", s.Failures, s.Cancels)
-			printExtraUsage(w, s.ExtraUsage, since)
+			if cfg.RequestLog {
+				printExtraUsage(w, s.ExtraUsage, since)
+			} else {
+				// Nothing new is recorded with request logging off, so a 0 here
+				// would claim a fact nobody measured.
+				_, _ = fmt.Fprintf(w, "third-party extra-usage rejections (%s): unknown (requestLog is off, so failures are not recorded)\n", since)
+			}
 			if len(s.ByClass) > 0 {
 				_, _ = fmt.Fprintln(w, "\nby class:")
 				for _, c := range sortedKeys(s.ByClass) {

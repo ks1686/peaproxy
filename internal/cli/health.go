@@ -17,10 +17,12 @@ import (
 func healthCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "health",
-		Short: "Adapter health, quota remaining, cooldowns, and bind flags matching GET /admin/health",
+		Short: "Adapter health, quota remaining, cooldowns, and bind flags matching GET /admin/health, plus extra-usage refusals",
 		Long: `Prints the same fields as GET /admin/health (no admin token on loopback).
 Refreshes live ListModels so adapterHealth, quota, and models match a running serve.
 Quota remaining is omitted when the provider does not report it (never invented as 0).
+One line GET /admin/health lacks: Anthropic third-party extra-usage refusals per
+account over the last 24h, from errors.jsonl (unknown when requestLog is off).
 
 Examples:
   peaproxy health

@@ -44,8 +44,10 @@ func jsonStringField(body string, re *regexp.Regexp) string {
 // Every other upstream body stays out of client errors (#70). This one is
 // Anthropic's own product text, it is the only actionable fact about the
 // failure, and replacing it with "upstream HTTP 400" sent people bisecting
-// request shapes for hours. So the matched message is quoted, redacted and
-// clipped, and the request_id is passed on only when it has Anthropic's shape.
+// request shapes for hours. So the matched message is quoted after
+// redaction; one that no longer carries the phrase, or runs past
+// maxExtraUsageMessage, is replaced by a fixed sentence. The request_id is
+// passed on only when it has Anthropic's shape.
 type extraUsage struct {
 	Status    int
 	Message   string

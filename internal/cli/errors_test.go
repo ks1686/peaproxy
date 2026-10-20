@@ -60,7 +60,13 @@ func seedErrorStore(t *testing.T, recs ...usage.Event) string {
 			t.Fatal(err)
 		}
 	}
-	return filepath.Join(dir, "config.yaml")
+	// The store is only written with request logging on, so the seeded config
+	// says so.
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("schemaVersion: 1\nrequestLog: true\nproviders: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cfgPath
 }
 
 // The bundle leads with counts so it can be read without scrolling every event,
@@ -200,8 +206,9 @@ func TestErrorsListPrintsOneLinePerFailure(t *testing.T) {
 	}
 }
 
-// recordedExtraUsageError is the error text the store kept for Anthropic's
-// third-party refusal on 2026-10-20.
+// recordedExtraUsageError is the error text for Anthropic's third-party
+// refusal on 2026-10-20, before the store clips it to 240 runes. The phrase
+// sits well inside that cut, so stored records still match.
 const recordedExtraUsageError = `upstream HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from extra usage, not plan limits. Ask your workspace admin to add more and keep going."},"request_id":"req_011CgDuNLLd4YqQovSY3S25g"}`
 
 // The refusals are stored as plain upstream 400s. Counted with them, they read
@@ -271,5 +278,22 @@ func TestHealthCountsExtraUsageRefusals(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "third-party extra-usage rejections (24h): unknown") {
 		t.Fatalf("health claimed a count with request logging off:\n%s", out.String())
+	}
+}
+
+// With request logging off nothing new is recorded, so the summary must not
+// claim a count of 0.
+func TestErrorsSummarySaysUnknownWithRequestLogOff(t *testing.T) {
+	cfgPath := seedErrorStore(t)
+	if err := os.WriteFile(cfgPath, []byte("schemaVersion: 1\nproviders: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PEAPROXY_REQUEST_LOG", "")
+	var out bytes.Buffer
+	if err := ExecuteWithArgs([]string{"errors", "summary", "--config", cfgPath}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "third-party extra-usage rejections (24h): unknown") {
+		t.Fatalf("summary claimed a count with request logging off:\n%s", out.String())
 	}
 }
