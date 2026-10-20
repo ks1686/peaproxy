@@ -329,8 +329,10 @@ type claudeNative struct {
 	Content    []claudeNativeBlock `json:"content"`
 	StopReason string              `json:"stop_reason"`
 	Usage      *struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -359,10 +361,7 @@ type openAIOut struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage,omitempty"`
+	Usage *OpenAIChatUsage `json:"usage,omitempty"`
 }
 
 // FromClaude maps a Messages response to a chat.completion object.
@@ -417,10 +416,7 @@ func FromClaude(raw []byte) ([]byte, error) {
 	out.Choices[0].Message.ReasoningOpaque = opaqueRaw
 	out.Choices[0].FinishReason = openAIFinishFromClaude(in.StopReason, len(calls) > 0)
 	if in.Usage != nil {
-		out.Usage = &struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-		}{PromptTokens: in.Usage.InputTokens, CompletionTokens: in.Usage.OutputTokens}
+		out.Usage = claudeChatUsage(in.Usage.InputTokens, in.Usage.CacheReadInputTokens, in.Usage.CacheCreationInputTokens, in.Usage.OutputTokens)
 	}
 	return json.Marshal(out)
 }

@@ -78,9 +78,37 @@ type openAIChatSSEChunk struct {
 // adapter translates from a different provider wire and every one of them has to
 // be able to hand the counts to WriteOpenAIChatSSEFinishUsage.
 type OpenAIChatUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens        int                        `json:"prompt_tokens"`
+	CompletionTokens    int                        `json:"completion_tokens"`
+	TotalTokens         int                        `json:"total_tokens"`
+	PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	// CacheCreationInputTokens carries Anthropic cache writes, which chat has
+	// no field for; they are billed at the cache-write rate and are not part of
+	// PromptTokens.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// OpenAIPromptTokensDetails is the cached-token detail of prompt_tokens.
+type OpenAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+// claudeChatUsage maps Anthropic usage onto the chat shape. Anthropic reports
+// cache reads and writes beside input_tokens; chat counts cached reads inside
+// prompt_tokens (with cached_tokens as the detail), and cache writes travel as
+// cache_creation_input_tokens so they are priced at their own rate.
+func claudeChatUsage(input, cacheRead, cacheWrite, output int) *OpenAIChatUsage {
+	prompt := input + cacheRead
+	u := &OpenAIChatUsage{
+		PromptTokens:             prompt,
+		CompletionTokens:         output,
+		TotalTokens:              prompt + cacheWrite + output,
+		CacheCreationInputTokens: cacheWrite,
+	}
+	if cacheRead > 0 {
+		u.PromptTokensDetails = &OpenAIPromptTokensDetails{CachedTokens: cacheRead}
+	}
+	return u
 }
 
 type openAIChatSSEChoice struct {
