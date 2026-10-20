@@ -45,9 +45,14 @@ type responsesOutput struct {
 // frames report prompt_tokens/completion_tokens; both this shape and every
 // Responses client expect input_tokens/output_tokens.
 type responsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens        int                      `json:"input_tokens"`
+	OutputTokens       int                      `json:"output_tokens"`
+	TotalTokens        int                      `json:"total_tokens"`
+	InputTokensDetails *responsesInputTokenInfo `json:"input_tokens_details,omitempty"`
+}
+
+type responsesInputTokenInfo struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 type responsesIncompleteDetails struct {
@@ -523,6 +528,12 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 		Model:             model,
 		Output:            output,
 		OutputText:        text,
+	}
+	if in.Usage != nil {
+		out.Usage = responsesUsageFor(in.Usage.PromptTokens, in.Usage.CompletionTokens)
+		if out.Usage != nil && in.Usage.PromptTokensDetails != nil && in.Usage.PromptTokensDetails.CachedTokens > 0 {
+			out.Usage.InputTokensDetails = &responsesInputTokenInfo{CachedTokens: in.Usage.PromptTokensDetails.CachedTokens}
+		}
 	}
 	return json.Marshal(out)
 }
