@@ -993,7 +993,7 @@ function clientsPage(root) {
         .join("");
       document.querySelectorAll("[data-copy]").forEach((btn) => {
         btn.addEventListener("click", async () => {
-          const pre = btn.parentElement.querySelector("pre");
+          const pre = btn.closest(".snippet").querySelector("pre");
           try {
             await navigator.clipboard.writeText(pre.textContent);
             btn.textContent = "Copied";
