@@ -244,6 +244,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 			continue
 		}
 		dest := newRouteRewriter(guard, model, client)
+		guard.OnCommit(g.probePassed(inst.Provider.ID))
 		var callErr error
 		for attempt := 0; attempt < 2; attempt++ {
 			if err := budgetAttempts.take(); err != nil {
@@ -746,6 +747,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			}
 			guard.Reset()
 			watch.reset()
+			guard.OnCommit(g.probePassed(inst.Provider.ID))
 			if budgetAttempts.final(i, reachable) {
 				guard.Unbounded()
 			}
@@ -793,6 +795,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		}
 		guard.Reset()
 		watch.reset()
+		guard.OnCommit(g.probePassed(inst.Provider.ID))
 		if budgetAttempts.final(i, reachable) {
 			guard.Unbounded()
 		}
@@ -1006,6 +1009,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 				return Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
 			}
 			guard.Reset()
+			guard.OnCommit(g.probePassed(inst.Provider.ID))
 			if budgetAttempts.final(i, reachable) {
 				guard.Unbounded()
 			}
@@ -1041,6 +1045,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			return Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
 		}
 		guard.Reset()
+		guard.OnCommit(g.probePassed(inst.Provider.ID))
 		if budgetAttempts.final(i, reachable) {
 			guard.Unbounded()
 		}

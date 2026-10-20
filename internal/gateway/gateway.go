@@ -679,6 +679,22 @@ func (g *Gateway) rememberSuccess(session, model, account string) {
 	g.bindAffinity(session, model, account)
 }
 
+// probePassed returns a stream commit hook that puts account back in rotation.
+// A committed stream has proved the account works. Waiting for the stream to
+// end held the half-open probe for the whole response, so for a single-account
+// model every concurrent request failed "recovering from cooldown" for as long
+// as one long stream ran, up to the probe's 30s expiry.
+func (g *Gateway) probePassed(account string) func() {
+	return func() {
+		if g.admission != nil {
+			g.admission.EndHalfOpen(account)
+		}
+		g.mu.Lock()
+		delete(g.recovering, account)
+		g.mu.Unlock()
+	}
+}
+
 // admit reserves a capacity slot on an account. The limit itself is published
 // when the gateway is built or rebuilt, not here: writing it per request raced
 // every reader inside Acquire (#74).
@@ -877,9 +893,23 @@ func (g *Gateway) markCooldown(id, model string, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.noteStatLocked(id, err, 0)
+	// A transport failure says nothing about the account, and a cooldown only
+	// helps by steering the next request elsewhere. With no other account for
+	// the model there is nowhere to steer it, so one TLS or edge blip used to
+	// fail every concurrent request ("after failover, Ns left") and then the
+	// recovery probe. An upstream Retry-After is still honoured.
+	if router.Transient(err) && he.RetryAfter <= 0 && g.soleAccountLocked(id, model) {
+		return
+	}
 	slots := g.cool[id]
 	slots.set(scopedModel, Cooldown{AccountID: id, Model: scopedModel, Until: time.Now().Add(wait), Reason: reason})
 	g.cool[id] = slots
+}
+
+// soleAccountLocked reports whether id is the only account serving model.
+func (g *Gateway) soleAccountLocked(id, model string) bool {
+	accounts := catalog.AccountsForModel(g.models, g.queryLocked(), model)
+	return len(accounts) == 1 && accounts[0] == id
 }
 
 func (g *Gateway) observeLatency(account string, latency time.Duration, err error) {

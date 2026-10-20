@@ -21,6 +21,62 @@ func TestPreludeErrorBeforeCommit(t *testing.T) {
 	}
 }
 
+// The gateway ends a recovering account's probe from this hook, so it must
+// fire exactly once, only on commit, and outside the lock (the hook reading
+// Committed would deadlock otherwise).
+func TestOnCommitFiresOnceOnCommitOutsideTheLock(t *testing.T) {
+	var dst bytes.Buffer
+	g := New(&dst, 1024, time.Minute)
+	fired := 0
+	g.OnCommit(func() {
+		if !g.Committed() {
+			t.Error("hook ran before the stream committed")
+		}
+		fired++
+	})
+	if _, err := g.Write([]byte(": ping\n\n")); err != nil {
+		t.Fatal(err)
+	}
+	if fired != 0 {
+		t.Fatal("a keepalive fired the commit hook")
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := g.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fired != 1 {
+		t.Fatalf("hook fired %d times, want 1", fired)
+	}
+}
+
+func TestOnCommitDoesNotFireForAFailedPrelude(t *testing.T) {
+	var dst bytes.Buffer
+	g := New(&dst, 1024, time.Minute)
+	fired := false
+	g.OnCommit(func() { fired = true })
+	_, _ = g.Write([]byte("data: {\"error\":{\"message\":\"nope\"}}\n\n"))
+	if fired {
+		t.Fatal("a failed prelude fired the commit hook")
+	}
+}
+
+func TestOnCommitFiresWhenFinishCommits(t *testing.T) {
+	var dst bytes.Buffer
+	g := New(&dst, 1024, time.Minute)
+	fired := false
+	g.OnCommit(func() { fired = true })
+	if _, err := g.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}")); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if !fired || !g.Committed() {
+		t.Fatalf("fired=%v committed=%v, want both after Finish committed the prelude", fired, g.Committed())
+	}
+}
+
 func TestResponsesIncompleteCommits(t *testing.T) {
 	payload := `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`
 	for name, frame := range map[string]string{

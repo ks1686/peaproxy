@@ -42,6 +42,7 @@ type Guard struct {
 	failed    error
 	deadline  time.Time
 	unbounded bool
+	onCommit  func()
 }
 
 func New(dst io.Writer, maxBytes int, timeout time.Duration) *Guard {
@@ -59,6 +60,32 @@ func (g *Guard) Committed() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.committed
+}
+
+// OnCommit sets f to run once, outside the guard's lock, when a valid event
+// commits the stream. Set it before each attempt: the attempt that commits is
+// the one that proved its account works, long before the stream ends.
+func (g *Guard) OnCommit(f func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.onCommit = f
+}
+
+// commitHookLocked hands back the commit hook once the stream has committed,
+// so the caller can run it after releasing the lock.
+func (g *Guard) commitHookLocked() func() {
+	if !g.committed || g.onCommit == nil {
+		return nil
+	}
+	f := g.onCommit
+	g.onCommit = nil
+	return f
+}
+
+func runHook(f func()) {
+	if f != nil {
+		f()
+	}
 }
 
 // Err returns a prelude failure that has not been forwarded.
@@ -157,6 +184,9 @@ func (g *Guard) Bound(parent context.Context) (context.Context, context.CancelFu
 }
 
 func (g *Guard) Write(p []byte) (int, error) {
+	// Deferred first so it runs after the unlock below.
+	var hook func()
+	defer func() { runHook(hook) }()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.committed {
@@ -172,6 +202,7 @@ func (g *Guard) Write(p []byte) (int, error) {
 	}
 	g.buf.Write(p)
 	keepalive, err := g.scanLocked()
+	hook = g.commitHookLocked()
 	if err != nil {
 		g.failed = err
 		return 0, err
@@ -185,13 +216,17 @@ func (g *Guard) Write(p []byte) (int, error) {
 
 // Finish forwards a completed valid prelude that never saw a trailing newline.
 func (g *Guard) Finish() error {
+	var hook func()
+	defer func() { runHook(hook) }()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.committed || g.buf.Len() == 0 {
 		return g.failed
 	}
 	g.buf.WriteByte('\n')
-	if _, err := g.scanLocked(); err != nil {
+	_, err := g.scanLocked()
+	hook = g.commitHookLocked()
+	if err != nil {
 		g.failed = err
 		return err
 	}
