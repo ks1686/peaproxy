@@ -156,6 +156,18 @@ func (g *Gate) TryHalfOpen(account string) bool {
 	return true
 }
 
+// Probing reports whether a half-open probe for account is outstanding, without
+// taking one.
+func (g *Gate) Probing(account string) bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	at, ok := g.probe[account]
+	return ok && time.Since(at) < 30*time.Second
+}
+
 // EndHalfOpen releases a probe that did not become an in-flight slot.
 func (g *Gate) EndHalfOpen(account string) {
 	if g == nil {

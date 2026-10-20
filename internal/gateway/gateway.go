@@ -55,9 +55,13 @@ type Gateway struct {
 
 	// spendWindow supplies recorded spend for the spend ceiling. It is a field
 	// so the ceiling can be exercised without a usage store.
-	spendWindow   spendWindow
-	Usage         *usage.Store
-	cool          map[string]cooldownSlots
+	spendWindow spendWindow
+	Usage       *usage.Store
+	cool        map[string]cooldownSlots
+	// recovering holds accounts whose whole-account cooldown expired and that
+	// have not answered a request since. Each request takes the half-open probe
+	// before using one, so a recovering account sees one request, not a herd.
+	recovering    map[string]struct{}
 	rr            uint64
 	sticky        map[string]string
 	affinity      map[string]affinityBind
@@ -653,6 +657,7 @@ func (g *Gateway) rememberSuccess(session, model, account string) {
 		g.admission.EndHalfOpen(account)
 	}
 	g.mu.Lock()
+	delete(g.recovering, account)
 	g.noteStatLocked(account, nil, 0)
 	g.mu.Unlock()
 	g.rememberSticky(model, account)
@@ -666,7 +671,20 @@ func (g *Gateway) admit(ctx context.Context, account string) (func(), error) {
 	if g == nil || g.admission == nil {
 		return func() {}, nil
 	}
-	return g.admission.Acquire(ctx, account)
+	release, err := g.admission.Acquire(ctx, account)
+	if err != nil {
+		g.admission.EndHalfOpen(account)
+		return nil, err
+	}
+	// The attempt is over when its slot is released, whatever the outcome. A
+	// half-open probe it held ends with it; a cancelled or client-fault attempt
+	// neither succeeds nor cools the account, and without a configured limit
+	// the release is a no-op, so the probe would otherwise sit for its full
+	// expiry and keep a recovering account out of rotation.
+	return func() {
+		release()
+		g.admission.EndHalfOpen(account)
+	}, nil
 }
 
 // publishAdmissionLimits hands the configured limits to the gate. Called from
@@ -1040,6 +1058,15 @@ func omitZenAlias(matched []instance) []instance {
 	return out
 }
 
+// probeLocked reports whether this request may use a recovering account: it
+// takes the half-open probe, or with peek only checks that nobody holds it.
+func (g *Gateway) probeLocked(account string, peek bool) bool {
+	if peek {
+		return !g.admission.Probing(account)
+	}
+	return g.admission.TryHalfOpen(account)
+}
+
 func containsID(ids []string, want string) bool {
 	for _, id := range ids {
 		if id == want {
@@ -1050,18 +1077,39 @@ func containsID(ids []string, want string) bool {
 }
 
 func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) {
+	return g.candidatesFor(model, session, false)
+}
+
+// candidatesFor lists the accounts a request for model may use. peek is for
+// read-only callers (ExplainRoute): it neither prunes cooldowns nor takes a
+// half-open probe, and treats a recovering account as eligible unless another
+// request holds its probe.
+func (g *Gateway) candidatesFor(model, session string, peek bool) ([]instance, time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
-	expired := map[string]struct{}{}
+	recovering := g.recovering
+	if peek {
+		recovering = maps.Clone(g.recovering)
+	}
 	for id, slots := range g.cool {
 		slots.prune(now)
-		g.cool[id] = slots
+		if !peek {
+			g.cool[id] = slots
+		}
 		if slots.wideActive() || len(slots.models) > 0 {
 			continue
 		}
-		delete(g.cool, id)
-		expired[id] = struct{}{}
+		if !peek {
+			delete(g.cool, id)
+			if g.recovering == nil {
+				g.recovering = map[string]struct{}{}
+			}
+			recovering = g.recovering
+		} else if recovering == nil {
+			recovering = map[string]struct{}{}
+		}
+		recovering[id] = struct{}{}
 	}
 	q := g.queryLocked()
 	ids := catalog.AccountsForModel(g.models, q, model)
@@ -1093,7 +1141,7 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 			}
 			continue
 		}
-		if _, just := expired[inst.Provider.ID]; just && g.admission != nil && !g.admission.TryHalfOpen(inst.Provider.ID) {
+		if _, rec := recovering[inst.Provider.ID]; rec && g.admission != nil && !g.probeLocked(inst.Provider.ID, peek) {
 			if until.IsZero() {
 				until = now.Add(time.Second)
 			}
@@ -1188,6 +1236,7 @@ func (g *Gateway) persist(mine config.Config) (rebuilt bool, err error) {
 // forgetAccountLocked drops continuation bindings and cached responses of a
 // removed account. The caller holds mu.
 func (g *Gateway) forgetAccountLocked(id string) {
+	delete(g.recovering, id)
 	for responseID, bind := range g.continuations {
 		if bind.Account == id {
 			delete(g.continuations, responseID)
