@@ -40,20 +40,21 @@ const maxClaudeCodeHeaderLen = 128
 // ClaudeCodeHeaders returns the identity headers of a native Claude Code
 // client, or nil when h does not come from one. Headers alone only say the
 // client claims to be Claude Code; the adapter also checks the body before it
-// forwards them. Values outside printable ASCII or longer than 128 bytes are
-// dropped so a forwarded value cannot carry header syntax.
+// forwards them. Every identity header must be present, in printable ASCII
+// and at most 128 bytes: forwarding only some of them would pair the client's
+// values with the adapter's fixed 2.1.280 ones, a mix no real build sends, and
+// a bounded value cannot carry header syntax.
 func ClaudeCodeHeaders(h http.Header) []Header {
-	ua := h.Get("User-Agent")
-	// An unsafe User-Agent would be dropped below and leave the other headers
-	// paired with the fixed one, a mix no real build sends.
-	if h.Get("X-App") != "cli" || !safeHeaderValue(ua) || !claudeCodeNativeUserAgent.MatchString(ua) {
+	if h.Get("X-App") != "cli" || !claudeCodeNativeUserAgent.MatchString(h.Get("User-Agent")) {
 		return nil
 	}
-	var out []Header
+	out := make([]Header, 0, len(claudeCodeIdentityHeaders))
 	for _, name := range claudeCodeIdentityHeaders {
-		if v := strings.TrimSpace(h.Get(name)); safeHeaderValue(v) {
-			out = append(out, Header{Name: name, Value: v})
+		v := strings.TrimSpace(h.Get(name))
+		if !safeHeaderValue(v) {
+			return nil
 		}
+		out = append(out, Header{Name: name, Value: v})
 	}
 	return out
 }

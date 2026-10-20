@@ -4,7 +4,7 @@ import "strings"
 
 const (
 	// maxAnthropicBetas bounds the header, with headroom over what a client
-	// sends: a native Claude Code client's list is forwarded as its only
+	// sends: a native Claude Code client's list replaces the adapter's own
 	// betas, so a name cut here is a feature the request loses. Claude Code
 	// 2.1.304 sends 11. The cap counts names an adapter drops later
 	// (context-1m-, oauth-) too.

@@ -10,7 +10,7 @@ Default gateway: `http://127.0.0.1:8317`. Connect from the web UI or admin API w
 
 **Harness cloak defaults stay off.** Unlike CLIProxyAPI (#6120), PeaProxy does **not** inject Claude-Code thinking / `clear_thinking` into client presets (Pi, Cursor, OpenCode, …). Claude Code may enable cloak itself (`cloak: opt-in` on that preset only).
 
-**Separate (adapter, not a client preset):** `anthropic_oauth` Messages to Anthropic **do** inject Claude Code’s billing header + CLI identity system blocks (v1.6.8/v1.6.9) so subscription OAuth is not 429’d as a non-CLI client. Caller system text is relocated, never deleted. Official `adapter: anthropic` API keys are not cloaked this way.
+**Separate (adapter, not a client preset):** `anthropic_oauth` Messages to Anthropic **do** inject Claude Code’s billing header + CLI identity system blocks (v1.6.8/v1.6.9) so subscription OAuth is not 429’d as a non-CLI client. Caller system text is relocated, never deleted. A native Claude Code client already sends those blocks; its body is left alone and its own identity headers are forwarded instead of the fixed 2.1.280 profile ([OAUTH.md](OAUTH.md) § Architecture notes). Official `adapter: anthropic` API keys are not cloaked this way.
 
 **OpenCode and Claude Code do not share the same Anthropic base URL.** Claude Code typically wants `ANTHROPIC_BASE_URL` *without* `/v1` (it appends `/v1/messages`). OpenCode's Anthropic provider often wants `baseURL` *including* `/v1` ([anomalyco/opencode#35005](https://github.com/anomalyco/opencode/issues/35005)).
 
@@ -19,7 +19,7 @@ Default gateway: `http://127.0.0.1:8317`. Connect from the web UI or admin API w
 | Client | Wire | Base URL | Cloak | Gotchas |
 |---|---|---|---|---|
 | Cursor | OpenAI chat completions | `http://127.0.0.1:8317/v1` | off | Override OpenAI Base URL |
-| Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | opt-in (client-side only) | Preset does not inject thinking. `anthropic_oauth` upstream still applies system cloak |
+| Claude Code | Anthropic Messages | `http://127.0.0.1:8317` (**no** `/v1`) | opt-in (client-side only) | Preset does not inject thinking. `anthropic_oauth` forwards Claude Code's own identity and body (no cloak) |
 | OpenCode | Anthropic, OpenAI **Responses**, OpenAI-compat | all use `.../v1` | off | Custom providers need per-model `limit` / `variants`; GPT on `@ai-sdk/openai`; ids must not be `anthropic` / `openai` |
 | Pi | Anthropic Messages **and** OpenAI Responses / chat | `~/.pi/agent/models.json` only; `anthropic`: no `/v1`, `openai`: `/v1` | off | Env base URLs are not read. Override the built-in providers to keep pi's model metadata |
 | Codex | OpenAI **Responses** (`POST /v1/responses`) | `.../v1` | off | `wire_api = "responses"` only. Codex OAuth forces `store: false`; omits `stream_options` / `max_output_tokens` |

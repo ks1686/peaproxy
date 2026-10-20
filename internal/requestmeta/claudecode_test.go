@@ -11,6 +11,14 @@ func claudeCodeHeader(ua, app string) http.Header {
 	h.Set("User-Agent", ua)
 	h.Set("X-App", app)
 	h.Set("X-Stainless-Package-Version", "0.120.0")
+	h.Set("X-Stainless-Runtime", "node")
+	h.Set("X-Stainless-Runtime-Version", "v26.3.0")
+	h.Set("X-Stainless-Lang", "js")
+	h.Set("X-Stainless-Os", "MacOS")
+	h.Set("X-Stainless-Arch", "arm64")
+	h.Set("X-Stainless-Timeout", "600")
+	h.Set("X-Stainless-Retry-Count", "0")
+	h.Set("X-Claude-Code-Session-Id", "694d6b7f-cc15-49a2-8118-e5a45516f7d8")
 	h.Set("Authorization", "Bearer client-token")
 	h.Set("Anthropic-Beta", "claude-code-20250219")
 	return h
@@ -24,16 +32,28 @@ func TestClaudeCodeHeadersRecognizesNativeEntrypoints(t *testing.T) {
 		"claude-cli/2.1.300 (external, claude-vscode)",
 	} {
 		got := ClaudeCodeHeaders(claudeCodeHeader(ua, "cli"))
-		if len(got) != 2 || got[0] != (Header{"User-Agent", ua}) || got[1] != (Header{"X-Stainless-Package-Version", "0.120.0"}) {
+		if len(got) != len(claudeCodeIdentityHeaders) || got[0] != (Header{"User-Agent", ua}) || got[1] != (Header{"X-Stainless-Package-Version", "0.120.0"}) {
 			t.Fatalf("%q: got %#v", ua, got)
 		}
 	}
 }
 
-func TestClaudeCodeHeadersNeverCarriesCredentialsOrBetas(t *testing.T) {
+func TestClaudeCodeHeadersNeverCarriesCredentialsBetasOrRetryCount(t *testing.T) {
 	for _, h := range ClaudeCodeHeaders(claudeCodeHeader("claude-cli/2.1.300 (external, cli)", "cli")) {
-		if h.Name == "Authorization" || h.Name == "Anthropic-Beta" {
+		if h.Name == "Authorization" || h.Name == "Anthropic-Beta" || h.Name == "X-Stainless-Retry-Count" {
 			t.Fatalf("forwarded %s", h.Name)
+		}
+	}
+}
+
+func TestClaudeCodeHeadersRejectsPartialIdentity(t *testing.T) {
+	// Forwarding only some identity headers would mix the client's values with
+	// the adapter's fixed 2.1.280 ones.
+	for _, name := range claudeCodeIdentityHeaders[1:] {
+		h := claudeCodeHeader("claude-cli/2.1.300 (external, cli)", "cli")
+		h.Del(name)
+		if got := ClaudeCodeHeaders(h); got != nil {
+			t.Fatalf("without %s: got %#v, want nil", name, got)
 		}
 	}
 }
@@ -54,13 +74,12 @@ func TestClaudeCodeHeadersRejectsOtherClients(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeHeadersDropsUnsafeValues(t *testing.T) {
-	h := claudeCodeHeader("claude-cli/2.1.300 (external, cli)", "cli")
-	h.Set("X-Stainless-Os", "Mac\x7fOS")
-	h.Set("X-Stainless-Arch", strings.Repeat("a", 129))
-	for _, got := range ClaudeCodeHeaders(h) {
-		if got.Name == "X-Stainless-Os" || got.Name == "X-Stainless-Arch" {
-			t.Fatalf("unsafe %s forwarded: %q", got.Name, got.Value)
+func TestClaudeCodeHeadersRejectsUnsafeValues(t *testing.T) {
+	for name, v := range map[string]string{"X-Stainless-Os": "Mac\x7fOS", "X-Stainless-Arch": strings.Repeat("a", 129)} {
+		h := claudeCodeHeader("claude-cli/2.1.300 (external, cli)", "cli")
+		h.Set(name, v)
+		if got := ClaudeCodeHeaders(h); got != nil {
+			t.Fatalf("unsafe %s: got %#v, want nil", name, got)
 		}
 	}
 }

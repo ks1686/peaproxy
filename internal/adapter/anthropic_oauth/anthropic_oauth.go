@@ -576,10 +576,11 @@ func (a *Adapter) messagesURL() string {
 }
 
 // headers sets Claude Code 2.1.280's inference fingerprint. native, when set,
-// is a real Claude Code client's own identity headers (nativeClaudeCode): they
-// replace the fixed profile, and its betas replace the 2.1.280 list apart from
-// the two a subscription token needs, so the request reaches Anthropic as the
-// build that made it.
+// is a real Claude Code client's full set of identity headers
+// (nativeClaudeCode): they override the 2.1.280 User-Agent, Stainless and
+// session values, and the client's betas (minus context-1m) replace the
+// 2.1.280 list apart from the two a subscription token needs.
+// X-Stainless-Retry-Count, Accept and x-client-request-id stay PeaProxy's.
 func (a *Adapter) headers(req *http.Request, model, sessionID string, body []byte, native []requestmeta.Header) {
 	a.mu.Lock()
 	tok := a.token.AccessToken

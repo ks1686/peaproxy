@@ -28,13 +28,24 @@ var nativeBody = `{"model":"claude-sonnet-5","max_tokens":32000,` +
 	`"metadata":{"user_id":"{\"device_id\":\"` + strings.Repeat("a", 64) + `\",\"account_uuid\":\"\",\"session_id\":\"` + nativeSession + `\"}"},` +
 	`"messages":[{"role":"user","content":"hi"}]}`
 
-func nativeCtx() context.Context {
+// nativeHeader is the full identity header set a real Claude Code build sends.
+func nativeHeader() http.Header {
 	h := http.Header{}
 	h.Set("User-Agent", nativeUA)
 	h.Set("X-App", "cli")
 	h.Set("X-Stainless-Package-Version", "0.120.0")
+	h.Set("X-Stainless-Runtime", "node")
 	h.Set("X-Stainless-Runtime-Version", "v26.9.0")
+	h.Set("X-Stainless-Lang", "js")
+	h.Set("X-Stainless-Os", "MacOS")
+	h.Set("X-Stainless-Arch", "arm64")
+	h.Set("X-Stainless-Timeout", "600")
 	h.Set("X-Claude-Code-Session-Id", nativeSession)
+	return h
+}
+
+func nativeCtx() context.Context {
+	h := nativeHeader()
 	return requestmeta.WithRequest(context.Background(), requestmeta.Request{
 		Wire:              requestmeta.WireMessages,
 		AnthropicBeta:     "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,context-1m-2025-08-07",
@@ -53,8 +64,8 @@ func TestMessagesForwardsNativeClaudeCodeIdentity(t *testing.T) {
 	if v := got.Header.Get("X-Stainless-Runtime-Version"); v != "v26.9.0" {
 		t.Fatalf("X-Stainless-Runtime-Version %q", v)
 	}
-	if v := got.Header.Get("X-Stainless-Lang"); v != "js" {
-		t.Fatalf("a header the client omitted keeps the default, got X-Stainless-Lang %q", v)
+	if v := got.Header.Get("X-Stainless-Os"); v != "MacOS" {
+		t.Fatalf("X-Stainless-Os %q, want the client's MacOS", v)
 	}
 	if v := got.Header.Get("X-Claude-Code-Session-Id"); v != nativeSession {
 		t.Fatalf("X-Claude-Code-Session-Id %q", v)
@@ -117,9 +128,7 @@ func TestMessagesNativeKeepsLongClaudeCodeBetaList(t *testing.T) {
 	for i := 0; i < 18; i++ {
 		names = append(names, fmt.Sprintf("future-beta-%02d-2027-01-01", i))
 	}
-	h := http.Header{}
-	h.Set("User-Agent", nativeUA)
-	h.Set("X-App", "cli")
+	h := nativeHeader()
 	ctx := requestmeta.WithRequest(context.Background(), requestmeta.Request{
 		AnthropicBeta:     requestmeta.NormalizeAnthropicBeta(strings.Join(names, ",")),
 		ClaudeCodeHeaders: requestmeta.ClaudeCodeHeaders(h),
