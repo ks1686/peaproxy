@@ -89,7 +89,11 @@ func (s *Store) scopeLocked(legacy *Store, scope string) error {
 		}
 		s.krPrefix = id + "/" + scope + "/"
 	}
-	return s.migrateLocked(legacy)
+	migrated, err := s.migrateLocked(legacy)
+	if err != nil || migrated {
+		return err
+	}
+	return s.carryLocked(legacy)
 }
 
 func readOnly(err error) bool {
@@ -146,19 +150,19 @@ func (s *Store) dirIDLocked() (string, error) {
 // another config in the same directory, or another directory whose keychain
 // items shared the old account-id names, may still have to migrate from it.
 // A marker file makes a migration that was cut short run again in full.
-func (s *Store) migrateLocked(legacy *Store) error {
+func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 	marker := filepath.Join(s.dir, scopedName("secrets.migrating", s.scope))
 	_, merr := os.Stat(marker)
 	interrupted := merr == nil
 	if !interrupted && (fileExists(s.indexPath()) || fileExists(s.encPath())) {
-		return nil
+		return false, nil
 	}
 	var keys []string
 	switch s.backend {
 	case BackendKeyring:
 		idx, err := legacy.loadIndex()
 		if err != nil {
-			return fmt.Errorf("secretstore: reading the legacy keychain index to migrate: %w", err)
+			return false, fmt.Errorf("secretstore: reading the legacy keychain index to migrate: %w", err)
 		}
 		for k := range idx.keys {
 			keys = append(keys, k)
@@ -172,12 +176,12 @@ func (s *Store) migrateLocked(legacy *Store) error {
 	}
 	if len(keys) == 0 {
 		if interrupted {
-			return os.Remove(marker)
+			return false, os.Remove(marker)
 		}
-		return nil
+		return false, nil
 	}
 	if err := fslock.WriteAtomic(marker, nil, 0o600); err != nil {
-		return err
+		return false, err
 	}
 	if s.backend == BackendKeyring {
 		for _, k := range keys {
@@ -188,10 +192,10 @@ func (s *Store) migrateLocked(legacy *Store) error {
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("secretstore: migrating %q from the legacy keychain items: %w", k, err)
+				return false, fmt.Errorf("secretstore: migrating %q from the legacy keychain items: %w", k, err)
 			}
 			if err := s.keyringSet(k, v); err != nil {
-				return fmt.Errorf("secretstore: migrating %q into this config's keychain items: %w", k, err)
+				return false, fmt.Errorf("secretstore: migrating %q into this config's keychain items: %w", k, err)
 			}
 		}
 	} else {
@@ -199,13 +203,16 @@ func (s *Store) migrateLocked(legacy *Store) error {
 		// shares, so the bytes carry over as they are.
 		b, err := os.ReadFile(legacy.encPath())
 		if err != nil {
-			return err
+			return false, err
 		}
 		if err := fslock.WriteAtomic(s.encPath(), b, 0o600); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return os.Remove(marker)
+	if err := s.startCarryLocked(legacy); err != nil {
+		return false, err
+	}
+	return true, os.Remove(marker)
 }
 
 func fileExists(path string) bool {
