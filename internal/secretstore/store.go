@@ -118,12 +118,39 @@ func Open(dir string) (*Store, error) {
 		if testing.Testing() {
 			return OpenFile(dir)
 		}
-		s, err := openKeyring(dir)
-		if err == nil {
-			return s, nil
+		return openAuto(dir)
+	}
+}
+
+// openKeyringFn is openKeyring, replaceable in tests.
+var openKeyringFn = openKeyring
+
+// openAuto picks the backend that already holds this directory's secrets and
+// only chooses afresh for a directory that has none. Re-probing on every Open
+// let one failed keychain probe (a locked login keychain) write a rotated
+// refresh token to secrets.enc while the keychain kept the stale one, which the
+// next load then read back; the reverse switch hid file secrets once the
+// keychain answered again.
+func openAuto(dir string) (*Store, error) {
+	switch {
+	case nonEmptyFile(filepath.Join(dir, IndexFileName)):
+		s, err := openKeyringFn(dir)
+		if err != nil {
+			return nil, fmt.Errorf("secretstore: this config's secrets are in the OS keychain, which is unavailable: %w", err)
 		}
+		return s, nil
+	case nonEmptyFile(filepath.Join(dir, EncryptedFileName)):
 		return OpenFile(dir)
 	}
+	if s, err := openKeyringFn(dir); err == nil {
+		return s, nil
+	}
+	return OpenFile(dir)
+}
+
+func nonEmptyFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 // OpenFile always uses the AES-GCM file next to dir (CI / tests).
