@@ -979,16 +979,33 @@ func GeminiSSEToOpenAIWith(r io.Reader, w io.Writer, model string, onEventError 
 // client expects prompt_tokens and completion_tokens.
 func geminiEventUsage(event []byte) (struct{ prompt, completion int }, bool) {
 	var out struct{ prompt, completion int }
-	var ev struct {
-		UsageMetadata *struct {
-			PromptTokenCount     int `json:"promptTokenCount"`
-			CandidatesTokenCount int `json:"candidatesTokenCount"`
-		} `json:"usageMetadata"`
+	type usageMetadata struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
 	}
-	if json.Unmarshal(event, &ev) != nil || ev.UsageMetadata == nil {
+	// Cloud Code wraps every event in {"response":{...}}; the public Gemini API
+	// does not. Thinking tokens are billed as output but reported apart from
+	// candidatesTokenCount, so they are added back.
+	var ev struct {
+		UsageMetadata *usageMetadata `json:"usageMetadata"`
+		Response      *struct {
+			UsageMetadata *usageMetadata `json:"usageMetadata"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(event, &ev) != nil {
 		return out, false
 	}
-	return struct{ prompt, completion int }{ev.UsageMetadata.PromptTokenCount, ev.UsageMetadata.CandidatesTokenCount}, true
+	um := ev.UsageMetadata
+	if um == nil && ev.Response != nil {
+		um = ev.Response.UsageMetadata
+	}
+	if um == nil {
+		return out, false
+	}
+	out.prompt = um.PromptTokenCount
+	out.completion = um.CandidatesTokenCount + um.ThoughtsTokenCount
+	return out, true
 }
 
 // truncateEvent bounds a failed event quoted in an error, the same 240-byte
