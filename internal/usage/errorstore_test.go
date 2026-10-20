@@ -242,6 +242,9 @@ func TestReadErrorRecordsSkipsUnparseableLines(t *testing.T) {
 // history is gone; a reader that opened the log before the prune sees that
 // window as the file emptying under it.
 func TestPruneErrorLogReplacesTheFileInsteadOfTruncatingIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows refuses to replace a file another handle holds open, which is what this test observes with")
+	}
 	dir := t.TempDir()
 	path := ErrorLogPath(dir)
 	base := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
