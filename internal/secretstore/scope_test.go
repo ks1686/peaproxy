@@ -165,3 +165,33 @@ func (f *failAfterKeyring) Set(service, user, password string) error {
 	}
 	return f.memKeyring.Set(service, user, password)
 }
+
+// One config file reached by two names must have one scope: a symlinked
+// profile (config.yaml -> work.yaml) or, on a case-insensitive filesystem, a
+// differently cased path. Otherwise a login saved under one name is invisible
+// to a server reading the other.
+func TestOneConfigFileHasOneScopeWhateverItIsCalled(t *testing.T) {
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work.yaml")
+	if err := os.WriteFile(work, []byte("schemaVersion: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("work.yaml", filepath.Join(dir, "config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if got := configScope(filepath.Join(dir, "config.yaml")); got != "work.yaml" {
+		t.Fatalf("scope via the symlink = %q, want work.yaml", got)
+	}
+	if got := configScope(work); got != "work.yaml" {
+		t.Fatalf("scope via the file = %q, want work.yaml", got)
+	}
+	upper := filepath.Join(dir, "WORK.YAML")
+	if _, err := os.Stat(upper); err == nil {
+		if got := configScope(upper); got != "work.yaml" {
+			t.Fatalf("scope via a differently cased path = %q, want the on-disk name", got)
+		}
+	}
+	if got := configScope(filepath.Join(dir, "fresh.yaml")); got != "fresh.yaml" {
+		t.Fatalf("scope of a config that does not exist yet = %q", got)
+	}
+}

@@ -33,6 +33,7 @@ func OpenFor(configPath string) (*Store, error) {
 	if configPath == "" || scope == "." || scope == string(filepath.Separator) {
 		return Open(dir)
 	}
+	scope = configScope(configPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -44,6 +45,43 @@ func OpenFor(configPath string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// configScope names the scope of the config file at path by the file itself
+// rather than by the name it was reached through. A symlink in the same
+// directory (config.yaml -> work.yaml) resolves to its target, and the name is
+// the one on disk, so a differently cased path on a case-insensitive
+// filesystem is the same scope. The store stays next to path either way; a
+// symlink to another directory keeps the name it was given. A config that does
+// not exist yet is named as given.
+func configScope(path string) string {
+	dir, name := filepath.Dir(path), filepath.Base(path)
+	if target, err := filepath.EvalSymlinks(path); err == nil && sameDir(filepath.Dir(target), dir) {
+		name = filepath.Base(target)
+	}
+	want, err := os.Stat(filepath.Join(dir, name))
+	if err != nil {
+		return name
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return name
+	}
+	for _, e := range entries {
+		if !strings.EqualFold(e.Name(), name) {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && os.SameFile(info, want) {
+			return e.Name()
+		}
+	}
+	return name
+}
+
+func sameDir(a, b string) bool {
+	ai, aerr := os.Stat(a)
+	bi, berr := os.Stat(b)
+	return aerr == nil && berr == nil && os.SameFile(ai, bi)
 }
 
 // scopedName is the legacy file name with the scope spliced in before its
