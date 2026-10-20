@@ -35,7 +35,7 @@ import (
 // dressed as a cap. What is held is the request's own input, which is knowable
 // now, and what it turns out to be is measured when the call completes.
 func (g *Gateway) holdSpend(ctx context.Context, account, model string, body []byte) error {
-	ceiling := g.cfg.SpendCeiling()
+	ceiling := g.live().SpendCeiling()
 	store := g.Usage
 	if ceiling <= 0 || store == nil || account == "" {
 		return nil

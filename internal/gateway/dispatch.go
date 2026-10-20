@@ -56,8 +56,8 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
-	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
+	coalesce := g.live().RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
 		if g.notChatModel(inst.Provider.ID, model) {
 			// Already refused once. Do not spend an upstream call rediscovering it.
@@ -196,7 +196,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 // streamPrelude keeps the configured first-event limit, and lengthens it only
 // while a local model is still loading. The request deadline is unchanged.
 func (g *Gateway) streamPrelude(model string) time.Duration {
-	base := g.cfg.StreamPreludeTimeout()
+	base := g.live().StreamPreludeTimeout()
 	const coldStart = 30 * time.Second
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -209,7 +209,7 @@ func (g *Gateway) streamPrelude(model string) time.Duration {
 }
 
 func (g *Gateway) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, g.cfg.RequestDeadline())
+	return context.WithTimeout(ctx, g.live().RequestDeadline())
 }
 
 // ChatStream proxies SSE with failover before any bytes are written.
@@ -229,7 +229,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if g.notChatModel(inst.Provider.ID, model) {
@@ -323,7 +323,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	var lastAccount string
 	var st failState
 	tried := false
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		if err := budgetAttempts.take(); err != nil {
 			return adapter.ImageResponse{}, Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
@@ -412,7 +412,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	var lastAccount string
 	var st failState
 	tried := false
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		if err := budgetAttempts.take(); err != nil {
 			return adapter.ImageResponse{}, Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
@@ -500,7 +500,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	var lastAccount string
 	var st failState
 	tried := false
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		if err := budgetAttempts.take(); err != nil {
 			return adapter.EmbeddingResponse{}, Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
@@ -526,7 +526,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 			}
 			return once, onceErr
 		}
-		if g.flight != nil && g.cfg.RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
+		if g.flight != nil && g.live().RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
 			var body []byte
 			var shared bool
 			body, shared, callErr = g.flight.DoShared(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
@@ -605,7 +605,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, Call, erro
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
@@ -712,7 +712,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeResponses](cands, xerr == nil)
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -864,7 +864,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, Call, err
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
@@ -968,7 +968,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeMessages](cands, xerr == nil)
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)

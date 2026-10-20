@@ -237,6 +237,15 @@ func (g *Gateway) Config() config.Config {
 	return cfg
 }
 
+// live returns the running config under the read lock. Request paths read it
+// this way rather than touching g.cfg: the config watcher replaces g.cfg under
+// g.mu while requests are in flight. Never call it with g.mu held.
+func (g *Gateway) live() config.Config {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cfg
+}
+
 // SetConfigPath updates the save target.
 func (g *Gateway) SetConfigPath(path string) {
 	g.mu.Lock()
@@ -716,7 +725,7 @@ func admissionRejection(err error) bool {
 }
 
 func (g *Gateway) bindAffinity(session, model, account string) {
-	if session == "" || model == "" || account == "" || !g.cfg.AffinityEnabled() {
+	if session == "" || model == "" || account == "" || !g.live().AffinityEnabled() {
 		return
 	}
 	g.mu.Lock()

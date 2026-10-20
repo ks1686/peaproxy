@@ -108,7 +108,7 @@ func (g *Gateway) explainAutomatic(ctx context.Context, ex RouteExplanation) Rou
 		ex.Incomplete = "price ranking and session affinity need a request body; " +
 			"the deployments below are the ones a request would consider, not the order it would try them in"
 	}
-	allowed := g.cfg.AutomaticRoutes.Models(ex.Route)
+	allowed := g.live().AutomaticRoutes.Models(ex.Route)
 
 	g.mu.Lock()
 	models := catalog.AllAnnotated(append([]catalog.Model(nil), g.models...), g.queryLocked())
@@ -142,16 +142,16 @@ func (g *Gateway) explainAutomatic(ctx context.Context, ex RouteExplanation) Rou
 			ex.add(m, false, "outside this route's kind (pea/auto, pea/economy, pea/local, pea/free)")
 			continue
 		}
-		if !g.cfg.AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {
+		if !g.live().AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {
 			ex.add(m, false, "no credential attached; set optimization.allowAnonymousProviders to permit it")
 			continue
 		}
-		if g.cfg.FreeOnly() && !freeOnlyAllows(g, m) {
+		if g.live().FreeOnly() && !freeOnlyAllows(g, m) {
 			ex.add(m, false, "cannot prove a zero price, and freeOnly refuses rather than falls back"+
 				freeProofDetail(g, m))
 			continue
 		}
-		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
+		if g.live().SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
 			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
 				ex.add(m, false, "spend ceiling: "+reason)
 				continue
@@ -198,7 +198,7 @@ func (ex *RouteExplanation) add(m catalog.Model, eligible bool, reason string) {
 // user whose asserted price is the only thing holding a free route together
 // should be able to see that before the provider changes their terms.
 func freeProofDetail(g *Gateway, m catalog.Model) string {
-	if !g.cfg.FreeOnly() {
+	if !g.live().FreeOnly() {
 		return ""
 	}
 	p := priceForDeployment(g, m.AccountID, m.ID)
