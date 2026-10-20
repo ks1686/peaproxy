@@ -2,6 +2,7 @@ package translate
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -38,5 +39,21 @@ func TestFromOpenAIChatCarriesUsage(t *testing.T) {
 	usage.ApplyPublishedUsage(&e, out, false)
 	if !e.Costable || e.PromptTokens != 1200 || e.CacheRead != 1000 {
 		t.Fatalf("ledger reads %+v from the translated body", e)
+	}
+}
+
+// Chat counts cached reads inside prompt_tokens. The streamed Responses bridge
+// has to say which of its input tokens were cached, or they are priced as
+// fresh input.
+func TestStreamedResponsesCarryCachedInputTokens(t *testing.T) {
+	in := "data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n" +
+		"data: {\"id\":\"c\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1100,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":1000}}}\n\n" +
+		"data: [DONE]\n\n"
+	var out strings.Builder
+	if err := OpenAISSEToResponses(strings.NewReader(in), &out, "m"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"input_tokens_details":{"cached_tokens":1000}`) {
+		t.Fatalf("terminal usage lost the cached input tokens:\n%s", out.String())
 	}
 }

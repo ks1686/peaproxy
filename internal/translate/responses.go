@@ -530,10 +530,11 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 		OutputText:        text,
 	}
 	if in.Usage != nil {
-		out.Usage = responsesUsageFor(in.Usage.PromptTokens, in.Usage.CompletionTokens)
-		if out.Usage != nil && in.Usage.PromptTokensDetails != nil && in.Usage.PromptTokensDetails.CachedTokens > 0 {
-			out.Usage.InputTokensDetails = &responsesInputTokenInfo{CachedTokens: in.Usage.PromptTokensDetails.CachedTokens}
+		cached := 0
+		if in.Usage.PromptTokensDetails != nil {
+			cached = in.Usage.PromptTokensDetails.CachedTokens
 		}
+		out.Usage = responsesUsageWithCache(in.Usage.PromptTokens, in.Usage.CompletionTokens, cached)
 	}
 	return json.Marshal(out)
 }
@@ -588,6 +589,17 @@ func responsesContentText(raw json.RawMessage) (string, error) {
 //
 // A zero-valued usage block would read as "zero tokens" rather than "nobody
 // said", which is the difference between a measured zero and an unknown one.
+// responsesUsageWithCache is responsesUsageFor plus the cached share of the
+// input, which chat reports inside prompt_tokens and Responses reports as
+// input_tokens_details.cached_tokens.
+func responsesUsageWithCache(prompt, completion, cached int) *responsesUsage {
+	u := responsesUsageFor(prompt, completion)
+	if u != nil && cached > 0 {
+		u.InputTokensDetails = &responsesInputTokenInfo{CachedTokens: cached}
+	}
+	return u
+}
+
 func responsesUsageFor(prompt, completion int) *responsesUsage {
 	if prompt <= 0 && completion <= 0 {
 		return nil

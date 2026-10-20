@@ -77,7 +77,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 
 	var text strings.Builder
 	// Token counts from the upstream stream, carried into the terminal event.
-	promptTokens, completionTokens := 0, 0
+	promptTokens, completionTokens, cachedTokens := 0, 0, 0
 	type pendingCall struct {
 		ID, Name, Arguments string
 		Started             bool
@@ -146,8 +146,9 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
+				PromptTokens        int                        `json:"prompt_tokens"`
+				CompletionTokens    int                        `json:"completion_tokens"`
+				PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -157,7 +158,10 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		// one, so it is taken as the last non-zero reading rather than only on
 		// the terminal frame.
 		if u := chunk.Usage; u.PromptTokens > 0 || u.CompletionTokens > 0 {
-			promptTokens, completionTokens = u.PromptTokens, u.CompletionTokens
+			promptTokens, completionTokens, cachedTokens = u.PromptTokens, u.CompletionTokens, 0
+			if u.PromptTokensDetails != nil {
+				cachedTokens = u.PromptTokensDetails.CachedTokens
+			}
 		}
 		if chunk.ID != "" {
 			id = chunk.ID
@@ -448,7 +452,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			Model:             model,
 			Output:            output,
 			OutputText:        text.String(),
-			Usage:             responsesUsageFor(promptTokens, completionTokens),
+			Usage:             responsesUsageWithCache(promptTokens, completionTokens, cachedTokens),
 		},
 	}
 	raw, err := json.Marshal(terminal)
