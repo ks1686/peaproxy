@@ -38,12 +38,15 @@ var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
-	mu     sync.RWMutex
-	cfg    config.Config
-	path   string
-	reg    *adapter.Registry
-	inst   []instance
-	models []catalog.Model
+	mu   sync.RWMutex
+	cfg  config.Config
+	path string
+	reg  *adapter.Registry
+	inst []instance
+	// buildEpoch counts rebuilds, so a token saved by an adapter from an
+	// earlier build can tell that the live adapters were made without it.
+	buildEpoch uint64
+	models     []catalog.Model
 
 	// Artifacts holds context PeaProxy gathered earlier in the session. Nil
 	// means no context store is attached, and every consumer must treat that as
@@ -169,6 +172,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 func (g *Gateway) rebuild() error {
 	var inst []instance
 	var first error
+	epoch := g.buildEpoch + 1
 	for _, p := range g.cfg.Providers {
 		if p.Disabled {
 			continue
@@ -197,7 +201,7 @@ func (g *Gateway) rebuild() error {
 		// SaveOAuth has already updated cfg in memory, persist has logged the
 		// error, and the next successful save writes the token.
 		opts.PersistOAuth = func(tok oauth.Token) error {
-			_ = g.SaveOAuth(id, tok)
+			_ = g.saveOAuthFrom(id, tok, epoch)
 			return nil
 		}
 		adp, err := g.reg.Open(p.Adapter, opts)
@@ -210,6 +214,7 @@ func (g *Gateway) rebuild() error {
 		inst = append(inst, instance{Provider: p, Adapter: adp})
 	}
 	g.inst = inst
+	g.buildEpoch = epoch
 	g.refreshSeq++
 	g.refreshCommit = g.refreshSeq
 	if len(inst) == 0 && first != nil {
@@ -1426,6 +1431,16 @@ func (g *Gateway) AdapterByID(id string) (adapter.Adapter, bool) {
 // SaveOAuth persists refreshed subscription tokens via the secret store. The
 // in-memory token is updated even when the save fails.
 func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
+	return g.saveOAuthFrom(id, tok, 0)
+}
+
+// saveOAuthFrom is SaveOAuth for a token committed by an adapter from build
+// epoch (0: not from an adapter). When the adapters have been rebuilt since,
+// the live one for id was made from the config before this token reached it,
+// so it still holds the refresh token this refresh just spent (a rotating
+// provider answers its next refresh with invalid_grant). The adapters are
+// rebuilt again from the config, which now has the new token.
+func (g *Gateway) saveOAuthFrom(id string, tok oauth.Token, epoch uint64) error {
 	ct := config.OAuthFromRuntime(tok)
 	g.saveMu.Lock()
 	g.mu.Lock()
@@ -1437,7 +1452,20 @@ func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
 	}
 	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
-	return g.persistAndRefresh(mine)
+	rebuilt, err := g.persist(mine)
+	if !rebuilt && epoch != 0 {
+		g.mu.Lock()
+		if g.buildEpoch != epoch {
+			_ = g.rebuild()
+			rebuilt = true
+		}
+		g.mu.Unlock()
+	}
+	g.saveMu.Unlock()
+	if rebuilt {
+		go g.Refresh(context.Background())
+	}
+	return err
 }
 
 // newArtifactStore builds the session-scoped artifact store the configuration
