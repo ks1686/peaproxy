@@ -93,7 +93,8 @@ func (a *Adapter) post(ctx context.Context, path string, body []byte) ([]byte, e
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// A buffered Responses stream: fail past the limit rather than truncate.
+	return adapter.ReadBodyLimit(resp.Body, 32<<20)
 }
 
 // chatViaWire sends a non-streaming chat to the endpoint the model needs and

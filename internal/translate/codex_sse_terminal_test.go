@@ -84,3 +84,16 @@ func TestResponsesSSEReasoningDeltasDoNotLeakIntoContent(t *testing.T) {
 	}
 	assertChatSSEFinish(t, s, "stop")
 }
+
+// A buffered Responses stream that never reached a terminal event was cut off
+// (an 8 MiB read cap, a dropped connection). Its partial text must not be
+// handed back as a finished answer.
+func TestResponsesStreamToJSONRefusesAStreamWithoutATerminalEvent(t *testing.T) {
+	in := codexStream(
+		`{"type":"response.created","response":{"id":"r"}}`,
+		`{"type":"response.output_text.delta","delta":"the first half of an ans"}`,
+	)
+	if out, err := ResponsesStreamToJSON([]byte(in)); err == nil {
+		t.Fatalf("truncated stream returned as success: %s", out)
+	}
+}

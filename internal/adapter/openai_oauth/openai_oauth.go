@@ -538,15 +538,17 @@ func (a *Adapter) postResponses(ctx context.Context, raw []byte, stream bool) ([
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
 	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
-	return body, nil
+	// The whole SSE stream is buffered here (Codex refuses stream:false), and
+	// every lifecycle event repeats the response object, so a long answer is
+	// large; past the limit it fails instead of truncating.
+	return adapter.ReadBodyLimit(resp.Body, maxBufferedStream)
 }
+
+const maxBufferedStream = 32 << 20
 
 func (a *Adapter) doResponses(ctx context.Context, raw []byte, stream bool) (*http.Response, error) {
 	raw = translate.PrepareResponses(raw, stream)
