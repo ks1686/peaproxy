@@ -27,13 +27,15 @@ func TestFlightRunsWithTheLeadersRequestValues(t *testing.T) {
 	}
 }
 
-func TestFlightReportsWhichCallerLedTheCall(t *testing.T) {
+// A shared upstream call is billed once: exactly one caller that received the
+// result is told it was not shared, whichever of them that is.
+func TestFlightBillsExactlyOneReceiver(t *testing.T) {
 	var f Flight
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var wg sync.WaitGroup
 	var leaderShared, followerShared bool
-	wg.Add(1)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		_, leaderShared, _ = f.DoShared(context.Background(), "k", func(context.Context) ([]byte, error) {
@@ -43,25 +45,66 @@ func TestFlightReportsWhichCallerLedTheCall(t *testing.T) {
 		})
 	}()
 	<-started
-	done := make(chan struct{})
 	go func() {
+		defer wg.Done()
 		_, followerShared, _ = f.DoShared(context.Background(), "k", func(context.Context) ([]byte, error) {
 			t.Error("a follower must not run its own call")
 			return nil, nil
 		})
-		close(done)
 	}()
 	for f.waiters("k") < 2 {
 		time.Sleep(time.Millisecond)
 	}
 	close(release)
 	wg.Wait()
-	<-done
-	if leaderShared {
-		t.Fatal("the caller that ran the call is reported as sharing another's result")
+	if leaderShared == followerShared {
+		t.Fatalf("leader shared=%v follower shared=%v: exactly one receiver must bill the call", leaderShared, followerShared)
 	}
-	if !followerShared {
-		t.Fatal("the caller that joined is not reported as sharing the leader's result")
+}
+
+// The caller that started the call can leave (a disconnect, its own deadline)
+// while another keeps waiting. The upstream call still finishes and is billed,
+// so the receiver that gets it must not be told it was shared.
+func TestFlightBillsTheFollowerWhenTheLeaderLeaves(t *testing.T) {
+	var f Flight
+	release := make(chan struct{})
+	started := make(chan struct{})
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, _, err := f.DoShared(leaderCtx, "k", func(context.Context) ([]byte, error) {
+			close(started)
+			<-release
+			return []byte("body"), nil
+		})
+		leaderDone <- err
+	}()
+	<-started
+	type result struct {
+		shared bool
+		err    error
+	}
+	followerDone := make(chan result, 1)
+	go func() {
+		_, shared, err := f.DoShared(context.Background(), "k", func(context.Context) ([]byte, error) {
+			return nil, nil
+		})
+		followerDone <- result{shared, err}
+	}()
+	for f.waiters("k") < 2 {
+		time.Sleep(time.Millisecond)
+	}
+	cancelLeader()
+	if err := <-leaderDone; err == nil {
+		t.Fatal("the leader left but got a result")
+	}
+	close(release)
+	r := <-followerDone
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.shared {
+		t.Fatal("the only receiver of a finished upstream call was told it was shared, so nobody bills it")
 	}
 }
 

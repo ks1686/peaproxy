@@ -17,6 +17,9 @@ type call struct {
 	cancel  context.CancelFunc
 	body    []byte
 	err     error
+	// billed is set by the first caller to collect the result, which records
+	// the upstream cost; every later receiver records a shared hit.
+	billed bool
 }
 
 // Do runs fn once per key.
@@ -25,9 +28,12 @@ func (f *Flight) Do(ctx context.Context, key string, fn func(context.Context) ([
 	return body, err
 }
 
-// DoShared is Do, also reporting whether this caller received another caller's
-// result rather than running fn itself. A shared result cost nothing upstream
-// for this caller, and its ledger entry has to say so.
+// DoShared is Do, also reporting whether this caller's result was shared, i.e.
+// another receiver of the same upstream call is the one billed for it. Exactly
+// one receiver is told it was not shared: the first to collect the result, which
+// is normally the caller that started the call but is a follower when that
+// caller left before the call finished. Without that, a call whose leader
+// disconnected would finish upstream and be billed to nobody.
 //
 // fn runs with the leader's request values (the spend-hold collector among
 // them) but not its cancellation: one caller leaving must not cancel the call
@@ -40,8 +46,7 @@ func (f *Flight) DoShared(ctx context.Context, key string, fn func(context.Conte
 	if existing, ok := f.calls[key]; ok {
 		existing.waiters++
 		f.mu.Unlock()
-		body, err := f.wait(ctx, key, existing)
-		return body, true, err
+		return f.wait(ctx, key, existing)
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	c := &call{done: make(chan struct{}), waiters: 1, cancel: cancel}
@@ -54,8 +59,7 @@ func (f *Flight) DoShared(ctx context.Context, key string, fn func(context.Conte
 		f.forgetLocked(key, c)
 		f.mu.Unlock()
 	}()
-	body, err := f.wait(ctx, key, c)
-	return body, false, err
+	return f.wait(ctx, key, c)
 }
 
 // forgetLocked removes c from the map if it is still the call for key.
@@ -74,11 +78,11 @@ func (f *Flight) waiters(key string) int {
 	return f.calls[key].waiters
 }
 
-func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, error) {
+func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, bool, error) {
 	select {
 	case <-ctx.Done():
 		f.abandon(key, c)
-		return nil, ctx.Err()
+		return nil, true, ctx.Err()
 	case <-c.done:
 	}
 	// select picks at random when the caller is already cancelled and the
@@ -86,15 +90,17 @@ func (f *Flight) wait(ctx context.Context, key string, c *call) ([]byte, error) 
 	// observe success, and must not cancel peers who are still waiting.
 	if err := ctx.Err(); err != nil {
 		f.abandon(key, c)
-		return nil, err
+		return nil, true, err
 	}
 	f.mu.Lock()
 	c.waiters--
+	shared := c.billed
+	c.billed = true
 	f.mu.Unlock()
 	if c.err != nil {
-		return nil, c.err
+		return nil, shared, c.err
 	}
-	return append([]byte(nil), c.body...), nil
+	return append([]byte(nil), c.body...), shared, nil
 }
 
 func (f *Flight) abandon(key string, c *call) {
