@@ -490,7 +490,12 @@ func Save(path string, cfg Config) error {
 }
 
 func saveLocked(path string, cfg Config) error {
-	if err := cfg.Validate(); err != nil {
+	// The file is validated the way Load reads it: the LAN posture may be
+	// completed by PEAPROXY_* or serve flags, and serve checks it on the
+	// effective config before listening. Requiring it here made every save of
+	// such a server fail, since the merge keeps the file's own (tokenless)
+	// values rather than writing the environment's token into the file.
+	if err := cfg.validateFile(); err != nil {
 		return err
 	}
 	dir := configDir(path)
