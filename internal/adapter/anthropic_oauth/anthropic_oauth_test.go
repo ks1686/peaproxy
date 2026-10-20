@@ -546,6 +546,11 @@ type capturedMessage struct {
 
 func captureMessages(t *testing.T, model, raw string) (*http.Request, []byte, string) {
 	t.Helper()
+	return captureMessagesCtx(t, context.Background(), model, raw)
+}
+
+func captureMessagesCtx(t *testing.T, ctx context.Context, model, raw string) (*http.Request, []byte, string) {
+	t.Helper()
 	var got *http.Request
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -564,7 +569,7 @@ func captureMessages(t *testing.T, model, raw string) (*http.Request, []byte, st
 	t.Cleanup(srv.Close)
 	a := testAdapter(t, srv.URL)
 	a.token = oauth.Token{AccessToken: "oauth-at", ExpiresAt: time.Now().Add(time.Hour)}
-	if _, err := a.Messages(context.Background(), []byte(raw)); err != nil {
+	if _, err := a.Messages(ctx, []byte(raw)); err != nil {
 		t.Fatal(err)
 	}
 	if got == nil {

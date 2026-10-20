@@ -35,6 +35,9 @@ type Request struct {
 	// AnthropicBeta is the client's anthropic-beta header, normalized by
 	// NormalizeAnthropicBeta. Anthropic adapters merge it into their own list.
 	AnthropicBeta string
+	// ClaudeCodeHeaders holds a native Claude Code client's identity headers
+	// (ClaudeCodeHeaders), nil for every other client. Never mutate it.
+	ClaudeCodeHeaders []Header
 }
 
 type contextKey struct{}
