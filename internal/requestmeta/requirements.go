@@ -86,9 +86,20 @@ func messagesContainImage(raw json.RawMessage) bool {
 	return false
 }
 
+// inputContainsImage reports an image block anywhere in a content array,
+// including inside Responses message items and tool results, which carry their
+// own content arrays.
 func inputContainsImage(raw json.RawMessage) bool {
+	return containsImageDepth(raw, 0)
+}
+
+func containsImageDepth(raw json.RawMessage, depth int) bool {
+	if depth > 4 {
+		return false
+	}
 	var blocks []struct {
-		Type string `json:"type"`
+		Type    string          `json:"type"`
+		Content json.RawMessage `json:"content"`
 	}
 	if json.Unmarshal(raw, &blocks) != nil {
 		return false
@@ -96,6 +107,9 @@ func inputContainsImage(raw json.RawMessage) bool {
 	for _, block := range blocks {
 		switch block.Type {
 		case "image", "image_url", "input_image":
+			return true
+		}
+		if len(block.Content) > 0 && containsImageDepth(block.Content, depth+1) {
 			return true
 		}
 	}

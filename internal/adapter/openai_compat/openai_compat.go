@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -364,8 +365,27 @@ func (a *Adapter) Complete(ctx context.Context, model string, raw []byte) (adapt
 	return adapter.ChatResponse{Model: model, Raw: assembled, Content: content}, nil
 }
 
+// assembleOpenAIStream rebuilds a chat.completion from a chat SSE stream, for
+// upstreams that are always streamed even when the client asked for a single
+// response. Tool calls, finish_reason and usage are carried, not just text: a
+// tool call reduced to its text reads as an empty "stop" answer.
 func assembleOpenAIStream(body []byte) (string, []byte, error) {
-	var text strings.Builder
+	type toolCall struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
+	var (
+		text      strings.Builder
+		id, model string
+		finish    string
+		usage     json.RawMessage
+		calls     = map[int]*toolCall{}
+		order     []int
+	)
 	sc := bufio.NewScanner(bytes.NewReader(body))
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	for sc.Scan() {
@@ -378,36 +398,108 @@ func assembleOpenAIStream(body []byte) (string, []byte, error) {
 			continue
 		}
 		var chunk struct {
+			ID      string          `json:"id"`
+			Model   string          `json:"model"`
+			Usage   json.RawMessage `json:"usage"`
 			Choices []struct {
-				Delta struct {
-					Content string `json:"content"`
+				FinishReason string `json:"finish_reason"`
+				Delta        struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
 				} `json:"delta"`
 				Message struct {
 					Content string `json:"content"`
 				} `json:"message"`
 			} `json:"choices"`
 		}
-		if json.Unmarshal([]byte(payload), &chunk) != nil || len(chunk.Choices) == 0 {
+		if json.Unmarshal([]byte(payload), &chunk) != nil {
 			continue
 		}
-		if chunk.Choices[0].Delta.Content != "" {
-			text.WriteString(chunk.Choices[0].Delta.Content)
-		} else if chunk.Choices[0].Message.Content != "" && text.Len() == 0 {
-			text.WriteString(chunk.Choices[0].Message.Content)
+		if id == "" {
+			id = chunk.ID
+		}
+		if model == "" {
+			model = chunk.Model
+		}
+		if len(chunk.Usage) > 0 && string(chunk.Usage) != "null" {
+			usage = chunk.Usage
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		ch := chunk.Choices[0]
+		if ch.FinishReason != "" {
+			finish = ch.FinishReason
+		}
+		if ch.Delta.Content != "" {
+			text.WriteString(ch.Delta.Content)
+		} else if ch.Message.Content != "" && text.Len() == 0 {
+			text.WriteString(ch.Message.Content)
+		}
+		for _, d := range ch.Delta.ToolCalls {
+			tc, ok := calls[d.Index]
+			if !ok {
+				tc = &toolCall{Type: "function"}
+				calls[d.Index] = tc
+				order = append(order, d.Index)
+			}
+			if d.ID != "" {
+				tc.ID = d.ID
+			}
+			if d.Type != "" {
+				tc.Type = d.Type
+			}
+			if d.Function.Name != "" {
+				tc.Function.Name = d.Function.Name
+			}
+			tc.Function.Arguments += d.Function.Arguments
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return "", nil, err
 	}
 	content := text.String()
-	assembled, err := json.Marshal(map[string]any{
+	message := map[string]any{"role": "assistant", "content": content}
+	if len(order) > 0 {
+		sort.Ints(order)
+		list := make([]*toolCall, 0, len(order))
+		for _, i := range order {
+			list = append(list, calls[i])
+		}
+		message["tool_calls"] = list
+		if finish == "" {
+			finish = "tool_calls"
+		}
+	}
+	if finish == "" {
+		finish = "stop"
+	}
+	out := map[string]any{
 		"object": "chat.completion",
 		"choices": []any{map[string]any{
 			"index":         0,
-			"message":       map[string]string{"role": "assistant", "content": content},
-			"finish_reason": "stop",
+			"message":       message,
+			"finish_reason": finish,
 		}},
-	})
+	}
+	if id != "" {
+		out["id"] = id
+	}
+	if model != "" {
+		out["model"] = model
+	}
+	if len(usage) > 0 {
+		out["usage"] = usage
+	}
+	assembled, err := json.Marshal(out)
 	return content, assembled, err
 }
 

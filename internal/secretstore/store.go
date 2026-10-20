@@ -65,6 +65,11 @@ type Store struct {
 	dir     string
 	kr      keyringAPI
 	now     func() time.Time // nil means time.Now; tests move it forward
+	// scope is the config file this store belongs to ("" is the legacy
+	// directory-wide store). It names the blob and index files.
+	scope string
+	// krPrefix namespaces keychain items: "<dir id>/<scope>/", "" for legacy.
+	krPrefix string
 }
 
 type keyringAPI interface {
@@ -109,6 +114,10 @@ func Open(dir string) (*Store, error) {
 	if dir == "" {
 		dir = "."
 	}
+	return openBackend(dir, "")
+}
+
+func openBackend(dir, scope string) (*Store, error) {
 	switch backendFromEnv() {
 	case "file":
 		return OpenFile(dir)
@@ -118,12 +127,58 @@ func Open(dir string) (*Store, error) {
 		if testing.Testing() {
 			return OpenFile(dir)
 		}
-		s, err := openKeyring(dir)
-		if err == nil {
-			return s, nil
+		return openAuto(dir, scope)
+	}
+}
+
+// openKeyringFn is openKeyring, replaceable in tests.
+var openKeyringFn = openKeyring
+
+// openAuto picks the backend that already holds this directory's secrets and
+// only chooses afresh for a directory that has none. Re-probing on every Open
+// let one failed keychain probe (a locked login keychain) write a rotated
+// refresh token to secrets.enc while the keychain kept the stale one, which the
+// next load then read back; the reverse switch hid file secrets once the
+// keychain answered again.
+//
+// A config's own scoped store is the evidence when it exists; before its
+// migration, the legacy directory-wide store it will migrate from is.
+func openAuto(dir, scope string) (*Store, error) {
+	index, enc := filepath.Join(dir, scopedName(IndexFileName, scope)), filepath.Join(dir, scopedName(EncryptedFileName, scope))
+	if scope != "" && !nonEmptyFile(index) && !nonEmptyFile(enc) {
+		index, enc = filepath.Join(dir, IndexFileName), filepath.Join(dir, EncryptedFileName)
+	}
+	switch {
+	case keyringIndexHasKeys(index):
+		s, err := openKeyringFn(dir)
+		if err != nil {
+			return nil, fmt.Errorf("secretstore: this config's secrets are in the OS keychain, which is unavailable: %w", err)
 		}
+		return s, nil
+	case nonEmptyFile(enc):
 		return OpenFile(dir)
 	}
+	if s, err := openKeyringFn(dir); err == nil {
+		return s, nil
+	}
+	return OpenFile(dir)
+}
+
+// keyringIndexHasKeys reports whether this directory's keychain index names any
+// secret. Prune writes an index even when the keychain holds nothing, so an
+// empty one says nothing about where secrets live; an unreadable one is taken
+// as holding keys, so a damaged index cannot divert writes to the file.
+func keyringIndexHasKeys(path string) bool {
+	if !nonEmptyFile(path) {
+		return false
+	}
+	idx, err := loadIndexFile(path)
+	return err != nil || len(idx.keys) > 0
+}
+
+func nonEmptyFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 // OpenFile always uses the AES-GCM file next to dir (CI / tests).
@@ -275,9 +330,9 @@ func (s *Store) keyPath() string {
 }
 
 func (s *Store) encPath() string {
-	return filepath.Join(s.dir, EncryptedFileName)
+	return filepath.Join(s.dir, scopedName(EncryptedFileName, s.scope))
 }
 
 func (s *Store) indexPath() string {
-	return filepath.Join(s.dir, IndexFileName)
+	return filepath.Join(s.dir, scopedName(IndexFileName, s.scope))
 }

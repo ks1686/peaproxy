@@ -163,7 +163,7 @@ func routingMutations() []Mutation {
 		{
 			Scenario: "free-only refuses a named model too",
 			File:     "internal/gateway/engine_route.go",
-			From:     "if g.cfg.FreeOnly() && !deploymentProvenFree(g, m) {",
+			From:     "if g.live().FreeOnly() && !deploymentProvenFree(g, m) {",
 			To:       "if false {",
 			Why:      "naming a model must not be a way around the switch that protects the account",
 		},
@@ -192,7 +192,7 @@ func routingMutations() []Mutation {
 		{
 			Scenario: "free-only refuses a metered deployment",
 			File:     "internal/gateway/engine_route.go",
-			From:     "if g.cfg.FreeOnly() {",
+			From:     "if g.live().FreeOnly() {",
 			To:       "if false {",
 			Why:      "free-only exists to refuse spend; a deployment that cannot prove it is free must be refused",
 		},
@@ -206,7 +206,7 @@ func routingMutations() []Mutation {
 		{
 			Scenario: "a route refuses a provider with no account attached",
 			File:     "internal/gateway/engine_route.go",
-			From:     "if !g.cfg.AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {",
+			From:     "if !g.live().AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {",
 			To:       "if false {",
 			Why:      "the consent guard is the only thing standing between a prompt and somebody else's machine",
 		},

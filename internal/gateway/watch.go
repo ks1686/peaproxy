@@ -154,6 +154,7 @@ func (g *Gateway) adopt(disk config.Config) (rebuilt bool, err error) {
 	next.Failover = disk.Failover
 	next.AutomaticRoutes = disk.AutomaticRoutes
 	next.RequestEngine = disk.RequestEngine
+	next.Optimization = disk.Optimization
 	// Deliberately not adopted, because they cannot change under a running
 	// server and adopting them would be a surprise rather than a feature:
 	// Bind and Port (the listener is already bound), AllowNonLoopback and
@@ -164,6 +165,9 @@ func (g *Gateway) adopt(disk config.Config) (rebuilt bool, err error) {
 	next.AllowNonLoopback, next.AdminToken = g.cfg.AllowNonLoopback, g.cfg.AdminToken
 	next.RequestLog, next.SchemaVersion = g.cfg.RequestLog, g.cfg.SchemaVersion
 	g.cfg = next
+	// maxInFlight is enforced by the admission gate, which only knows what is
+	// published to it.
+	g.publishAdmissionLimits(next)
 	// The merge base moves with it, so the next save does not undo what was just
 	// adopted.
 	g.saved = next

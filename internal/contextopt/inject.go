@@ -117,6 +117,24 @@ func toolNamed(raw json.RawMessage, name string) bool {
 	return t.Function.Name == name || t.Name == name
 }
 
+// DeclaresProxyTool reports whether the client's own request already defines
+// a tool named like PeaProxy's. Such a request is never injected, and its calls
+// to that tool belong to the client, so PeaProxy must not answer them.
+func DeclaresProxyTool(body []byte) bool {
+	var doc struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return false
+	}
+	for _, raw := range doc.Tools {
+		if toolNamed(raw, ToolName) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsProxyToolCall reports whether a tool call in a response is one PeaProxy
 // owns and therefore must answer itself.
 func IsProxyToolCall(name string) bool { return bytes.Equal([]byte(name), []byte(ToolName)) }

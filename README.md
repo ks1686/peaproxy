@@ -126,7 +126,7 @@ Captured from live `peaproxy serve` plus a local OpenAI-compat mock (`scripts/ca
 | Qwen consumer OAuth | **Removed** (discontinued 2026-04-15). Use an API key or Alibaba Coding Plan |
 | Factory / Droid chat upstream | **Not yet** — Droid is a **client** preset |
 | OpenCode Go | Shipped as API key (`opencode_go`, distinct from Zen) |
-| OS keychain / `secrets.enc` | Shipped. Large OAuth tokens are stored as chunked keychain items |
+| OS keychain / encrypted file (one per config) | Shipped. Large OAuth tokens are stored as chunked keychain items |
 | 429/401 failover + cooldown skip + Health | Shipped (`round-robin` / `fill-first` / `sticky` / `adaptive`). Session affinity keeps one conversation on one account until it cools (default on, 1h). Cooldown length follows the provider's reset hint; **entitlement failures (402 / exhausted free tier) get 15 minutes, not 30s**; the 503 names the account and cause; a slow first token never starts a cooldown |
 | Harness presets + `clients verify --chat` | Shipped (Cursor, Claude Code, OpenCode, Pi, Codex, Continue, Cline, Amp, Droid) |
 | Settings, onboarding CTAs, `config validate` | Shipped. `config validate` reaches the verdict `serve` reaches, and reports keys this version does not read. `--strict-config` turns that report into a non-zero exit, for a CI job or a pre-commit hook (`docs/CONFIG.md`) |

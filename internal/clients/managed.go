@@ -173,7 +173,7 @@ func insertOwned(name string, raw []byte, baseURL, model string) ([]byte, error)
 	case "codex":
 		return insertCodex(raw, baseURL, model), nil
 	case "continue":
-		return insertContinue(raw, baseURL, model), nil
+		return insertContinue(raw, baseURL, model)
 	case "pi":
 		return insertPi(raw, baseURL)
 	case "claude-code":
@@ -490,28 +490,88 @@ func stripJSONC(raw []byte) []byte {
 	return []byte(strings.Join(kept, "\n"))
 }
 
+// Codex reads its provider and model selection from the top level of
+// config.toml, so connecting has to set them there, not just add a provider
+// table. A line PeaProxy writes ends in codexOwned; a line it replaced is kept
+// verbatim right below as a codexWas comment, so disconnect restores the
+// user's previous selection byte for byte.
+const (
+	codexOwned = "# peaproxy-owned"
+	codexWas   = "# peaproxy-was: "
+)
+
 func insertCodex(raw []byte, baseURL, model string) []byte {
 	text := removeCodex(string(raw))
 	eol := "\n"
 	if strings.Contains(text, "\r\n") {
 		eol = "\r\n"
 	}
-	trailing := strings.HasSuffix(text, eol) || strings.HasSuffix(text, "\n")
-	body := strings.TrimRight(text, "\r\n")
-	block := "[model_providers.peaproxy]" + eol +
-		"name = \"PeaProxy\"" + eol +
-		"base_url = " + quote(baseURL) + eol +
-		"model = " + quote(model) + eol
-	if body == "" {
-		return []byte(block)
+	trailing := strings.HasSuffix(text, "\n")
+	body := strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	var lines []string
+	if body != "" {
+		lines = strings.Split(body, "\n")
 	}
-	// A blank line before the block, so it reads as its own table, and no
-	// trailing newline added to a file that had none.
-	out := body + eol + eol + block
-	if !trailing {
-		out = strings.TrimSuffix(out, eol)
+	selection := []struct{ key, value string }{
+		{"model_provider", quote("peaproxy")},
+		{"model", quote(model)},
 	}
-	return []byte(out)
+	set := map[string]bool{}
+	var out []string
+	top := true
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			top = false
+		}
+		replaced := false
+		if key, ok := tomlTopLevelKey(line); ok && top {
+			for _, sel := range selection {
+				if sel.key == key && !set[key] {
+					out = append(out, sel.key+" = "+sel.value+" "+codexOwned, codexWas+line)
+					set[key], replaced = true, true
+					break
+				}
+			}
+		}
+		if !replaced {
+			out = append(out, line)
+		}
+	}
+	var head []string
+	for _, sel := range selection {
+		if !set[sel.key] {
+			head = append(head, sel.key+" = "+sel.value+" "+codexOwned)
+		}
+	}
+	out = append(head, out...)
+	// A blank line before the table, so it reads as its own table.
+	if len(lines) > 0 {
+		out = append(out, "")
+	}
+	out = append(out,
+		"[model_providers.peaproxy]",
+		`name = "PeaProxy"`,
+		"base_url = "+quote(baseURL),
+		`wire_api = "responses"`,
+	)
+	result := strings.Join(out, eol)
+	if trailing || len(lines) == 0 {
+		result += eol
+	}
+	return []byte(result)
+}
+
+// tomlTopLevelKey returns the bare key of a "key = value" line.
+func tomlTopLevelKey(line string) (string, bool) {
+	trim := strings.TrimSpace(line)
+	if trim == "" || strings.HasPrefix(trim, "#") || strings.HasPrefix(trim, "[") {
+		return "", false
+	}
+	key, _, ok := strings.Cut(trim, "=")
+	if !ok {
+		return "", false
+	}
+	return strings.TrimSpace(key), true
 }
 
 func removeCodex(text string) string {
@@ -538,6 +598,10 @@ func removeCodex(text string) string {
 		if skip {
 			continue
 		}
+		if strings.HasSuffix(trim, codexOwned) {
+			continue
+		}
+		line = strings.TrimPrefix(line, codexWas)
 		out = append(out, line)
 	}
 	joined := strings.Join(out, "\n")
@@ -547,29 +611,60 @@ func removeCodex(text string) string {
 	return joined
 }
 
-func insertContinue(raw []byte, baseURL, model string) []byte {
+// continueWas marks a top-level models header PeaProxy rewrote; the original
+// line follows it, so disconnect can put it back.
+const continueWas = "# peaproxy-was: "
+
+func insertContinue(raw []byte, baseURL, model string) ([]byte, error) {
 	text := strings.TrimRight(removeContinue(string(raw)), "\n")
-	block := "  # peaproxy-owned-start\n  - name: PeaProxy\n    provider: openai\n    model: " + quote(model) + "\n    apiBase: " + quote(baseURL) + "\n    apiKey: peaproxy\n  # peaproxy-owned-end\n"
+	block := "  # peaproxy-owned-start\n  - name: PeaProxy\n    provider: openai\n    model: " + quote(model) + "\n    apiBase: " + quote(baseURL) + "\n    apiKey: peaproxy\n  # peaproxy-owned-end"
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "models:" {
-			out := append([]string{}, lines[:i+1]...)
-			out = append(out, strings.TrimRight(block, "\n"))
-			out = append(out, lines[i+1:]...)
-			return []byte(strings.Join(out, "\n") + "\n")
+		// Only the top-level key: an indented "models:" belongs to some other
+		// mapping, and adding PeaProxy there would configure nothing.
+		if !strings.HasPrefix(line, "models:") {
+			continue
 		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, "models:"))
+		header := line
+		switch {
+		case rest == "" || strings.HasPrefix(rest, "#"):
+			// A block sequence header, possibly with a comment.
+		case strings.HasPrefix(rest, "[]"):
+			// An empty flow list becomes a block header; the original line is
+			// kept so disconnect restores it.
+			if tail := strings.TrimSpace(strings.TrimPrefix(rest, "[]")); tail != "" && !strings.HasPrefix(tail, "#") {
+				return nil, ErrGuidedSetup
+			}
+			header = "models: " + continueWas + line
+		default:
+			// A flow list with entries, an alias or a tag: not something to
+			// merge into by editing lines. Refuse rather than corrupt it.
+			return nil, ErrGuidedSetup
+		}
+		out := append([]string{}, lines[:i]...)
+		out = append(out, header, block)
+		out = append(out, lines[i+1:]...)
+		return []byte(strings.Join(out, "\n") + "\n"), nil
 	}
 	if text != "" {
 		text += "\n"
 	}
-	return []byte(text + "models:\n" + block)
+	// The key is PeaProxy's own here, so disconnect removes it with the block.
+	return []byte(text + continueOwnedKey + "\n" + block + "\n"), nil
 }
+
+const continueOwnedKey = "models: # peaproxy-owned-key"
 
 func removeContinue(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	skip := false
 	for _, line := range lines {
+		if line == continueOwnedKey {
+			continue
+		}
+		line = strings.TrimPrefix(line, "models: "+continueWas)
 		trim := strings.TrimSpace(line)
 		if trim == "# peaproxy-owned-start" {
 			skip = true

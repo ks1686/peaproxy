@@ -27,11 +27,15 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	// the ledger is what a spend ceiling is judged on and an unmeasured call
 	// fails it closed.
 	promptTokens, completionTokens := 0, 0
+	cacheReadTokens, cacheWriteTokens := 0, 0
 	type thinkAcc struct {
 		kind, thinking, signature, data string
 	}
 	accs := map[int]*thinkAcc{}
 	var accOrder []int
+	// Chat numbers tool calls 0, 1, 2; Anthropic numbers content blocks, and a
+	// text or thinking block before the first tool would leave holes.
+	toolIndex := map[int]int{}
 	writeRole := func() error {
 		if wroteRole {
 			return nil
@@ -63,8 +67,10 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				ID    string `json:"id"`
 				Model string `json:"model"`
 				Usage *struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens              int `json:"input_tokens"`
+					OutputTokens             int `json:"output_tokens"`
+					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 			// usage on message_delta is the cumulative output count; the input
@@ -108,6 +114,8 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				model = ev.Message.Model
 				if ev.Message.Usage != nil {
 					promptTokens = ev.Message.Usage.InputTokens
+					cacheReadTokens = ev.Message.Usage.CacheReadInputTokens
+					cacheWriteTokens = ev.Message.Usage.CacheCreationInputTokens
 				}
 			}
 		case "content_block_start":
@@ -133,7 +141,12 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				if err := writeRole(); err != nil {
 					return err
 				}
-				tc := openAIStreamToolCall{Index: ev.Index, ID: ev.ContentBlock.ID, Type: "function"}
+				idx, seen := toolIndex[ev.Index]
+				if !seen {
+					idx = len(toolIndex)
+					toolIndex[ev.Index] = idx
+				}
+				tc := openAIStreamToolCall{Index: idx, ID: ev.ContentBlock.ID, Type: "function"}
 				tc.Function.Name = ev.ContentBlock.Name
 				if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{ToolCalls: []openAIStreamToolCall{tc}}, ""); err != nil {
 					return err
@@ -160,7 +173,12 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				if err := writeRole(); err != nil {
 					return err
 				}
-				tc := openAIStreamToolCall{Index: ev.Index}
+				idx, seen := toolIndex[ev.Index]
+				if !seen {
+					idx = len(toolIndex)
+					toolIndex[ev.Index] = idx
+				}
+				tc := openAIStreamToolCall{Index: idx}
 				tc.Function.Arguments = ev.Delta.PartialJSON
 				if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{ToolCalls: []openAIStreamToolCall{tc}}, ""); err != nil {
 					return err
@@ -230,16 +248,12 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				return err
 			}
 		}
-		var usage *OpenAIChatUsage
 		// Both halves have to be published for the pair to be a measurement.
 		// One side alone leaves real tokens uncounted, and reporting it would
 		// understate the call rather than admit it is unmeasured.
-		if promptTokens > 0 && completionTokens > 0 {
-			usage = &OpenAIChatUsage{
-				PromptTokens:     promptTokens,
-				CompletionTokens: completionTokens,
-				TotalTokens:      promptTokens + completionTokens,
-			}
+		var usage *OpenAIChatUsage
+		if promptTokens+cacheReadTokens+cacheWriteTokens > 0 && completionTokens > 0 {
+			usage = claudeChatUsage(promptTokens, cacheReadTokens, cacheWriteTokens, completionTokens)
 		}
 		if err := WriteOpenAIChatSSEFinishUsage(w, id, model, openAIFinishFromClaude(stopReason, hadToolCalls), usage); err != nil {
 			return err

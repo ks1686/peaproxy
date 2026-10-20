@@ -76,21 +76,9 @@ func responsesStreamToJSON(body []byte) ([]byte, error) {
 		}
 		return completed, nil
 	}
-	if text.Len() == 0 {
-		return nil, fmt.Errorf("responses stream ended without a completed response")
-	}
-	return json.Marshal(map[string]any{
-		"output_text": text.String(),
-		"output": []any{
-			map[string]any{
-				"type": "message",
-				"role": "assistant",
-				"content": []any{
-					map[string]any{"type": "output_text", "text": text.String()},
-				},
-			},
-		},
-	})
+	// No terminal event: the stream was cut off. Assembling its partial text
+	// into a response would present a truncated answer as a finished one.
+	return nil, fmt.Errorf("responses stream ended without a completed response")
 }
 
 func responsesObjectHasText(body []byte) bool {

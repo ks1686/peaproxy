@@ -53,7 +53,7 @@ func (g *Gateway) QuoteFor(account, clientModel string) economics.Quote {
 // a row, and a catalog row for that account is a row. Duplicate ids collapse,
 // because the same model listed twice is still one deployment to price.
 func (g *Gateway) routeCandidatesFor(account, route string) []string {
-	allowed := g.cfg.AutomaticRoutes.Models(route)
+	allowed := g.live().AutomaticRoutes.Models(route)
 	eligible := func(model string) bool {
 		return len(allowed) == 0 || contains(allowed, model)
 	}
@@ -68,7 +68,7 @@ func (g *Gateway) routeCandidatesFor(account, route string) []string {
 	}
 	// A configured price keyed by account/model describes a deployment the user
 	// stated, whether or not a live listing currently shows it.
-	for key, quote := range g.cfg.AutomaticRoutes.Prices {
+	for key, quote := range g.live().AutomaticRoutes.Prices {
 		if quote.Input == nil && quote.Output == nil {
 			continue
 		}

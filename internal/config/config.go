@@ -466,7 +466,7 @@ func loadReportingLocked(path string) (Config, unreadableSecrets, error) {
 	if err != nil {
 		return Config{}, nil, err
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validateFile(); err != nil {
 		return Config{}, nil, err
 	}
 	return cfg, unreadable, nil
@@ -490,7 +490,12 @@ func Save(path string, cfg Config) error {
 }
 
 func saveLocked(path string, cfg Config) error {
-	if err := cfg.Validate(); err != nil {
+	// The file is validated the way Load reads it: the LAN posture may be
+	// completed by PEAPROXY_* or serve flags, and serve checks it on the
+	// effective config before listening. Requiring it here made every save of
+	// such a server fail, since the merge keeps the file's own (tokenless)
+	// values rather than writing the environment's token into the file.
+	if err := cfg.validateFile(); err != nil {
 		return err
 	}
 	dir := configDir(path)
@@ -519,6 +524,22 @@ func writeAtomic(path string, b []byte) error {
 
 // Validate enforces loopback-by-default security.
 func (c Config) Validate() error {
+	if err := c.validateFile(); err != nil {
+		return err
+	}
+	if !IsLoopback(c.Bind) {
+		if !c.AllowNonLoopback || c.AdminToken == "" {
+			return fmt.Errorf("non-loopback bind %q requires --allow-lan (or allowNonLoopback: true) and a non-empty adminToken", c.Bind)
+		}
+	}
+	return nil
+}
+
+// validateFile is Validate without the LAN posture check. Load uses it: the
+// bind, allow-LAN flag and admin token can each come from PEAPROXY_* or a
+// serve flag, which apply after the file is read, so the posture is checked on
+// the effective config (serve validates it before listening).
+func (c Config) validateFile() error {
 	if err := c.validateOptimization(); err != nil {
 		return err
 	}
@@ -527,11 +548,6 @@ func (c Config) Validate() error {
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d", c.Port)
-	}
-	if !IsLoopback(c.Bind) {
-		if !c.AllowNonLoopback || c.AdminToken == "" {
-			return fmt.Errorf("non-loopback bind %q requires --allow-lan (or allowNonLoopback: true) and a non-empty adminToken", c.Bind)
-		}
 	}
 	ids := map[string]struct{}{}
 	for _, p := range c.Providers {

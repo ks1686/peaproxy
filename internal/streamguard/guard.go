@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -23,6 +24,10 @@ var (
 	ErrBounded = errors.New("stream prelude exceeded its buffer")
 	ErrTimeout = errors.New("stream prelude timed out before a valid event")
 	ErrPrelude = errors.New("stream prelude failed before a valid event")
+	// ErrEmpty is a stream that ended cleanly without a single valid event
+	// (only pings or [DONE]). It wraps ErrPrelude, so it fails over like any
+	// other bad prelude.
+	ErrEmpty = fmt.Errorf("%w: the stream ended without any event", ErrPrelude)
 )
 
 // Guard sits in front of the client writer.
@@ -192,6 +197,26 @@ func (g *Guard) Finish() error {
 	}
 	if !g.committed {
 		g.failed = ErrPrelude
+		return g.failed
+	}
+	return nil
+}
+
+// Complete is Finish for an attempt whose bytes have all been written to the
+// guard. A stream that delivered no valid event at all is a failed attempt
+// (ErrEmpty), not an empty success.
+//
+// Finish cannot make that call: on a translated path it runs when the adapter
+// returns, while the translator may still be writing into the guard. Each path
+// calls Complete where it knows its attempt is fully written.
+func (g *Guard) Complete() error {
+	if err := g.Finish(); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.committed {
+		g.failed = ErrEmpty
 		return g.failed
 	}
 	return nil

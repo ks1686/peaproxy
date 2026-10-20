@@ -50,6 +50,15 @@ func chatBody(req adapter.ChatRequest) ([]byte, error) {
 	}{Model: req.Model, Messages: req.Messages, Stream: req.Stream})
 }
 
+// wireClient is the client for model traffic; a test-built adapter without an
+// apiClient falls back to httpClient.
+func (a *Adapter) wireClient() *http.Client {
+	if a.apiClient != nil {
+		return a.apiClient
+	}
+	return a.httpClient
+}
+
 func (a *Adapter) postResponse(ctx context.Context, path string, body []byte) (*http.Response, error) {
 	a.mu.Lock()
 	tok := a.token
@@ -63,7 +72,7 @@ func (a *Adapter) postResponse(ctx context.Context, path string, body []byte) (*
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	a.setCopilotHeaders(req)
-	resp, err := a.httpClient.Do(req)
+	resp, err := a.wireClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +93,8 @@ func (a *Adapter) post(ctx context.Context, path string, body []byte) ([]byte, e
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	// A buffered Responses stream: fail past the limit rather than truncate.
+	return adapter.ReadBodyLimit(resp.Body, 32<<20)
 }
 
 // chatViaWire sends a non-streaming chat to the endpoint the model needs and

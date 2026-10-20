@@ -130,6 +130,15 @@ func (a *Adapter) AuthStart(ctx context.Context) (adapter.AuthSession, error) {
 		return adapter.AuthSession{}, err
 	}
 	pending := &pendingAuth{pkce: pkce, state: state, redirectURI: RedirectURI}
+	// A new login supersedes one still waiting on the fixed callback port.
+	// Release that listener first, or binding the port again fails with
+	// "in use" until the old attempt times out.
+	a.mu.Lock()
+	if a.pending != nil && a.pending.lb != nil {
+		_ = a.pending.lb.Close()
+		a.pending.lb = nil
+	}
+	a.mu.Unlock()
 	if !a.skipLoopback {
 		lb, lerr := oauth.StartLoopback("127.0.0.1:"+callbackPort, "/auth/callback")
 		if lerr != nil {
@@ -538,15 +547,17 @@ func (a *Adapter) postResponses(ctx context.Context, raw []byte, stream bool) ([
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, err
-	}
 	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return nil, adapter.NewHTTPError(resp, truncate(body))
 	}
-	return body, nil
+	// The whole SSE stream is buffered here (Codex refuses stream:false), and
+	// every lifecycle event repeats the response object, so a long answer is
+	// large; past the limit it fails instead of truncating.
+	return adapter.ReadBodyLimit(resp.Body, maxBufferedStream)
 }
+
+const maxBufferedStream = 32 << 20
 
 func (a *Adapter) doResponses(ctx context.Context, raw []byte, stream bool) (*http.Response, error) {
 	raw = translate.PrepareResponses(raw, stream)

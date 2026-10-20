@@ -11,23 +11,30 @@ import (
 // A zero timeout leaves the body unbounded so streams are not cut off. Header
 // and dial deadlines still apply, and a canceled caller context closes the body.
 func HTTPClient(timeout time.Duration, observe func(http.Header)) *http.Client {
-	base := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          32,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 2 * time.Minute,
-		ExpectContinueTimeout: time.Second,
-	}
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: lifecycleTransport{base: base, observe: observe},
+		Transport: lifecycleTransport{base: sharedTransport, observe: observe},
 	}
+}
+
+// sharedTransport is the one connection pool every adapter client uses. The
+// settings were identical per client anyway, and adapters that rebuild their
+// inner client per request (the subscription-OAuth family) used to get a fresh
+// transport each time: a new TCP+TLS handshake per call and an idle connection
+// stranded in a pool nobody reused. http.Transport is safe for concurrent use.
+var sharedTransport = &http.Transport{
+	Proxy: http.ProxyFromEnvironment,
+	DialContext: (&net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConns:          128,
+	MaxIdleConnsPerHost:   16,
+	IdleConnTimeout:       90 * time.Second,
+	TLSHandshakeTimeout:   10 * time.Second,
+	ResponseHeaderTimeout: 2 * time.Minute,
+	ExpectContinueTimeout: time.Second,
 }
 
 type lifecycleTransport struct {

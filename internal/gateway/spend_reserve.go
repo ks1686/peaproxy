@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -33,8 +34,8 @@ import (
 // model has written it, and inventing a figure would make the hold a guess
 // dressed as a cap. What is held is the request's own input, which is knowable
 // now, and what it turns out to be is measured when the call completes.
-func (g *Gateway) holdSpend(account, model string, body []byte) error {
-	ceiling := g.cfg.SpendCeiling()
+func (g *Gateway) holdSpend(ctx context.Context, account, model string, body []byte) error {
+	ceiling := g.live().SpendCeiling()
 	store := g.Usage
 	if ceiling <= 0 || store == nil || account == "" {
 		return nil
@@ -50,7 +51,7 @@ func (g *Gateway) holdSpend(account, model string, body []byte) error {
 		// during routing; fabricating a hold here would only invent a number.
 		return nil
 	}
-	w, ok := store.HoldSpend(spendCeilingDays, func(w usage.SpendWindow) bool {
+	w, ok := store.HoldSpendOwned(usage.HoldsFrom(ctx), spendCeilingDays, func(w usage.SpendWindow) bool {
 		blocked, _ := g.ceilingBlocksIn(w, ceiling, estimate)
 		return !blocked
 	}, estimate)
@@ -101,7 +102,7 @@ func (g *Gateway) inputCostFor(account, model string, body []byte) float64 {
 // Only a discarded round is recorded here. The round returned to the client is
 // recorded by the ordinary path, and recording it twice would double-count the
 // one call a user can see.
-func (g *Gateway) recordDiscardedRound(account, model string, body []byte) {
+func (g *Gateway) recordDiscardedRound(ctx context.Context, account, model string, body []byte) {
 	if g.Usage == nil || account == "" {
 		return
 	}
@@ -120,6 +121,12 @@ func (g *Gateway) recordDiscardedRound(account, model string, body []byte) {
 	}
 	usage.ApplyPublishedUsage(&e, body, false)
 	g.PriceUsage(&e, account, model)
+	// The holds collected so far belong to rounds that have finished; this
+	// event records their cost, so they leave with it. The next round takes a
+	// hold of its own.
+	if holds := usage.HoldsFrom(ctx); holds != nil {
+		e.Holds, e.HoldsTracked = holds.Take(), true
+	}
 	g.Usage.Add(e)
 }
 
@@ -159,3 +166,48 @@ func (e ceilingRefusal) Error() string { return e.reason }
 type RoundLimitError struct{ reason string }
 
 func (e RoundLimitError) Error() string { return e.reason }
+
+// claimHolds moves a coalesced call's holds to the receiver billed for it, so
+// the event that records the cost releases them. A receiver outside a tracked
+// request records no holds, so they are released here.
+func (g *Gateway) claimHolds(ctx context.Context, attach any) {
+	holds, _ := attach.(*usage.HoldSet)
+	ids := holds.Take()
+	if len(ids) == 0 {
+		return
+	}
+	if !usage.HoldsFrom(ctx).Absorb(ids) {
+		g.Usage.ReleaseHolds(ids)
+	}
+}
+
+// recordUnclaimed settles a coalesced call that nobody collected. A call that
+// completed was paid for upstream, so its cost is recorded (marked discarded:
+// no client received it) and its holds leave with that event. A call that
+// failed or was cancelled only releases its holds.
+func (g *Gateway) recordUnclaimed(account, model, path string, body []byte, attach any, err error) {
+	holds, _ := attach.(*usage.HoldSet)
+	ids := holds.Take()
+	if g.Usage == nil {
+		return
+	}
+	if err != nil || len(body) == 0 {
+		g.Usage.ReleaseHolds(ids)
+		return
+	}
+	e := usage.Event{
+		Time:         time.Now(),
+		AccountID:    account,
+		Provider:     account,
+		Model:        model,
+		Protocol:     "openai",
+		Path:         path,
+		Status:       http.StatusOK,
+		Discarded:    true,
+		Holds:        ids,
+		HoldsTracked: true,
+	}
+	usage.ApplyPublishedUsage(&e, body, false)
+	g.PriceUsage(&e, account, model)
+	g.Usage.Add(e)
+}

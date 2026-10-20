@@ -161,7 +161,7 @@ func TestTwoProcessesSavingAtOnceKeepBothAccounts(t *testing.T) {
 		t.Errorf("the account added by the other process did not survive: %v", ids)
 	}
 	// And the secrets must not have been spliced or dropped by a torn index.
-	st, err := secretstore.OpenFile(dir)
+	st, err := secretstore.OpenFor(path)
 	if err != nil {
 		t.Fatal(err)
 	}

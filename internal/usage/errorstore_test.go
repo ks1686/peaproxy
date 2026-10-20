@@ -2,6 +2,7 @@ package usage
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -233,5 +234,45 @@ func TestReadErrorRecordsSkipsUnparseableLines(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].AccountID != "ok" {
 		t.Fatalf("a torn line broke the read: %+v", got)
+	}
+}
+
+// The prune rewrite replaces the file rather than truncating it in place. A
+// truncate-then-write leaves a window (a crash, a full disk) in which the kept
+// history is gone; a reader that opened the log before the prune sees that
+// window as the file emptying under it.
+func TestPruneErrorLogReplacesTheFileInsteadOfTruncatingIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows refuses to replace a file another handle holds open, which is what this test observes with")
+	}
+	dir := t.TempDir()
+	path := ErrorLogPath(dir)
+	base := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	var lines []string
+	for _, days := range []int{20, 1} {
+		b, err := json.Marshal(Event{AccountID: "a", Status: 500, Class: ClassUpstreamError, Time: base.AddDate(0, 0, -days)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(b))
+	}
+	before := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	if _, err := pruneErrorLog(path, ErrorCutoff(base, ErrorRetention())); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != before {
+		t.Fatalf("the log was rewritten in place: a reader open across the prune saw %q", got)
 	}
 }

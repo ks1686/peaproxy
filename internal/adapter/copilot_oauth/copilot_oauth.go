@@ -48,13 +48,18 @@ type Adapter struct {
 	apiBase         string
 	apiBaseLocked   bool
 	httpClient      *http.Client
-	persist         func(oauth.Token) error
-	pollInterval    time.Duration
-	mu              sync.Mutex
-	token           oauth.Token
-	generation      uint64
-	commitMu        sync.Mutex
-	pending         *oauth.DeviceCode
+	// apiClient carries model traffic. It has no total timeout, because
+	// http.Client.Timeout also bounds reading the body and would cut a stream
+	// or a long completion off; dial, TLS and response-header deadlines and the
+	// caller's context still apply. httpClient keeps 30s for auth calls.
+	apiClient    *http.Client
+	persist      func(oauth.Token) error
+	pollInterval time.Duration
+	mu           sync.Mutex
+	token        oauth.Token
+	generation   uint64
+	commitMu     sync.Mutex
+	pending      *oauth.DeviceCode
 }
 
 // New builds the adapter.
@@ -79,6 +84,7 @@ func New(opts adapter.Options) (adapter.Adapter, error) {
 		apiBase:         base,
 		apiBaseLocked:   locked,
 		httpClient:      adapter.HTTPClient(30*time.Second, opts.ObserveHeaders),
+		apiClient:       adapter.HTTPClient(0, opts.ObserveHeaders),
 		persist:         opts.PersistOAuth,
 		token:           opts.OAuth,
 		pollInterval:    5 * time.Second,

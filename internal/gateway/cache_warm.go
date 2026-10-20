@@ -69,7 +69,7 @@ func (g *Gateway) warmSet() map[string]bool {
 // only place the configuration reaches the assistant, so an unusable setting
 // degrades to "no helper" rather than to a request being sent somewhere.
 func (g *Gateway) LocalAssistant() *localassistant.Assistant {
-	prefs, ok := g.cfg.LocalAssistantConfig()
+	prefs, ok := g.live().LocalAssistantConfig()
 	if !ok {
 		return nil
 	}

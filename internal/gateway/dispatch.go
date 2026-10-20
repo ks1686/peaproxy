@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/ks1686/peaproxy/internal/router"
 	"github.com/ks1686/peaproxy/internal/streamguard"
 	"github.com/ks1686/peaproxy/internal/translate"
+	"github.com/ks1686/peaproxy/internal/usage"
 )
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
@@ -41,10 +43,11 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 	// It is hoisted above both candidate loops because it does not depend on the
 	// instance being tried.
 	sessionSpecific := g.sessionSpecificBody(raw, session, cands)
+	clientOwnsProxyTool := contextopt.DeclaresProxyTool(raw)
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if !sessionSpecific {
-			if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, model, raw); ok {
+			if hit, ok := g.cachedChat(inst.Provider.ID, inst.Provider.BaseURL, cacheModel(model, budget), raw); ok {
 				hit.Raw = echoClientModel(hit.Raw, client, model)
 				if client != model {
 					hit.Model = client
@@ -56,8 +59,8 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
-	coalesce := g.cfg.RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
+	coalesce := g.live().RequestEngine.CacheResponses && responsecache.Eligible("chat", raw, true)
 	for _, inst := range cands {
 		if g.notChatModel(inst.Provider.ID, model) {
 			// Already refused once. Do not spend an upstream call rediscovering it.
@@ -85,7 +88,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 					return resp, err
 				}
 				calls := contextopt.ProxyToolCalls(resp.Raw)
-				if len(calls) == 0 || g.Artifacts == nil {
+				if len(calls) == 0 || g.Artifacts == nil || clientOwnsProxyTool {
 					return resp, nil
 				}
 				if !rounds.Take() {
@@ -101,7 +104,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 					// one call the ledger could not see -- and the round that
 					// ends a runaway loop is not a round anyone would notice
 					// going missing.
-					g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
+					g.recordDiscardedRound(runCtx, inst.Provider.ID, model, resp.Raw)
 					return adapter.ChatResponse{}, RoundLimitError{reason: rounds.Stop()}
 				}
 				results := contextopt.RunSearches(g.Artifacts, session, calls)
@@ -115,7 +118,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 				// This round's response is about to be replaced by the next
 				// one, so its usage has nowhere else to go. The provider billed
 				// it; the ledger has to know it happened.
-				g.recordDiscardedRound(inst.Provider.ID, model, resp.Raw)
+				g.recordDiscardedRound(runCtx, inst.Provider.ID, model, resp.Raw)
 				first = false
 			}
 		}
@@ -143,15 +146,21 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 		}
 		if coalesce && g.flight != nil && !sessionSpecific {
 			var body []byte
-			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "chat", raw), func(runCtx context.Context) ([]byte, error) {
+			var shared bool
+			var attach any
+			account := inst.Provider.ID
+			body, attach, shared, callErr = g.flight.DoClaim(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, cacheModel(model, budget), "chat", raw), func(runCtx context.Context) ([]byte, any, error) {
+				runCtx = usage.WithOwnHolds(runCtx)
 				once, err := callUpstream(runCtx)
-				if err != nil {
-					return nil, err
-				}
-				return once.Raw, nil
+				return once.Raw, usage.HoldsFrom(runCtx), err
+			}, func(body []byte, attach any, err error) {
+				g.recordUnclaimed(account, model, "/v1/chat/completions", body, attach, err)
 			})
+			g.claimHolds(ctx, attach)
 			if callErr == nil {
-				resp.Raw = body
+				// A caller that joined another's call made no upstream request;
+				// recording the shared usage again would bill it once per caller.
+				resp.Raw, resp.CacheHit = body, shared
 			}
 		} else {
 			resp, callErr = callUpstream(ctx)
@@ -167,7 +176,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 				resp.Model = client
 			}
 			if !sessionSpecific {
-				g.storeChat(lastAccount, inst.Provider.BaseURL, model, raw, resp.Raw)
+				g.storeChat(lastAccount, inst.Provider.BaseURL, cacheModel(model, budget), raw, resp.Raw)
 			}
 			return resp, Call{Account: lastAccount, Deployment: model}, nil
 		}
@@ -193,7 +202,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 // streamPrelude keeps the configured first-event limit, and lengthens it only
 // while a local model is still loading. The request deadline is unchanged.
 func (g *Gateway) streamPrelude(model string) time.Duration {
-	base := g.cfg.StreamPreludeTimeout()
+	base := g.live().StreamPreludeTimeout()
 	const coldStart = 30 * time.Second
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -206,7 +215,7 @@ func (g *Gateway) streamPrelude(model string) time.Duration {
 }
 
 func (g *Gateway) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, g.cfg.RequestDeadline())
+	return context.WithTimeout(ctx, g.live().RequestDeadline())
 }
 
 // ChatStream proxies SSE with failover before any bytes are written.
@@ -226,7 +235,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if g.notChatModel(inst.Provider.ID, model) {
@@ -251,7 +260,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 				// Drain any held partial token before the guard finishes, so the
 				// bytes reach the client in the order they arrived.
 				err := inst.Adapter.ChatStream(c, chatReq(inst, model, g.bodyFor(raw, inst, session), true, budget), dest)
-				return struct{}{}, noteStream(guard, flushAfter(dest, err))
+				return struct{}{}, noteStreamDone(guard, flushAfter(dest, err))
 			})
 			stop()
 			if callErr == nil || cw.n > before || (!router.Transient(callErr) && !errors.Is(callErr, streamguard.ErrPrelude)) || attempt == 1 {
@@ -320,7 +329,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	var lastAccount string
 	var st failState
 	tried := false
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		if err := budgetAttempts.take(); err != nil {
 			return adapter.ImageResponse{}, Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
@@ -409,7 +418,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	var lastAccount string
 	var st failState
 	tried := false
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		if err := budgetAttempts.take(); err != nil {
 			return adapter.ImageResponse{}, Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
@@ -497,7 +506,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	var lastAccount string
 	var st failState
 	tried := false
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		if err := budgetAttempts.take(); err != nil {
 			return adapter.EmbeddingResponse{}, Call{Account: lastAccount, Deployment: model}, errAttemptBudgetExhausted
@@ -523,19 +532,23 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 			}
 			return once, onceErr
 		}
-		if g.flight != nil && g.cfg.RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
+		if g.flight != nil && g.live().RequestEngine.CacheEmbeddings && responsecache.Eligible("embeddings", raw, true) {
 			var body []byte
-			body, callErr = g.flight.Do(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, error) {
+			var shared bool
+			var attach any
+			account := inst.Provider.ID
+			body, attach, shared, callErr = g.flight.DoClaim(ctx, responsecache.Key(inst.Provider.ID, inst.Provider.BaseURL, model, "embeddings", raw), func(runCtx context.Context) ([]byte, any, error) {
+				runCtx = usage.WithOwnHolds(runCtx)
 				once, err := admitted(g, runCtx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
 					return callUpstream(c)
 				})
-				if err != nil {
-					return nil, err
-				}
-				return once.Raw, nil
+				return once.Raw, usage.HoldsFrom(runCtx), err
+			}, func(body []byte, attach any, err error) {
+				g.recordUnclaimed(account, model, "/v1/embeddings", body, attach, err)
 			})
+			g.claimHolds(ctx, attach)
 			if callErr == nil {
-				resp.Raw = body
+				resp.Raw, resp.CacheHit = body, shared
 			}
 		} else {
 			resp, callErr = admitted(g, ctx, inst.Provider.ID, model, raw, func(c context.Context) (adapter.EmbeddingResponse, error) {
@@ -601,7 +614,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, Call, erro
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
@@ -697,6 +710,12 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if err != nil {
 		return Call{}, err
 	}
+	// A follow-up carrying previous_response_id has to return to the account
+	// that holds that response, streamed or not.
+	cands = continuationFirst(cands, g.continuationAccount(previousResponseID(raw), model))
+	if len(cands) == 0 {
+		return Call{}, router.ErrNoAccount
+	}
 	oaBody, oaReq, xerr := translate.ResponsesToOpenAI(raw)
 	if xerr == nil {
 		oaReq.Raw = jsonx.SetStream(oaBody, true)
@@ -708,7 +727,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeResponses](cands, xerr == nil)
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -740,7 +759,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 			streamBody := jsonx.SetStream(raw, true)
 			var streamErr error
 			_, streamErr = admitted(g, attemptCtx, inst.Provider.ID, model, streamBody, func(c context.Context) (struct{}, error) {
-				streamErr = noteStream(guard, flushAfter(dest, nr.ResponsesStream(c, streamBody, dest)))
+				streamErr = noteStreamDone(guard, flushAfter(dest, nr.ResponsesStream(c, streamBody, dest)))
 				return struct{}{}, streamErr
 			})
 			err := streamErr
@@ -795,6 +814,11 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 		// (nil closes normally), so it never completes the partial turn.
 		_ = pw.CloseWithError(err)
 		convErr := <-errCh
+		if err == nil && convErr == nil {
+			// The translator has written everything now; an upstream that sent
+			// no chat event left nothing to translate.
+			err = guard.Complete()
+		}
 		// An error chunk that arrived before anything reached the client is a
 		// failed attempt, not a turn to hand back (#50). The adapter closed
 		// cleanly, so without this the account is credited with a success and
@@ -860,7 +884,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, Call, err
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	for _, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
 		if len(oaReq.Raw) > 0 {
@@ -964,7 +988,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	var last error
 	var lastAccount string
 	var st failState
-	budgetAttempts := newAttemptCoordinator(g.cfg.RequestMaxAttempts())
+	budgetAttempts := newAttemptCoordinator(g.live().RequestMaxAttempts())
 	reachable := lastReachable[adapter.NativeMessages](cands, xerr == nil)
 	for i, inst := range cands {
 		model, raw := inst.applyModel(model, raw)
@@ -989,7 +1013,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 			inst.recordAttempt(&lastAccount)
 			_, err := admitted(g, attemptCtx, inst.Provider.ID, model, raw, func(c context.Context) (struct{}, error) {
 				err := nm.MessagesStream(c, jsonx.SetStream(claudeRaw(g.promptBody(raw, inst.Provider.Adapter), budget), true), dest)
-				return struct{}{}, noteStream(guard, flushAfter(dest, err))
+				return struct{}{}, noteStreamDone(guard, flushAfter(dest, err))
 			})
 			stop()
 			if err == nil {
@@ -1038,6 +1062,11 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 		// (nil closes normally), so it never completes the partial turn.
 		_ = pw.CloseWithError(err)
 		convErr := <-errCh
+		if err == nil && convErr == nil {
+			// The translator has written everything now; an upstream that sent
+			// no chat event left nothing to translate.
+			err = guard.Complete()
+		}
 		// An error chunk that arrived before anything reached the client is a
 		// failed attempt, not a turn to hand back (#50). The adapter closed
 		// cleanly, so without this the account is credited with a success and
@@ -1105,4 +1134,14 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += n
 	return n, err
+}
+
+// cacheModel is the model half of a response-cache or in-flight key. prepare
+// strips "-thinking-N" from the body before it is hashed, so the budget has to
+// be part of the key or a thinking request shares a non-thinking answer.
+func cacheModel(model string, budget int) string {
+	if budget <= 0 {
+		return model
+	}
+	return model + "\x00thinking=" + strconv.Itoa(budget)
 }

@@ -309,9 +309,24 @@ type sseWriter struct {
 	model    string
 	wroteAny bool
 	err      error // marshalling failure only, which is ours
+	// pending holds a record cut off by the end of a write: the CLI's stdout
+	// is copied in reads of arbitrary size, so a line can span two writes.
+	pending []byte
 }
 
 func (s *sseWriter) Write(p []byte) (int, error) {
+	data := append(s.pending, p...)
+	cut := bytes.LastIndexByte(data, '\n')
+	if cut < 0 {
+		s.pending = data
+		return len(p), nil
+	}
+	s.pending = append([]byte(nil), data[cut+1:]...)
+	s.translate(data[:cut])
+	return len(p), nil
+}
+
+func (s *sseWriter) translate(p []byte) {
 	for _, line := range strings.Split(string(p), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || s.err != nil {
@@ -340,22 +355,17 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 		})
 		s.wroteAny = true
 	}
-	return len(p), nil
 }
 
 // finish emits the terminal frame. A stream that produced no text still gets a
 // stop, so a client waiting on finish_reason is not left hanging.
 func (s *sseWriter) finish() error {
+	if len(s.pending) > 0 {
+		s.translate(s.pending)
+		s.pending = nil
+	}
 	if s.err != nil {
 		return s.err
-	}
-	if !s.wroteAny {
-		s.emit(map[string]any{
-			"object":  "chat.completion.chunk",
-			"model":   s.model,
-			"choices": []map[string]any{{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}},
-		})
-		return nil
 	}
 	s.emit(map[string]any{
 		"object":  "chat.completion.chunk",

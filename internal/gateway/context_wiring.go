@@ -70,10 +70,10 @@ func (g *Gateway) ContextOptimizationEnabled() bool { return g.contextOptimizati
 // nothing gets it, and a specific switch exists for anyone who wants carried
 // context off without losing the other savings behaviours.
 func (g *Gateway) contextOptimizationEnabled() bool {
-	if !g.cfg.OptimizationEnabled() {
+	if !g.live().OptimizationEnabled() {
 		return false
 	}
-	if v := g.cfg.Optimization.ContextOptimization; v != nil {
+	if v := g.live().Optimization.ContextOptimization; v != nil {
 		return *v
 	}
 	return true

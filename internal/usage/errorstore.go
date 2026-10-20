@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ks1686/peaproxy/internal/fslock"
 )
 
 // The error store is a second, longer-lived view of the same Event records.
@@ -186,7 +188,9 @@ func pruneErrorLogLocked(path string, cutoff time.Time) ([]Event, error) {
 		buf.Write(b)
 		buf.WriteByte('\n')
 	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+	// Atomic: os.WriteFile truncates first, so a crash or full disk mid-write
+	// would lose the history this rewrite exists to keep.
+	if err := fslock.WriteAtomic(path, buf.Bytes(), 0o600); err != nil {
 		return nil, err
 	}
 	return kept, nil

@@ -17,9 +17,10 @@ import (
 // policy panel the UI already renders. They exist because the panel needs a
 // browser and most people debugging a routing decision have a terminal open.
 //
-// Both are read-only. Neither dispatches a request, reserves spend or contacts a
-// provider, so `explain` is safe to run against a gateway that is serving
-// someone.
+// Both are read-only: neither dispatches a request or reserves spend, so
+// `explain` is safe to run against a gateway that is serving someone. `explain`
+// does refresh the live catalog first, which lists models from every enabled
+// account (no inference, no spend).
 func optimizationCmd(configPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "optimization",
@@ -115,7 +116,8 @@ func optimizationExplainCmd(configPath *string) *cobra.Command {
 		Long: `Prints the accounts that would be tried for a model, in order, plus the ones
 that are out and the reason for each.
 
-Read-only: nothing is dispatched, no spend is reserved, no provider is contacted.
+Read-only: nothing is dispatched and no spend is reserved. The live catalog is
+refreshed first, which lists models from each enabled account.
 An unknown model says so instead of guessing.
 
 Examples:

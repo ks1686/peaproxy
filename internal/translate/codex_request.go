@@ -242,8 +242,42 @@ func PrepareResponses(raw []byte, stream bool) []byte {
 	// OpenAI accepts input as a string; Codex requires a message list.
 	raw = jsonx.DropTopLevelKeys(raw, "stream_options", "max_output_tokens", "store")
 	raw = coerceResponsesInput(raw)
+	raw = dropInputPartKey(raw, "prompt_cache_breakpoint")
 	raw = jsonx.SetStream(raw, stream)
 	return jsonx.SetBool(raw, "store", false)
+}
+
+// dropInputPartKey removes key from every content part of every input item.
+// Codex also rejects the explicit prompt-cache breakpoints api.openai.com
+// accepts on input parts.
+func dropInputPartKey(raw []byte, key string) []byte {
+	if !bytes.Contains(raw, []byte(`"`+key+`"`)) {
+		return raw
+	}
+	var probe struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(raw, &probe) != nil || len(probe.Input) == 0 {
+		return raw
+	}
+	changed := false
+	for i, item := range probe.Input {
+		next := jsonx.DropKeyInArray(item, "content", key)
+		if !bytes.Equal(next, bytes.TrimSpace(item)) {
+			probe.Input[i] = next
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	// Joined by hand: json.Marshal would HTML-escape the items' text.
+	items := make([][]byte, len(probe.Input))
+	for i, item := range probe.Input {
+		items[i] = item
+	}
+	list := append([]byte{'['}, bytes.Join(items, []byte{','})...)
+	return jsonx.SetTopLevelRaw(raw, "input", append(list, ']'))
 }
 
 func coerceResponsesInput(raw []byte) []byte {

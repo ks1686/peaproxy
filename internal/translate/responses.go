@@ -45,9 +45,14 @@ type responsesOutput struct {
 // frames report prompt_tokens/completion_tokens; both this shape and every
 // Responses client expect input_tokens/output_tokens.
 type responsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens        int                      `json:"input_tokens"`
+	OutputTokens       int                      `json:"output_tokens"`
+	TotalTokens        int                      `json:"total_tokens"`
+	InputTokensDetails *responsesInputTokenInfo `json:"input_tokens_details,omitempty"`
+}
+
+type responsesInputTokenInfo struct {
+	CachedTokens int `json:"cached_tokens"`
 }
 
 type responsesIncompleteDetails struct {
@@ -524,6 +529,13 @@ func FromOpenAIChat(raw []byte, model string) ([]byte, error) {
 		Output:            output,
 		OutputText:        text,
 	}
+	if in.Usage != nil {
+		cached := 0
+		if in.Usage.PromptTokensDetails != nil {
+			cached = in.Usage.PromptTokensDetails.CachedTokens
+		}
+		out.Usage = responsesUsageWithCache(in.Usage.PromptTokens, in.Usage.CompletionTokens, cached)
+	}
 	return json.Marshal(out)
 }
 
@@ -577,6 +589,17 @@ func responsesContentText(raw json.RawMessage) (string, error) {
 //
 // A zero-valued usage block would read as "zero tokens" rather than "nobody
 // said", which is the difference between a measured zero and an unknown one.
+// responsesUsageWithCache is responsesUsageFor plus the cached share of the
+// input, which chat reports inside prompt_tokens and Responses reports as
+// input_tokens_details.cached_tokens.
+func responsesUsageWithCache(prompt, completion, cached int) *responsesUsage {
+	u := responsesUsageFor(prompt, completion)
+	if u != nil && cached > 0 {
+		u.InputTokensDetails = &responsesInputTokenInfo{CachedTokens: cached}
+	}
+	return u
+}
+
 func responsesUsageFor(prompt, completion int) *responsesUsage {
 	if prompt <= 0 && completion <= 0 {
 		return nil

@@ -72,10 +72,19 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		_, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
 		return err
 	}
+	// emitJSON marshals the event body, so no string reaches the wire without
+	// JSON escaping.
+	emitJSON := func(event string, v any) error {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		return emit(event, string(raw))
+	}
 
 	var text strings.Builder
 	// Token counts from the upstream stream, carried into the terminal event.
-	promptTokens, completionTokens := 0, 0
+	promptTokens, completionTokens, cachedTokens := 0, 0, 0
 	type pendingCall struct {
 		ID, Name, Arguments string
 		Started             bool
@@ -144,8 +153,9 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
+				PromptTokens        int                        `json:"prompt_tokens"`
+				CompletionTokens    int                        `json:"completion_tokens"`
+				PromptTokensDetails *OpenAIPromptTokensDetails `json:"prompt_tokens_details"`
 			} `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -155,7 +165,10 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 		// one, so it is taken as the last non-zero reading rather than only on
 		// the terminal frame.
 		if u := chunk.Usage; u.PromptTokens > 0 || u.CompletionTokens > 0 {
-			promptTokens, completionTokens = u.PromptTokens, u.CompletionTokens
+			promptTokens, completionTokens, cachedTokens = u.PromptTokens, u.CompletionTokens, 0
+			if u.PromptTokensDetails != nil {
+				cachedTokens = u.PromptTokensDetails.CachedTokens
+			}
 		}
 		if chunk.ID != "" {
 			id = chunk.ID
@@ -185,7 +198,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			if err := emit("response.created", string(raw)); err != nil {
 				return err
 			}
-			if err := emit("response.in_progress", fmt.Sprintf(`{"type":"response.in_progress","response":%s}`, responseStub(id, model))); err != nil {
+			if err := emitJSON("response.in_progress", sseResponseEvent{Type: "response.in_progress", Response: responseStub(id, model)}); err != nil {
 				return err
 			}
 		}
@@ -230,14 +243,12 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 				messageIndex = nextIndex()
 				handedOut++
 				itemAt[messageItemID] = messageIndex
-				if err := emit("response.output_item.added", fmt.Sprintf(
-					`{"type":"response.output_item.added","output_index":%d,"item":{"type":"message","id":%q,"role":"assistant","content":[]}}`,
-					messageIndex, messageItemID)); err != nil {
+				if err := emitJSON("response.output_item.added", sseItemEvent{Type: "response.output_item.added", OutputIndex: messageIndex,
+					Item: sseMessageItem{Type: "message", ID: messageItemID, Role: "assistant", Content: []sseOutputText{}}}); err != nil {
 					return err
 				}
-				if err := emit("response.content_part.added", fmt.Sprintf(
-					`{"type":"response.content_part.added","item_id":%q,"output_index":%d,"content_index":0,"part":{"type":"output_text","text":""}}`,
-					messageItemID, messageIndex)); err != nil {
+				if err := emitJSON("response.content_part.added", ssePartEvent{Type: "response.content_part.added", ItemID: messageItemID, OutputIndex: messageIndex,
+					Part: sseOutputText{Type: "output_text"}}); err != nil {
 					return err
 				}
 			}
@@ -277,21 +288,13 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			if tc.Function.Name != "" {
 				pc.Name = tc.Function.Name
 			}
-			if tc.Function.Arguments != "" {
+			// Arguments that arrive before the item is announced are buffered
+			// and sent as one arguments delta right after output_item.added; a
+			// delta for an unannounced item would have nowhere to go in the
+			// client's accumulator.
+			wasStarted := pc.Started
+			if !wasStarted {
 				pc.Arguments += tc.Function.Arguments
-				ev := struct {
-					Type        string `json:"type"`
-					ItemID      string `json:"item_id"`
-					OutputIndex int    `json:"output_index"`
-					Delta       string `json:"delta"`
-				}{Type: "response.function_call_arguments.delta", ItemID: pc.ItemID, OutputIndex: pc.Index, Delta: tc.Function.Arguments}
-				raw, err := json.Marshal(ev)
-				if err != nil {
-					return err
-				}
-				if err := emit("response.function_call_arguments.delta", string(raw)); err != nil {
-					return err
-				}
 			}
 			if !pc.Started && (pc.ID != "" || pc.Name != "") {
 				// The item was created (and indexed) on the first delta; this is
@@ -303,7 +306,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 					CallID    string `json:"call_id"`
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
-				}{Type: "function_call", ID: pc.ItemID, CallID: pc.ID, Name: pc.Name, Arguments: pc.Arguments}
+				}{Type: "function_call", ID: pc.ItemID, CallID: pc.ID, Name: pc.Name}
 				added := struct {
 					Type        string `json:"type"`
 					OutputIndex int    `json:"output_index"`
@@ -320,6 +323,19 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 					return err
 				}
 				if err := emit("response.output_item.added", string(raw)); err != nil {
+					return err
+				}
+				// Announced with empty arguments, as OpenAI does; what was
+				// buffered before the announcement follows as one delta.
+				if pc.Arguments != "" {
+					if err := emitArgumentsDelta(emit, pc.ItemID, pc.Index, pc.Arguments); err != nil {
+						return err
+					}
+				}
+			}
+			if tc.Function.Arguments != "" && wasStarted {
+				pc.Arguments += tc.Function.Arguments
+				if err := emitArgumentsDelta(emit, pc.ItemID, pc.Index, tc.Function.Arguments); err != nil {
 					return err
 				}
 			}
@@ -348,31 +364,27 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			continue
 		}
 		pc.Closed = true
-		if err := emit("response.function_call_arguments.done", fmt.Sprintf(
-			`{"type":"response.function_call_arguments.done","item_id":%q,"output_index":%d,"arguments":%q}`,
-			pc.ItemID, pc.Index, pc.Arguments)); err != nil {
+		if err := emitJSON("response.function_call_arguments.done", sseArgumentsDoneEvent{Type: "response.function_call_arguments.done",
+			ItemID: pc.ItemID, OutputIndex: pc.Index, Arguments: pc.Arguments}); err != nil {
 			return err
 		}
-		if err := emit("response.output_item.done", fmt.Sprintf(
-			`{"type":"response.output_item.done","output_index":%d,"item":{"type":"function_call","id":%q,"call_id":%q,"name":%q,"arguments":%q}}`,
-			pc.Index, pc.ItemID, pc.ID, pc.Name, pc.Arguments)); err != nil {
+		if err := emitJSON("response.output_item.done", sseItemEvent{Type: "response.output_item.done", OutputIndex: pc.Index,
+			Item: sseFunctionItem{Type: "function_call", ID: pc.ItemID, CallID: pc.ID, Name: pc.Name, Arguments: pc.Arguments}}); err != nil {
 			return err
 		}
 	}
 	if messageStarted && !messageClosed {
-		if err := emit("response.output_text.done", fmt.Sprintf(
-			`{"type":"response.output_text.done","item_id":%q,"output_index":%d,"content_index":0,"text":%q}`,
-			messageItemID, messageIndex, text.String())); err != nil {
+		final := text.String()
+		if err := emitJSON("response.output_text.done", sseTextDoneEvent{Type: "response.output_text.done", ItemID: messageItemID,
+			OutputIndex: messageIndex, Text: final}); err != nil {
 			return err
 		}
-		if err := emit("response.content_part.done", fmt.Sprintf(
-			`{"type":"response.content_part.done","item_id":%q,"output_index":%d,"content_index":0,"part":{"type":"output_text","text":%q}}`,
-			messageItemID, messageIndex, text.String())); err != nil {
+		if err := emitJSON("response.content_part.done", ssePartEvent{Type: "response.content_part.done", ItemID: messageItemID,
+			OutputIndex: messageIndex, Part: sseOutputText{Type: "output_text", Text: final}}); err != nil {
 			return err
 		}
-		if err := emit("response.output_item.done", fmt.Sprintf(
-			`{"type":"response.output_item.done","output_index":%d,"item":{"type":"message","id":%q,"role":"assistant","content":[{"type":"output_text","text":%q}]}}`,
-			messageIndex, messageItemID, text.String())); err != nil {
+		if err := emitJSON("response.output_item.done", sseItemEvent{Type: "response.output_item.done", OutputIndex: messageIndex,
+			Item: sseMessageItem{Type: "message", ID: messageItemID, Role: "assistant", Content: []sseOutputText{{Type: "output_text", Text: final}}}}); err != nil {
 			return err
 		}
 	}
@@ -442,7 +454,7 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 			Model:             model,
 			Output:            output,
 			OutputText:        text.String(),
-			Usage:             responsesUsageFor(promptTokens, completionTokens),
+			Usage:             responsesUsageWithCache(promptTokens, completionTokens, cachedTokens),
 		},
 	}
 	raw, err := json.Marshal(terminal)
@@ -452,9 +464,85 @@ func OpenAISSEToResponses(r io.Reader, w io.Writer, model string) error {
 	return emit(event, string(raw))
 }
 
+func emitArgumentsDelta(emit func(string, string) error, itemID string, index int, delta string) error {
+	raw, err := json.Marshal(struct {
+		Type        string `json:"type"`
+		ItemID      string `json:"item_id"`
+		OutputIndex int    `json:"output_index"`
+		Delta       string `json:"delta"`
+	}{Type: "response.function_call_arguments.delta", ItemID: itemID, OutputIndex: index, Delta: delta})
+	if err != nil {
+		return err
+	}
+	return emit("response.function_call_arguments.delta", string(raw))
+}
+
 // responseStub is the minimal response object carried by the lifecycle events
 // that are not the terminal one. The client only reads identity off it; the
 // full object arrives with response.completed.
-func responseStub(id, model string) string {
-	return fmt.Sprintf(`{"id":%q,"object":"response","status":"in_progress","model":%q}`, id, model)
+func responseStub(id, model string) sseResponseStub {
+	return sseResponseStub{ID: id, Object: "response", Status: "in_progress", Model: model}
+}
+
+// The lifecycle event bodies. Field order is the wire order the Sprintf
+// templates these replace produced.
+type sseResponseStub struct {
+	ID     string `json:"id"`
+	Object string `json:"object"`
+	Status string `json:"status"`
+	Model  string `json:"model"`
+}
+
+type sseResponseEvent struct {
+	Type     string          `json:"type"`
+	Response sseResponseStub `json:"response"`
+}
+
+type sseOutputText struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type sseMessageItem struct {
+	Type    string          `json:"type"`
+	ID      string          `json:"id"`
+	Role    string          `json:"role"`
+	Content []sseOutputText `json:"content"`
+}
+
+type sseFunctionItem struct {
+	Type      string `json:"type"`
+	ID        string `json:"id"`
+	CallID    string `json:"call_id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type sseItemEvent struct {
+	Type        string `json:"type"`
+	OutputIndex int    `json:"output_index"`
+	Item        any    `json:"item"`
+}
+
+type ssePartEvent struct {
+	Type         string        `json:"type"`
+	ItemID       string        `json:"item_id"`
+	OutputIndex  int           `json:"output_index"`
+	ContentIndex int           `json:"content_index"`
+	Part         sseOutputText `json:"part"`
+}
+
+type sseTextDoneEvent struct {
+	Type         string `json:"type"`
+	ItemID       string `json:"item_id"`
+	OutputIndex  int    `json:"output_index"`
+	ContentIndex int    `json:"content_index"`
+	Text         string `json:"text"`
+}
+
+type sseArgumentsDoneEvent struct {
+	Type        string `json:"type"`
+	ItemID      string `json:"item_id"`
+	OutputIndex int    `json:"output_index"`
+	Arguments   string `json:"arguments"`
 }

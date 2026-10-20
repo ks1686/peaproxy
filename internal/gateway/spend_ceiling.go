@@ -33,7 +33,7 @@ const spendCeilingDays = 30
 //     would fail open on precisely the accounts most likely to be unpriced,
 //     and a ceiling that cannot vouch for its own total is not a ceiling.
 func (g *Gateway) ceilingBlocks(u economics.Usage) (bool, string) {
-	ceiling := g.cfg.SpendCeiling()
+	ceiling := g.live().SpendCeiling()
 	if ceiling <= 0 {
 		return false, ""
 	}

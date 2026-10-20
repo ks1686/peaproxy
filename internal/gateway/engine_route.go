@@ -21,7 +21,7 @@ import (
 )
 
 func (g *Gateway) promptBody(raw []byte, adapterName string) []byte {
-	mode, err := promptcache.NormalizeMode(g.cfg.RequestEngine.PromptCache)
+	mode, err := promptcache.NormalizeMode(g.live().RequestEngine.PromptCache)
 	if err != nil {
 		return raw
 	}
@@ -54,7 +54,7 @@ func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (
 		}
 		return model, cands, session, nil
 	}
-	if !g.cfg.AutomaticRoutes.Enabled {
+	if !g.live().AutomaticRoutes.Enabled {
 		return "", nil, "", fmt.Errorf("automatic route %q is disabled", model)
 	}
 	return g.pickAutomatic(ctx, raw, model)
@@ -131,7 +131,7 @@ func unmetSatisfied(seen []string, r catalog.Requirement) bool {
 }
 
 func (g *Gateway) forbiddenFiltered(cands []instance, model string) ([]instance, error) {
-	if !g.cfg.FreeOnly() && g.cfg.SpendCeiling() <= 0 {
+	if !g.live().FreeOnly() && g.live().SpendCeiling() <= 0 {
 		return cands, nil
 	}
 	allowed := make([]instance, 0, len(cands))
@@ -142,7 +142,7 @@ func (g *Gateway) forbiddenFiltered(cands []instance, model string) ([]instance,
 			allowed = append(allowed, inst)
 			continue
 		}
-		if g.cfg.FreeOnly() && !deploymentProvenFree(g, m) {
+		if g.live().FreeOnly() && !deploymentProvenFree(g, m) {
 			if blockedReason == "" {
 				blockedReason = fmt.Sprintf(
 					"refusing to serve %q on %s: optimization.freeOnly is on and this deployment has no verified zero price. Name a free deployment, or turn freeOnly off to spend",
@@ -150,7 +150,7 @@ func (g *Gateway) forbiddenFiltered(cands []instance, model string) ([]instance,
 			}
 			continue
 		}
-		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
+		if g.live().SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
 			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
 				if blockedReason == "" {
 					blockedReason = reason
@@ -263,7 +263,7 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		}
 	}
 	g.mu.Unlock()
-	allowed := g.cfg.AutomaticRoutes.Models(routeName)
+	allowed := g.live().AutomaticRoutes.Models(routeName)
 	var ranked []instance
 	var rankedModel []string
 	// Tracked separately so a refusal can say why rather than reporting the
@@ -295,14 +295,14 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		// on automatic routes, which are the ones that pick the deployment.
 		// A local account is exempt: it is this machine, and it never needed a
 		// key.
-		if !g.cfg.AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {
+		if !g.live().AllowAnonymousProviders() && !g.runsOnThisMachine(m.AccountID, m.ID) && anonymousDeployment(g, m) {
 			anonymousBlocked = true
 			continue
 		}
 		// freeOnly is a refusal to spend, not a preference. It applies to every
 		// route: a deployment that cannot show a zero price is disqualified
 		// rather than treated as a fallback.
-		if g.cfg.FreeOnly() {
+		if g.live().FreeOnly() {
 			if freeOnlyAllows(g, m) {
 				freeSeen = true
 			} else {
@@ -314,7 +314,7 @@ func (g *Gateway) pickAutomatic(ctx context.Context, raw []byte, routeName strin
 		// free-only: a deployment already proven free costs nothing and cannot
 		// breach a ceiling. Anything else is gated, and a refusal is reported
 		// rather than silently dropped from the candidates.
-		if g.cfg.SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
+		if g.live().SpendCeiling() > 0 && !deploymentProvenFree(g, m) {
 			if blocked, reason := g.ceilingBlocks(chargedUsage()); blocked {
 				ceilingBlocked, ceilingReason = true, reason
 				continue
@@ -500,11 +500,11 @@ func chargedUsage() economics.Usage { return economics.Usage{Unknown: true} }
 // that predate deployment-scoped quotes.
 func priceForDeployment(g *Gateway, account, model string) catalog.Price {
 	if account != "" {
-		if quote, ok := g.cfg.AutomaticRoutes.Prices[account+"/"+model]; ok {
+		if quote, ok := g.live().AutomaticRoutes.Prices[account+"/"+model]; ok {
 			return assertedPrice(quote)
 		}
 	}
-	if quote, ok := g.cfg.AutomaticRoutes.Prices[model]; ok {
+	if quote, ok := g.live().AutomaticRoutes.Prices[model]; ok {
 		return assertedPrice(quote)
 	}
 	g.mu.RLock()
@@ -615,7 +615,7 @@ func contains(items []string, want string) bool {
 }
 
 func (g *Gateway) cachedChat(account, endpoint, model string, raw []byte) (adapter.ChatResponse, bool) {
-	if !g.cfg.RequestEngine.CacheResponses || !responsecache.Eligible("chat", raw, true) {
+	if !g.live().RequestEngine.CacheResponses || !responsecache.Eligible("chat", raw, true) {
 		return adapter.ChatResponse{}, false
 	}
 	body, ok := g.responseStore().Get(responsecache.Key(account, endpoint, model, "chat", raw), time.Now())
@@ -626,14 +626,14 @@ func (g *Gateway) cachedChat(account, endpoint, model string, raw []byte) (adapt
 }
 
 func (g *Gateway) storeChat(account, endpoint, model string, raw, response []byte) {
-	if !g.cfg.RequestEngine.CacheResponses || !responsecache.Eligible("chat", raw, true) {
+	if !g.live().RequestEngine.CacheResponses || !responsecache.Eligible("chat", raw, true) {
 		return
 	}
 	g.responseStore().Put(responsecache.Key(account, endpoint, model, "chat", raw), response, time.Now())
 }
 
 func (g *Gateway) cachedEmbeddings(account, endpoint, model string, raw []byte) (adapter.EmbeddingResponse, bool) {
-	if !g.cfg.RequestEngine.CacheEmbeddings || !responsecache.Eligible("embeddings", raw, true) {
+	if !g.live().RequestEngine.CacheEmbeddings || !responsecache.Eligible("embeddings", raw, true) {
 		return adapter.EmbeddingResponse{}, false
 	}
 	body, ok := g.responseStore().Get(responsecache.Key(account, endpoint, model, "embeddings", raw), time.Now())
@@ -644,7 +644,7 @@ func (g *Gateway) cachedEmbeddings(account, endpoint, model string, raw []byte) 
 }
 
 func (g *Gateway) storeEmbeddings(account, endpoint, model string, raw, response []byte) {
-	if !g.cfg.RequestEngine.CacheEmbeddings || !responsecache.Eligible("embeddings", raw, true) {
+	if !g.live().RequestEngine.CacheEmbeddings || !responsecache.Eligible("embeddings", raw, true) {
 		return
 	}
 	g.responseStore().Put(responsecache.Key(account, endpoint, model, "embeddings", raw), response, time.Now())

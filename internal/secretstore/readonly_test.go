@@ -41,3 +41,72 @@ func TestGetFallsBackToUnlockedReadInReadOnlyDir(t *testing.T) {
 		t.Fatal("Set succeeded without the lock in a read-only dir")
 	}
 }
+
+// A config directory PeaProxy cannot write to cannot be migrated, so it is
+// read through the legacy store as it stands.
+func TestAnUnmigratedReadOnlyDirReadsTheLegacyStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block file creation on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	dir := t.TempDir()
+	legacy, err := OpenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Set("acct", KindAPIKey, "sk-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, LockFileName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	s, err := OpenFor(filepath.Join(dir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("OpenFor on a read-only, unmigrated dir: %v", err)
+	}
+	if v, err := s.Get("acct", KindAPIKey); err != nil || v != "sk-legacy" {
+		t.Fatalf("Get = %q, %v; want the legacy secret", v, err)
+	}
+}
+
+// Every earlier run leaves secrets.lock behind, and an existing lock file can
+// still be opened in a read-only directory. The scope must still fall back to
+// reading instead of failing to create its files.
+func TestAReadOnlyDirWithALeftoverLockStillReads(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory permissions do not block file creation on windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	for _, backend := range []Backend{BackendFile, BackendKeyring} {
+		t.Run(string(backend), func(t *testing.T) {
+			dir := t.TempDir()
+			kr := &memKeyring{m: map[string]string{}}
+			legacy := &Store{backend: backend, dir: dir, kr: kr}
+			if err := legacy.Set("acct", KindAPIKey, "sk-legacy"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, LockFileName)); err != nil {
+				t.Fatalf("setup: no leftover lock: %v", err)
+			}
+			if err := os.Chmod(dir, 0o555); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			s := &Store{backend: backend, dir: dir, kr: kr}
+			if err := s.scopeTo("config.yaml"); err != nil {
+				t.Fatalf("scoping a read-only dir with a leftover lock: %v", err)
+			}
+			if v, err := s.Get("acct", KindAPIKey); err != nil || v != "sk-legacy" {
+				t.Fatalf("Get = %q, %v; want the legacy secret", v, err)
+			}
+		})
+	}
+}

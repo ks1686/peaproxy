@@ -38,12 +38,15 @@ var cooldownTTL = CooldownTTL
 
 // Gateway owns config, live adapters, catalog, and usage.
 type Gateway struct {
-	mu     sync.RWMutex
-	cfg    config.Config
-	path   string
-	reg    *adapter.Registry
-	inst   []instance
-	models []catalog.Model
+	mu   sync.RWMutex
+	cfg  config.Config
+	path string
+	reg  *adapter.Registry
+	inst []instance
+	// buildEpoch counts rebuilds, so a token saved by an adapter from an
+	// earlier build can tell that the live adapters were made without it.
+	buildEpoch uint64
+	models     []catalog.Model
 
 	// Artifacts holds context PeaProxy gathered earlier in the session. Nil
 	// means no context store is attached, and every consumer must treat that as
@@ -52,9 +55,13 @@ type Gateway struct {
 
 	// spendWindow supplies recorded spend for the spend ceiling. It is a field
 	// so the ceiling can be exercised without a usage store.
-	spendWindow   spendWindow
-	Usage         *usage.Store
-	cool          map[string]cooldownSlots
+	spendWindow spendWindow
+	Usage       *usage.Store
+	cool        map[string]cooldownSlots
+	// recovering holds accounts whose whole-account cooldown expired and that
+	// have not answered a request since. Each request takes the half-open probe
+	// before using one, so a recovering account sees one request, not a herd.
+	recovering    map[string]struct{}
 	rr            uint64
 	sticky        map[string]string
 	affinity      map[string]affinityBind
@@ -169,6 +176,7 @@ func New(cfg config.Config, path string, reg *adapter.Registry) (*Gateway, error
 func (g *Gateway) rebuild() error {
 	var inst []instance
 	var first error
+	epoch := g.buildEpoch + 1
 	for _, p := range g.cfg.Providers {
 		if p.Disabled {
 			continue
@@ -197,7 +205,7 @@ func (g *Gateway) rebuild() error {
 		// SaveOAuth has already updated cfg in memory, persist has logged the
 		// error, and the next successful save writes the token.
 		opts.PersistOAuth = func(tok oauth.Token) error {
-			_ = g.SaveOAuth(id, tok)
+			_ = g.saveOAuthFrom(id, tok, epoch)
 			return nil
 		}
 		adp, err := g.reg.Open(p.Adapter, opts)
@@ -210,6 +218,7 @@ func (g *Gateway) rebuild() error {
 		inst = append(inst, instance{Provider: p, Adapter: adp})
 	}
 	g.inst = inst
+	g.buildEpoch = epoch
 	g.refreshSeq++
 	g.refreshCommit = g.refreshSeq
 	if len(inst) == 0 && first != nil {
@@ -235,6 +244,15 @@ func (g *Gateway) Config() config.Config {
 	cfg := g.cfg
 	cfg.Providers = append([]config.Provider(nil), g.cfg.Providers...)
 	return cfg
+}
+
+// live returns the running config under the read lock. Request paths read it
+// this way rather than touching g.cfg: the config watcher replaces g.cfg under
+// g.mu while requests are in flight. Never call it with g.mu held.
+func (g *Gateway) live() config.Config {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.cfg
 }
 
 // SetConfigPath updates the save target.
@@ -540,11 +558,26 @@ func (g *Gateway) stampEmbeddingsReadyLocked(models []catalog.Model) {
 
 // Chat proxies a non-stream OpenAI chat.completions body with policy-based failover.
 func noteStream(guard *streamguard.Guard, callErr error) error {
+	return noteStreamFinish(guard, callErr, false)
+}
+
+// noteStreamDone is noteStream for an attempt whose bytes reached the guard
+// directly (they are all written when the adapter returns), so a clean stream
+// with no event at all fails the attempt.
+func noteStreamDone(guard *streamguard.Guard, callErr error) error {
+	return noteStreamFinish(guard, callErr, true)
+}
+
+func noteStreamFinish(guard *streamguard.Guard, callErr error, complete bool) error {
 	if guard == nil {
 		return callErr
 	}
 	if callErr == nil {
-		if err := guard.Finish(); err != nil {
+		finish := guard.Finish
+		if complete {
+			finish = guard.Complete
+		}
+		if err := finish(); err != nil {
 			return err
 		}
 	}
@@ -639,6 +672,7 @@ func (g *Gateway) rememberSuccess(session, model, account string) {
 		g.admission.EndHalfOpen(account)
 	}
 	g.mu.Lock()
+	delete(g.recovering, account)
 	g.noteStatLocked(account, nil, 0)
 	g.mu.Unlock()
 	g.rememberSticky(model, account)
@@ -652,7 +686,26 @@ func (g *Gateway) admit(ctx context.Context, account string) (func(), error) {
 	if g == nil || g.admission == nil {
 		return func() {}, nil
 	}
-	return g.admission.Acquire(ctx, account)
+	g.mu.RLock()
+	_, recovering := g.recovering[account]
+	g.mu.RUnlock()
+	if recovering && !g.admission.TryHalfOpen(account) {
+		return nil, errProbeBusy
+	}
+	release, err := g.admission.Acquire(ctx, account)
+	if err != nil {
+		g.admission.EndHalfOpen(account)
+		return nil, err
+	}
+	// The attempt is over when its slot is released, whatever the outcome. A
+	// half-open probe it held ends with it; a cancelled or client-fault attempt
+	// neither succeeds nor cools the account, and without a configured limit
+	// the release is a no-op, so the probe would otherwise sit for its full
+	// expiry and keep a recovering account out of rotation.
+	return func() {
+		release()
+		g.admission.EndHalfOpen(account)
+	}, nil
 }
 
 // publishAdmissionLimits hands the configured limits to the gate. Called from
@@ -683,7 +736,7 @@ func admitted[T any](g *Gateway, ctx context.Context, account, model string, bod
 		return zero, usage.MarkNotDispatched(err)
 	}
 	defer release()
-	if err := g.holdSpend(account, model, body); err != nil {
+	if err := g.holdSpend(ctx, account, model, body); err != nil {
 		return zero, usage.MarkNotDispatched(err)
 	}
 	return f(ctx)
@@ -712,11 +765,16 @@ func admittedSlot[T any](g *Gateway, ctx context.Context, account string, f func
 // rather than something being wrong with it. Such an account is skipped, never
 // cooled down: one burst must not take an account out of rotation (#74).
 func admissionRejection(err error) bool {
-	return errors.Is(err, router.ErrAdmissionQueue) || errors.Is(err, router.ErrAdmissionWait)
+	return errors.Is(err, router.ErrAdmissionQueue) || errors.Is(err, router.ErrAdmissionWait) || errors.Is(err, errProbeBusy)
 }
 
+// errProbeBusy is an attempt on an account recovering from cooldown while
+// another request holds its half-open probe. Nothing was sent; the request
+// moves on like any other admission refusal.
+var errProbeBusy = errors.New("account is recovering from cooldown and another request is probing it")
+
 func (g *Gateway) bindAffinity(session, model, account string) {
-	if session == "" || model == "" || account == "" || !g.cfg.AffinityEnabled() {
+	if session == "" || model == "" || account == "" || !g.live().AffinityEnabled() {
 		return
 	}
 	g.mu.Lock()
@@ -1036,18 +1094,44 @@ func containsID(ids []string, want string) bool {
 }
 
 func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) {
+	return g.candidatesFor(model, session, false)
+}
+
+// candidatesFor lists the accounts a request for model may use. peek is for
+// read-only callers (ExplainRoute): it neither prunes cooldowns nor takes a
+// half-open probe, and treats a recovering account as eligible unless another
+// request holds its probe.
+func (g *Gateway) candidatesFor(model, session string, peek bool) ([]instance, time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
-	expired := map[string]struct{}{}
+	recovering := g.recovering
+	if peek {
+		recovering = maps.Clone(g.recovering)
+	}
 	for id, slots := range g.cool {
+		if peek {
+			// prune deletes from the slot's map, which a read-only caller
+			// must not touch.
+			slots.models = maps.Clone(slots.models)
+		}
 		slots.prune(now)
-		g.cool[id] = slots
+		if !peek {
+			g.cool[id] = slots
+		}
 		if slots.wideActive() || len(slots.models) > 0 {
 			continue
 		}
-		delete(g.cool, id)
-		expired[id] = struct{}{}
+		if !peek {
+			delete(g.cool, id)
+			if g.recovering == nil {
+				g.recovering = map[string]struct{}{}
+			}
+			recovering = g.recovering
+		} else if recovering == nil {
+			recovering = map[string]struct{}{}
+		}
+		recovering[id] = struct{}{}
 	}
 	q := g.queryLocked()
 	ids := catalog.AccountsForModel(g.models, q, model)
@@ -1079,7 +1163,11 @@ func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) 
 			}
 			continue
 		}
-		if _, just := expired[inst.Provider.ID]; just && g.admission != nil && !g.admission.TryHalfOpen(inst.Provider.ID) {
+		// The probe itself is taken in admit, when an attempt on the account
+		// actually starts. Taking it here held it for accounts a request listed
+		// but never tried, which shut every other request out of a healthy
+		// account until the probe expired.
+		if _, rec := recovering[inst.Provider.ID]; rec && g.admission != nil && g.admission.Probing(inst.Provider.ID) {
 			if until.IsZero() {
 				until = now.Add(time.Second)
 			}
@@ -1174,6 +1262,7 @@ func (g *Gateway) persist(mine config.Config) (rebuilt bool, err error) {
 // forgetAccountLocked drops continuation bindings and cached responses of a
 // removed account. The caller holds mu.
 func (g *Gateway) forgetAccountLocked(id string) {
+	delete(g.recovering, id)
 	for responseID, bind := range g.continuations {
 		if bind.Account == id {
 			delete(g.continuations, responseID)
@@ -1417,6 +1506,16 @@ func (g *Gateway) AdapterByID(id string) (adapter.Adapter, bool) {
 // SaveOAuth persists refreshed subscription tokens via the secret store. The
 // in-memory token is updated even when the save fails.
 func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
+	return g.saveOAuthFrom(id, tok, 0)
+}
+
+// saveOAuthFrom is SaveOAuth for a token committed by an adapter from build
+// epoch (0: not from an adapter). When the adapters have been rebuilt since,
+// the live one for id was made from the config before this token reached it,
+// so it still holds the refresh token this refresh just spent (a rotating
+// provider answers its next refresh with invalid_grant). The adapters are
+// rebuilt again from the config, which now has the new token.
+func (g *Gateway) saveOAuthFrom(id string, tok oauth.Token, epoch uint64) error {
 	ct := config.OAuthFromRuntime(tok)
 	g.saveMu.Lock()
 	g.mu.Lock()
@@ -1428,7 +1527,20 @@ func (g *Gateway) SaveOAuth(id string, tok oauth.Token) error {
 	}
 	mine := config.Clone(g.cfg)
 	g.mu.Unlock()
-	return g.persistAndRefresh(mine)
+	rebuilt, err := g.persist(mine)
+	if !rebuilt && epoch != 0 {
+		g.mu.Lock()
+		if g.buildEpoch != epoch {
+			_ = g.rebuild()
+			rebuilt = true
+		}
+		g.mu.Unlock()
+	}
+	g.saveMu.Unlock()
+	if rebuilt {
+		go g.Refresh(context.Background())
+	}
+	return err
 }
 
 // newArtifactStore builds the session-scoped artifact store the configuration
