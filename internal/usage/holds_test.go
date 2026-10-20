@@ -94,3 +94,15 @@ func TestACacheHitIsAPricedZeroCostCall(t *testing.T) {
 		t.Fatalf("window USD = %v, want only the paid call's %v", w.USD, cost)
 	}
 }
+
+func TestByDayReturnsIndependentCosts(t *testing.T) {
+	s := Open("")
+	first := 1.0
+	s.Add(Event{AccountID: "a", Model: "m", TokensKnown: true, Costable: true, CostUSD: &first})
+	snap := s.ByDay()
+	more := 2.0
+	s.Add(Event{AccountID: "a", Model: "m", TokensKnown: true, Costable: true, CostUSD: &more})
+	if got := *snap[0].CostUSD; got != 1.0 {
+		t.Fatalf("an earlier ByDay snapshot changed to %v when a later call landed: it shares the ledger's cost", got)
+	}
+}

@@ -472,6 +472,12 @@ func (s *Store) ByDay() []DayRollup {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := append([]DayRollup(nil), s.days...)
+	// The cost fields are pointers that bumpDay updates in place; a caller
+	// encoding the copy outside the lock would race those writes.
+	for i := range out {
+		out[i].CostUSD = clonePtr(out[i].CostUSD)
+		out[i].EstimatedUSD = clonePtr(out[i].EstimatedUSD)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Day != out[j].Day {
 			return out[i].Day > out[j].Day
@@ -914,4 +920,12 @@ func (s *Store) CacheWarmSince(since time.Time) map[string]bool {
 		out[e.AccountID+"\x00"+e.Model] = true
 	}
 	return out
+}
+
+func clonePtr(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
 }
