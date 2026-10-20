@@ -33,6 +33,9 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 	}
 	accs := map[int]*thinkAcc{}
 	var accOrder []int
+	// Chat numbers tool calls 0, 1, 2; Anthropic numbers content blocks, and a
+	// text or thinking block before the first tool would leave holes.
+	toolIndex := map[int]int{}
 	writeRole := func() error {
 		if wroteRole {
 			return nil
@@ -138,7 +141,12 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				if err := writeRole(); err != nil {
 					return err
 				}
-				tc := openAIStreamToolCall{Index: ev.Index, ID: ev.ContentBlock.ID, Type: "function"}
+				idx, seen := toolIndex[ev.Index]
+				if !seen {
+					idx = len(toolIndex)
+					toolIndex[ev.Index] = idx
+				}
+				tc := openAIStreamToolCall{Index: idx, ID: ev.ContentBlock.ID, Type: "function"}
 				tc.Function.Name = ev.ContentBlock.Name
 				if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{ToolCalls: []openAIStreamToolCall{tc}}, ""); err != nil {
 					return err
@@ -165,7 +173,12 @@ func ClaudeSSEToOpenAI(r io.Reader, w io.Writer) error {
 				if err := writeRole(); err != nil {
 					return err
 				}
-				tc := openAIStreamToolCall{Index: ev.Index}
+				idx, seen := toolIndex[ev.Index]
+				if !seen {
+					idx = len(toolIndex)
+					toolIndex[ev.Index] = idx
+				}
+				tc := openAIStreamToolCall{Index: idx}
 				tc.Function.Arguments = ev.Delta.PartialJSON
 				if err := writeOpenAIChatSSEChunk(w, id, model, openAIChatDelta{ToolCalls: []openAIStreamToolCall{tc}}, ""); err != nil {
 					return err

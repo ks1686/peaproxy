@@ -42,3 +42,25 @@ func TestClaudeSSEToOpenAICarriesCacheTokens(t *testing.T) {
 	}
 	assertClaudeCacheUsage(t, out.Bytes())
 }
+
+// Chat tool_calls are indexed 0, 1, 2 by call. Using the Anthropic content
+// block index (a text or thinking block comes first) left holes that
+// array-accumulating clients trip over.
+func TestClaudeSSEToOpenAIIndexesToolCallsFromZero(t *testing.T) {
+	in := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"claude\",\"usage\":{\"input_tokens\":5}}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"a\",\"input\":{}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"b\",\"input\":{}}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{}\"}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":3}}\n\n"
+	var out bytes.Buffer
+	if err := ClaudeSSEToOpenAI(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, `"index":0,"id":"t1"`) || !strings.Contains(s, `"index":1,"id":"t2"`) {
+		t.Fatalf("tool calls not indexed 0 and 1:\n%s", s)
+	}
+}
