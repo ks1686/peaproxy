@@ -34,7 +34,7 @@ Feature files (modified or untracked):
 - `internal/adapter/openai_oauth/openai_oauth.go` (`ListModels` uses `ParseCodexCatalog`; the chat-to-Responses codec is still here)
 - `docs/HARNESS.md`
 
-`docs/PLAN.md` and `docs/V1.md` are a separate dirty edit (`pea-pod.me` to `peapod.fyi`). Leave them out of this work.
+`docs/PLAN.md` and `docs/V1.md` are a separate dirty edit (marketing site URL to `peapod.fyi`). Leave them out of this work.
 
 Selection behavior that must survive every task:
 
