@@ -14,7 +14,7 @@ Residuals (documented, not unmarked phase work):
 
 1.0 cut vs shipped 1.6.x surface: [V1.md](V1.md). Liability: [OAUTH.md](OAUTH.md). Adapters: [PROVIDERS.md](PROVIDERS.md).
 
-Marketing pages (pea-pod.me) are a **separate repo** and are not a PeaProxy 1.0 blocker.
+Marketing pages (peapod.fyi) are a **separate repo** and are not a PeaProxy 1.0 blocker.
 
 ## 1. One-liner
 
@@ -107,7 +107,7 @@ Config: versioned YAML + env; secrets in OS keychain with encrypted file fallbac
 2. Core P0 key adapters; multi-account failover; CLI; harness presets (Cursor + Claude Code + OpenCode + Pi, later Codex/Continue/Cline/Amp) ✅
 3. Catalog polish (hide/filter/pin/rename); showcase; request inspector; health; Settings / first-run onboarding ✅ (v0.2.4–v0.2.6)
 4. OAuth maximize + remaining free/local hosted presets ✅ (v0.2.0 OAuth; v0.2.2–v0.2.5 presets). **Qwen consumer OAuth still stubbed.**
-5. Releases — **v0.2.0 through v0.2.8, then 1.1.0 through v1.6.9, then v2.0.0 through v2.0.10, then v2.1.0, then v3.0.0 through v3.0.9, then v3.1.0 through v3.1.2, then v3.2.0 tagged** (GoReleaser linux/darwin/windows amd64+arm64; macOS Developer ID + notarization; Homebrew cask `ks1686/tap`; Scoop manifest in `ks1686/scoop-bucket`; AUR package `peaproxy-bin`). Historic GitHub `v1.0.0` (0.2.8-era docs) predates 1.6.x. **Formal v1.0.0** is the honesty declaration recorded in [V1.md](V1.md); that cut did not add 1.6.10. Site/marketing is not this repo. The public page is [pea-pod.me/peaproxy](https://pea-pod.me/peaproxy/).
+5. Releases — **v0.2.0 through v0.2.8, then 1.1.0 through v1.6.9, then v2.0.0 through v2.0.10, then v2.1.0, then v3.0.0 through v3.0.9, then v3.1.0 through v3.1.2, then v3.2.0 through v3.2.1, then v3.3.0 tagged** (GoReleaser linux/darwin/windows amd64+arm64; macOS Developer ID + notarization; Homebrew cask `ks1686/tap`; Scoop manifest in `ks1686/scoop-bucket`; AUR package `peaproxy-bin`). Historic GitHub `v1.0.0` (0.2.8-era docs) predates 1.6.x. **Formal v1.0.0** is the honesty declaration recorded in [V1.md](V1.md); that cut did not add 1.6.10. Site/marketing is not this repo. The public page is [peapod.fyi/peaproxy](https://peapod.fyi/peaproxy/).
 
 **Shipped in this tree (2.0.x):** native API-key adapters, hosted OpenAI-compat presets, Claude SSE, `/v1/responses`, vision Showcase, **image-out proxy** (`POST /v1/images/generations`), **embeddings proxy** (`POST /v1/embeddings`), **quota remaining** (documented headers + OpenRouter `GET /key`), failover policies (`round-robin` / `fill-first` / `sticky`) + error-body classification + cooldown-storm skip, persisted usage, request inspector, catalog overlays, Settings/onboarding, `config validate`, CLI catalog/health/requests/`accounts add`, subscription OAuth including Copilot (ToS documented), OpenCode Go API key, OS keychain / encrypted-file secrets, Homebrew cask + signed/notarized macOS binaries, `anthropic_oauth` Claude Code fingerprint + system cloak on Messages, `openai_oauth` `store: false` + omit `max_output_tokens`, chat SSE `finish_reason` before `[DONE]`.
 
