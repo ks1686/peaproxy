@@ -89,3 +89,25 @@ func TestAnEmptyScopedIndexFallsBackToTheLegacyIndex(t *testing.T) {
 		t.Fatalf("opened the %v backend; the legacy index says secrets are in the keychain", s.Backend())
 	}
 }
+
+// After a finished migrate and a prune of every secret, the scoped index is
+// `[]` and the never-pruned legacy index still names keys. The migrated
+// marker must keep backend selection off that legacy evidence, or a failed
+// keychain probe refuses to open a scope that holds nothing.
+func TestAMigratedEmptyScopeDoesNotPinTheLegacyKeychain(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.config.yaml.index"), []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "secrets.config.yaml.migrated"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, IndexFileName), []byte(`["anthropic-oauth/oauth"]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withKeyringOpener(t, func(string) (*Store, error) { return nil, errors.New("User interaction is not allowed") })
+	s, err := openAuto(dir, "config.yaml")
+	if err != nil || s.Backend() != BackendFile {
+		t.Fatalf("migrated empty scope: %v, %v; want the file backend", s, err)
+	}
+}

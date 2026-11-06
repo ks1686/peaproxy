@@ -197,7 +197,9 @@ func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 	_, merr := os.Stat(marker)
 	interrupted := merr == nil
 	if !interrupted && s.scopeAlreadyMigrated() {
-		return false, nil
+		// 3.3.1 finished a copy without this file. Persist it while carry or
+		// scoped secrets still prove the copy ran, before a prune deletes both.
+		return false, s.persistMigratedLocked()
 	}
 	var keys []string
 	switch s.backend {
@@ -254,7 +256,7 @@ func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 	if err := s.startCarryLocked(legacy); err != nil {
 		return false, err
 	}
-	if err := fslock.WriteAtomic(s.migratedPath(), nil, 0o600); err != nil {
+	if err := s.persistMigratedLocked(); err != nil {
 		return false, err
 	}
 	return true, os.Remove(marker)
@@ -262,6 +264,13 @@ func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 
 func (s *Store) migratedPath() string {
 	return filepath.Join(s.dir, scopedName("secrets.migrated", s.scope))
+}
+
+func (s *Store) persistMigratedLocked() error {
+	if fileExists(s.migratedPath()) {
+		return nil
+	}
+	return fslock.WriteAtomic(s.migratedPath(), nil, 0o600)
 }
 
 // scopeAlreadyMigrated reports whether this scope has finished a legacy copy
