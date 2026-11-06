@@ -629,6 +629,21 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		err := auth.AuthComplete(ctx, sess, "")
 		cancel()
+		// AuthComplete nil is not proof the secret was stored: an empty token
+		// response can persist nothing and still return success. The job is
+		// complete only when the account is oauth-ready.
+		if err == nil {
+			ready := false
+			for _, p := range s.gw.Instances() {
+				if p.ID == body.ID && p.HasOAuth() {
+					ready = true
+					break
+				}
+			}
+			if !ready {
+				err = fmt.Errorf("oauth login finished but account still unauthenticated (token missing or not saved)")
+			}
+		}
 		s.oauthMu.Lock()
 		job.Done = true
 		if err != nil {

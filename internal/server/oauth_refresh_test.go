@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,14 +17,17 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/gateway"
+	"github.com/ks1686/peaproxy/internal/oauth"
 )
 
 // slowOAuth completes login at once, then blocks ListModels until released so
 // a test can observe the job state while the post-login refresh is in flight.
 type slowOAuth struct {
-	completeErr error
-	listed      chan context.Context
-	release     chan struct{}
+	completeErr  error
+	missingToken bool
+	persist      func(oauth.Token) error
+	listed       chan context.Context
+	release      chan struct{}
 }
 
 func (a *slowOAuth) ID() string { return "slow" }
@@ -48,13 +53,25 @@ func (a *slowOAuth) AuthStart(context.Context) (adapter.AuthSession, error) {
 }
 
 func (a *slowOAuth) AuthComplete(context.Context, adapter.AuthSession, string) error {
-	return a.completeErr
+	if a.completeErr != nil {
+		return a.completeErr
+	}
+	if a.missingToken {
+		return nil
+	}
+	if a.persist == nil {
+		return nil
+	}
+	return a.persist(oauth.Token{AccessToken: "test-access-token"})
 }
 
 func oauthServer(t *testing.T, fake *slowOAuth) *Server {
 	t.Helper()
 	reg := adapter.NewRegistry()
-	reg.Register("slow_oauth", func(adapter.Options) (adapter.Adapter, error) { return fake, nil })
+	reg.Register("slow_oauth", func(opts adapter.Options) (adapter.Adapter, error) {
+		fake.persist = opts.PersistOAuth
+		return fake, nil
+	})
 	cfg := config.Default()
 	cfg.Providers = []config.Provider{{ID: "slow", Adapter: "slow_oauth", Tier: "paid"}}
 	gw, err := gateway.New(cfg, "", reg)
@@ -145,5 +162,79 @@ func TestOAuthCLICommandQuotesHostileAccountID(t *testing.T) {
 	want := `peaproxy auth login --provider codex --id 'work'\''; rm -rf ~; echo '\'''`
 	if got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestOAuthLoginPersistErrorFailsJob(t *testing.T) {
+	fake := &slowOAuth{listed: make(chan context.Context, 1), release: make(chan struct{})}
+	t.Cleanup(func() { close(fake.release) })
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := config.Default()
+	cfg.Providers = []config.Provider{{ID: "slow", Adapter: "slow_oauth", Tier: "paid"}}
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := adapter.NewRegistry()
+	reg.Register("slow_oauth", func(opts adapter.Options) (adapter.Adapter, error) {
+		fake.persist = opts.PersistOAuth
+		return fake, nil
+	})
+	gw, err := gateway.New(loaded, path, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("providers: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Options{Gateway: gw})
+	oauthCall(t, s, http.MethodPost, "/admin/oauth/start", `{"id":"slow"}`)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := oauthCall(t, s, http.MethodGet, "/admin/oauth/status?id=slow", "")
+		if got["status"] != "pending" {
+			if got["status"] != "error" || got["error"] == "" {
+				t.Fatalf("persist failure must fail login, got %v", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("login did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-fake.listed:
+		t.Fatal("failed persist must not refresh the catalog")
+	default:
+	}
+}
+
+func TestOAuthLoginWithoutSavedTokenFailsAndSkipsRefresh(t *testing.T) {
+	fake := &slowOAuth{missingToken: true, listed: make(chan context.Context, 1), release: make(chan struct{})}
+	t.Cleanup(func() { close(fake.release) })
+	s := oauthServer(t, fake)
+	oauthCall(t, s, http.MethodPost, "/admin/oauth/start", `{"id":"slow"}`)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := oauthCall(t, s, http.MethodGet, "/admin/oauth/status?id=slow", "")
+		if got["status"] != "pending" {
+			if got["status"] != "error" || !strings.Contains(got["error"].(string), "account still unauthenticated") {
+				t.Fatalf("missing token must fail login, got %v", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("login did not finish")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-fake.listed:
+		t.Fatal("unauthenticated login must not refresh the catalog")
+	default:
 	}
 }
