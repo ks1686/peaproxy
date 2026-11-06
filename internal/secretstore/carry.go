@@ -141,20 +141,6 @@ func (s *Store) saveCarry(rec carryRecord) error {
 	return fslock.WriteAtomic(s.carryPath(), b, 0o600)
 }
 
-func (s *Store) getLocked(k string) (string, error) {
-	if s.backend == BackendKeyring {
-		return s.keyringGet(k)
-	}
-	return s.fileGet(k, false)
-}
-
-func (s *Store) setLocked(k, v string) error {
-	if s.backend == BackendKeyring {
-		return s.keyringSet(k, v)
-	}
-	return s.fileSet(k, v)
-}
-
 // keysLocked lists the item keys this store holds.
 func (s *Store) keysLocked() ([]string, error) {
 	var keys []string

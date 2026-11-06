@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Secret store: a keychain-primary open copies leftover `secrets.enc` / `secrets.<config>.enc` items into the scoped keychain, so accounts that lived only in the encrypted file (Antigravity, OpenAI, …) are not stranded after a partial Keychain migrate. If a Keychain write fails (common for a LaunchAgent with no UI prompt), that secret is saved in the encrypted file instead so OAuth login can still become `oauth-ready`.
 - Secret store: an empty `secrets.<config>.index` (`[]`) no longer counts as a finished migration. 3.3.1 could write that file on a config save before copying a legacy Keychain token, then skip migration forever, so Claude (`anthropic-oauth`) stayed `oauth-login-required` while the old `peaproxy` / `account/oauth` item was still in Keychain.
 
 ## 3.3.1

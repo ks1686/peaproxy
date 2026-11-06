@@ -194,11 +194,23 @@ func TestFailedFirstWriteLeavesNoChunks(t *testing.T) {
 	kr := newFault()
 	s := &Store{backend: BackendKeyring, dir: t.TempDir(), kr: kr}
 	kr.failSet = "acct/oauth#1"
-	if err := s.Set("acct", KindOAuth, strings.Repeat("x", 5000)); err == nil {
-		t.Fatal("expected failure")
+	v := strings.Repeat("x", 5000)
+	if err := s.keyringSet(itemKey("acct", KindOAuth), v); err == nil {
+		t.Fatal("expected keychain failure")
 	}
 	if len(kr.m) != 0 {
 		t.Fatalf("failed first write left %d orphan items (not indexed, never pruned)", len(kr.m))
+	}
+	// Persist still keeps the token in the encrypted file so a LaunchAgent
+	// login can become oauth-ready when Keychain Set fails.
+	if err := s.Set("acct", KindOAuth, v); err != nil {
+		t.Fatalf("Set after a keychain refusal: %v", err)
+	}
+	if len(kr.m) != 0 {
+		t.Fatalf("file fallback left %d keychain items", len(kr.m))
+	}
+	if got, err := s.Get("acct", KindOAuth); err != nil || got != v {
+		t.Fatalf("Get after file fallback: %q, %v", got, err)
 	}
 }
 

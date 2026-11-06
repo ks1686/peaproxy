@@ -197,8 +197,8 @@ func TestPruneOfAnEmptyKeyringScopeDoesNotCreateAnIndex(t *testing.T) {
 	}
 }
 
-// A migration cut short (a crash, a keychain prompt dismissed) runs again on
-// the next open instead of leaving the scope with half the secrets.
+// A keychain write refused mid-migrate still keeps the remaining secrets
+// (file fallback) instead of leaving the scope with half the tokens.
 func TestAnInterruptedMigrationRunsAgain(t *testing.T) {
 	dir := t.TempDir()
 	kr := &memKeyring{m: map[string]string{}}
@@ -210,13 +210,12 @@ func TestAnInterruptedMigrationRunsAgain(t *testing.T) {
 	}
 	failing := &failAfterKeyring{memKeyring: kr, left: 1}
 	s := &Store{backend: BackendKeyring, dir: dir, kr: failing}
-	if err := s.scopeTo("config.yaml"); err == nil {
-		t.Fatal("a failed migration write was not reported")
+	if err := s.scopeTo("config.yaml"); err != nil {
+		t.Fatalf("migrate with a refused keychain write: %v", err)
 	}
-	s = scopedKeyring(t, dir, "config.yaml", kr)
 	for _, id := range []string{"one", "two"} {
 		if got, err := s.Get(id, KindAPIKey); err != nil || got != "sk-"+id {
-			t.Fatalf("%s after the rerun: %q, %v", id, got, err)
+			t.Fatalf("%s after a refused keychain write: %q, %v", id, got, err)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "secrets.config.yaml.migrating")); !os.IsNotExist(err) {
