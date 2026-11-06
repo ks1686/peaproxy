@@ -309,7 +309,7 @@ func TestSaveOAuthDuringRefreshDoesNotDeadlock(t *testing.T) {
 	}
 }
 
-func TestSaveOAuthPersistFailureDoesNotFailRefresh(t *testing.T) {
+func TestPersistOAuthReturnsSaveErrorAndKeepsLiveToken(t *testing.T) {
 	gw, path, hooks := newSavedGateway(t, nil, acct("a", "tok-a"))
 	persist := hooks.get("a")
 	if persist == nil {
@@ -325,8 +325,8 @@ func TestSaveOAuthPersistFailureDoesNotFailRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tok := range []string{"tok-1", "tok-2"} {
-		if err := persist(oauth.Token{AccessToken: tok}); err != nil {
-			t.Fatalf("PersistOAuth(%s) = %v, want nil", tok, err)
+		if err := persist(oauth.Token{AccessToken: tok}); err == nil {
+			t.Fatalf("PersistOAuth(%s) = nil, want save error", tok)
 		}
 	}
 	if got := gw.Config().Providers[0].OAuth.AccessToken; got != "tok-2" {
@@ -354,8 +354,8 @@ func TestSaveOAuthPersistFailureDoesNotFailRefresh(t *testing.T) {
 	if err := os.WriteFile(path, garbage, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := persist(oauth.Token{AccessToken: "tok-4"}); err != nil {
-		t.Fatal(err)
+	if err := persist(oauth.Token{AccessToken: "tok-4"}); err == nil {
+		t.Fatal("PersistOAuth = nil, want save error")
 	}
 	if n := failures(); n != 2 {
 		t.Fatalf("logged %d failures after a success cleared the last error, want 2:\n%s", n, logs.String())
