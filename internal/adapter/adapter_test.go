@@ -27,6 +27,25 @@ import (
 	"github.com/ks1686/peaproxy/internal/catalog"
 )
 
+func TestDeviceWaitFollowsCodeLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   int
+		want time.Duration
+	}{
+		{"zero falls back to the cap", 0, 15 * time.Minute},
+		{"short is floored", 60, 5 * time.Minute},
+		{"xai 30m is capped", 1800, 15 * time.Minute},
+		{"mid is kept", 600, 10 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := adapter.DeviceWait(adapter.AuthSession{ExpiresIn: tc.in}); got != tc.want {
+				t.Fatalf("DeviceWait(%d) = %s, want %s", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDefaultRegistryHasStubAndLiveFactories(t *testing.T) {
 	r := adapters.DefaultRegistry()
 	for _, name := range []string{"ollama", "openai_compat", "openai", "anthropic", "openrouter", "opencode_zen", "opencode_go", "anthropic_oauth", "openai_oauth", "lmstudio", "llamacpp", "vllm", "jan", "gpt4all", "groq", "cerebras", "google", "gemini", "xai", "huggingface", "nim", "workers_ai", "ollama_cloud", "sambanova", "antigravity", "gemini_oauth", "xai_oauth", "kimi_oauth", "kimi_ai_oauth", "meta_oauth", "copilot_oauth", "kilo_oauth", "minimax_oauth", "poe_oauth", "zai_oauth", "factory_oauth"} {
