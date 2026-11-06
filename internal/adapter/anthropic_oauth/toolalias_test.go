@@ -140,6 +140,45 @@ func TestRestoreOAuthToolNamesOnWire(t *testing.T) {
 	}
 }
 
+// The Praison skill trio must not reach Anthropic intact: the three names
+// together are a third-party signature. Exactly one goes upstream as Skill.
+func TestPraisonSkillTrioOnWire(t *testing.T) {
+	reqBody := []byte(`{"model":"claude-opus-5","max_tokens":16,"messages":[{"role":"user","content":"ping"}],"tools":[{"name":"skill_manage","description":"d","input_schema":{"type":"object"}},{"name":"skill_view","description":"d","input_schema":{"type":"object"}},{"name":"skills_list","description":"d","input_schema":{"type":"object"}}]}`)
+	var upstream string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		upstream = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Skill","input":{}},{"type":"tool_use","id":"toolu_2","name":"skill_view","input":{}},{"type":"tool_use","id":"toolu_3","name":"skills_list","input":{}}],"stop_reason":"tool_use"}`)
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "oauth-at", ExpiresAt: time.Now().Add(time.Hour)}
+
+	out, err := a.Messages(context.Background(), reqBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(upstream, `"name":"Skill"`); n != 1 {
+		t.Fatalf("upstream Skill count = %d, want 1: %s", n, upstream)
+	}
+	if strings.Contains(upstream, `"name":"skill_manage"`) {
+		t.Fatalf("upstream kept skill_manage: %s", upstream)
+	}
+	for _, keep := range []string{`"name":"skill_view"`, `"name":"skills_list"`} {
+		if !strings.Contains(upstream, keep) {
+			t.Fatalf("upstream missing %s: %s", keep, upstream)
+		}
+	}
+	if got := strings.Join(responseToolNames(t, out), ","); got != "skill_manage,skill_view,skills_list" {
+		t.Fatalf("client response = %s", got)
+	}
+}
+
 // A Team/Enterprise workspace bills a request as a third-party app when
 // OpenCode's lowercase core tools (bash, read, edit, ...) sit in a large tool
 // list; Claude Code's own names for them stay on the plan (live-verified).
@@ -180,6 +219,55 @@ func TestAliasOAuthToolNamesUsesClaudeCodeCoreNames(t *testing.T) {
 	if names := strings.Join(responseToolNames(t, restoreOAuthToolNames(resp, reverse)), ","); names != "bash,read,guild-gateway_search" {
 		t.Fatalf("restored response names = %s", names)
 	}
+}
+
+// Praison's skill trio (skill_manage, skill_view, skills_list) is a third-party
+// signature on its own: the three names together make a Team/Enterprise
+// workspace refuse the request, while any two of them do not. Claude Code has a
+// single Skill tool, so exactly one of the three may take that name; sending
+// three tools called Skill fails again and leaves the reverse map restoring
+// only the last one (live-verified 2026-11-06).
+func TestAliasOAuthToolNamesBreaksPraisonSkillSignature(t *testing.T) {
+	raw := []byte(`{"tools":[{"name":"skill_manage","input_schema":{"type":"object"}},{"name":"skill_view","input_schema":{"type":"object"}},{"name":"skills_list","input_schema":{"type":"object"}},{"name":"terminal","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"}]}`)
+
+	out, reverse := aliasOAuthToolNames(raw)
+	names := toolNames(t, out)
+	if len(names) != 4 {
+		t.Fatalf("tool names = %v", names)
+	}
+	skills := map[string]bool{}
+	for _, n := range names {
+		skills[n] = true
+	}
+	if !skills["Skill"] {
+		t.Fatalf("no tool took the Skill name: %v", names)
+	}
+	for _, keep := range []string{"skill_view", "skills_list", "terminal"} {
+		if !skills[keep] {
+			t.Fatalf("%q was renamed: %v", keep, names)
+		}
+	}
+	if n := countName(names, "Skill"); n != 1 {
+		t.Fatalf("want exactly one Skill, got %d in %v", n, names)
+	}
+	if got := reverse["Skill"]; got != "skill_manage" {
+		t.Fatalf("reverse[Skill] = %q, want skill_manage", got)
+	}
+
+	resp := []byte(`{"content":[{"type":"tool_use","id":"t1","name":"Skill","input":{}},{"type":"tool_use","id":"t2","name":"skill_view","input":{}}]}`)
+	if got := strings.Join(responseToolNames(t, restoreOAuthToolNames(resp, reverse)), ","); got != "skill_manage,skill_view" {
+		t.Fatalf("restored response names = %s", got)
+	}
+}
+
+func countName(names []string, want string) int {
+	n := 0
+	for _, name := range names {
+		if name == want {
+			n++
+		}
+	}
+	return n
 }
 
 func TestAliasOAuthToolNamesCoreNameCollisionAndStream(t *testing.T) {

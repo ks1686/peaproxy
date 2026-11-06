@@ -12,7 +12,10 @@ import (
 // subscription OAuth, and the upstream names that stay on the subscription lane.
 // OpenCode's lowercase core tools mixed into a large tool list make a
 // Team/Enterprise workspace reject the request as a third-party app, so they
-// are sent under Claude Code's names.
+// are sent under Claude Code's names. Praison's skill trio
+// (skill_manage/skill_view/skills_list) is a signature of its own: the three
+// names together trip the same check, so one of them takes Claude Code's Skill
+// name and the others keep their own (see the claimed-upstream guard below).
 var oauthToolAliases = []struct {
 	client   string
 	upstream string
@@ -29,6 +32,11 @@ var oauthToolAliases = []struct {
 	{client: "skill", upstream: "Skill"},
 	{client: "webfetch", upstream: "WebFetch"},
 	{client: "websearch", upstream: "WebSearch"},
+	// Claude Code has a single Skill tool, so these three cannot all take its
+	// name: the first present wins and the rest keep theirs.
+	{client: "skill_manage", upstream: "Skill"},
+	{client: "skill_view", upstream: "Skill"},
+	{client: "skills_list", upstream: "Skill"},
 }
 
 // aliasOAuthToolNames renames subscription-sensitive tool definitions to the
@@ -40,12 +48,18 @@ func aliasOAuthToolNames(raw []byte) ([]byte, map[string]string) {
 	names := toolDefNames(raw)
 	forward := map[string]string{}
 	reverse := map[string]string{}
+	// claimed stops two client tools from taking the same upstream name. The
+	// Praison trio all map to Skill, and sending three tools called Skill both
+	// confuses the model and leaves the reverse map restoring only the last
+	// one, so the first present wins.
+	claimed := map[string]bool{}
 	for _, pair := range oauthToolAliases {
-		if !names[pair.client] || names[pair.upstream] {
+		if !names[pair.client] || names[pair.upstream] || claimed[pair.upstream] {
 			continue
 		}
 		forward[pair.client] = pair.upstream
 		reverse[pair.upstream] = pair.client
+		claimed[pair.upstream] = true
 	}
 	if len(forward) == 0 {
 		return raw, map[string]string{}
