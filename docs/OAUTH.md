@@ -27,7 +27,7 @@ Flows were studied from [router-for-me/CLIProxyAPI](https://github.com/router-fo
 |---|---|---|
 | `anthropic_oauth` | Implemented | Claude Code-style PKCE loopback (`claude.ai` → `platform.claude.com/v1/oauth/token`), then `api.anthropic.com/v1/messages?beta=true` with `Authorization: Bearer`, Claude Code 2.1.280 User-Agent / Stainless / `x-app: cli` headers, `metadata.user_id`, OAuth Anthropic-Beta (including `oauth-2025-04-20`, `effort-2025-11-24`, `extended-cache-ttl-2025-04-11`), and the required Messages system cloak (CCH billing header + `You are Claude Code…`). Missing that fingerprint is what Anthropic mislabels as `429 rate_limit_error` / `"Error"`. |
 | `openai_oauth` | Implemented | Codex CLI PKCE loopback (`auth.openai.com`, callback `localhost:1455`) or `--device`, then Codex **Responses** at `https://chatgpt.com/backend-api/codex`. Upstream bodies force `store: false` and omit `max_output_tokens` / `stream_options`. Translated chat SSE emits `finish_reason` before `[DONE]`. |
-| `antigravity` (alias `gemini_oauth`) | Implemented | Google OAuth loopback for the public Antigravity IDE client (`localhost:51121/oauth-callback`), Cloud Code `loadCodeAssist` for a GCP project, then `v1internal:fetchAvailableModels` / `generateContent`. **Distinct** from AI Studio API keys. |
+| `antigravity` (alias `gemini_oauth`) | Implemented | Google OAuth loopback for the public Antigravity IDE client (`localhost:51121/oauth-callback`, including the `aicode` scope), Cloud Code `loadCodeAssist` / `onboardUser` on the daily host for a GCP project, then `v1internal:fetchAvailableModels` / `generateContent`. **Distinct** from AI Studio API keys. |
 | `xai_oauth` | Implemented | RFC 8628 device code via `auth.x.ai` OIDC discovery, then OpenAI-compat chat at `https://cli-chat-proxy.grok.com/v1` |
 | `kimi_oauth` | Implemented | Device code at `auth.kimi.com`, OpenAI-compat at `https://api.kimi.com/coding/v1` |
 | `kimi_ai_oauth` | Implemented | Same flow on `kimi.ai` (`auth.kimi.ai` / `api.kimi.ai/coding/v1`) |
@@ -79,7 +79,7 @@ curl -s http://127.0.0.1:8317/v1/models
 # then a tiny chat against a listed id (Showcase also works)
 ```
 
-Accounts UI: add a subscription OAuth preset (warning is shown), then **OAuth login** (shows a clickable provider URL, any device code, and polls) or **Copy CLI**. The copied login command includes the selected account ID. When a UI login finishes, the catalog is refreshed, so the new account's models list without a restart. OpenAI/Codex's choice between loopback and `--device` remains CLI-only; the UI uses the configured adapter flow.
+Accounts UI: add a subscription OAuth preset (warning is shown), then **OAuth login** (shows a clickable provider URL, any device code, and polls) or **Copy CLI**. The copied login command includes the selected account ID. The job is `complete` only when the account is `oauth-ready` (a secret was stored); a persist or token-exchange failure is `error` with the real message, not a silent success. When a UI login finishes, the catalog is refreshed, so the new account's models list without a restart. OpenAI/Codex's choice between loopback and `--device` remains CLI-only; the UI uses the configured adapter flow.
 
 Callback ports (must match the public CLI OAuth clients):
 
