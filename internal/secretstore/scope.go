@@ -3,11 +3,14 @@ package secretstore
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
@@ -128,8 +131,20 @@ func (s *Store) scopeLocked(legacy *Store, scope string) error {
 		s.krPrefix = id + "/" + scope + "/"
 	}
 	migrated, err := s.migrateLocked(legacy)
-	if err != nil || migrated {
+	if err != nil {
 		return err
+	}
+	if s.backend == BackendKeyring {
+		// Keyring migrate only copies the legacy keychain index. Accounts that
+		// still live in secrets.enc (a prior file backend, or a Keychain Set
+		// that fell back) have to be imported even after a finished migrate,
+		// or they stay oauth-login-required forever.
+		if err := s.importFileSecretsLocked(); err != nil {
+			return err
+		}
+	}
+	if migrated {
+		return nil
 	}
 	return s.carryLocked(legacy)
 }
@@ -192,6 +207,11 @@ func (s *Store) dirIDLocked() (string, error) {
 // before any secret is copied, and skipping on the file's existence stranded
 // the legacy token (macOS 3.3.1, Claude oauth-login-required despite a
 // Keychain item still named account/oauth).
+//
+// The keyring branch copies the legacy keychain index. Leftover secrets.enc
+// items (absent from that index) are imported by importFileSecretsLocked,
+// including after this copy is marked finished: a 3.3.2 machine that migrated
+// Claude from Keychain otherwise stranded Antigravity/OpenAI still in the blob.
 func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 	marker := filepath.Join(s.dir, scopedName("secrets.migrating", s.scope))
 	_, merr := os.Stat(marker)
@@ -288,6 +308,115 @@ func (s *Store) scopeHasSecrets() bool {
 		return true
 	}
 	return keyringIndexHasKeys(s.indexPath())
+}
+
+func (s *Store) importedPath() string {
+	return filepath.Join(s.dir, scopedName("secrets.imported", s.scope))
+}
+
+// importFileSecretsLocked copies secrets that still live only in a leftover
+// secrets.enc / secrets.<scope>.enc into this keyring scope. Copy, not move:
+// the blobs stay so another config can still migrate from them. Keys already
+// considered are recorded so a prune is not undone from the leftover blob.
+func (s *Store) importFileSecretsLocked() error {
+	items, err := s.encItemsLocked()
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	seen, err := s.loadImported()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for k, v := range items {
+		if seen[k] {
+			continue
+		}
+		_, gerr := s.keyringGet(k)
+		switch {
+		case gerr == nil:
+			// Already in the keychain; remember so a later prune does not
+			// copy it back from the never-pruned leftover blob.
+		case errors.Is(gerr, ErrNotFound), errors.Is(gerr, ErrUnreadable):
+			if err := s.keyringSetOrFile(k, v); err != nil {
+				return fmt.Errorf("secretstore: importing %q from the encrypted file: %w", k, err)
+			}
+		default:
+			return fmt.Errorf("secretstore: reading %q from the keychain while importing the encrypted file: %w", k, gerr)
+		}
+		seen[k] = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveImported(seen)
+}
+
+// encItemsLocked decrypts the legacy blob then this scope's blob. The scope
+// wins on a shared key (a persist fallback writes there). An unreadable blob
+// is skipped so a leftover corrupt secrets.enc cannot brick a keychain config.
+func (s *Store) encItemsLocked() (map[string]string, error) {
+	items := map[string]string{}
+	scopes := []string{""}
+	if s.scope != "" {
+		scopes = append(scopes, s.scope)
+	}
+	for _, scope := range scopes {
+		tmp := &Store{dir: s.dir, scope: scope, now: s.now}
+		if !nonEmptyFile(tmp.encPath()) {
+			continue
+		}
+		blob, err := tmp.loadBlob(false)
+		if err != nil {
+			log.Printf("peaproxy: could not read %s while importing secrets into the OS keychain: %v", tmp.encPath(), err)
+			continue
+		}
+		for k, v := range blob.Items {
+			if k == "" || v == "" {
+				continue
+			}
+			items[k] = v
+		}
+	}
+	return items, nil
+}
+
+func (s *Store) loadImported() (map[string]bool, error) {
+	seen := map[string]bool{}
+	b, err := os.ReadFile(s.importedPath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return seen, nil
+		}
+		return nil, err
+	}
+	var keys []string
+	if json.Unmarshal(b, &keys) != nil {
+		return seen, nil
+	}
+	for _, k := range keys {
+		if k != "" {
+			seen[k] = true
+		}
+	}
+	return seen, nil
+}
+
+func (s *Store) saveImported(seen map[string]bool) error {
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	b, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	return fslock.WriteAtomic(s.importedPath(), b, 0o600)
 }
 
 func fileExists(path string) bool {

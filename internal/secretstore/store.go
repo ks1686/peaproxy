@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,9 +241,30 @@ func (s *Store) Set(id string, kind Kind, value string) error {
 	}
 	defer unlock()
 	if s.backend == BackendKeyring {
-		return s.keyringSet(itemKey(id, kind), value)
+		return s.keyringSetOrFile(itemKey(id, kind), value)
 	}
 	return s.fileSet(itemKey(id, kind), value)
+}
+
+// keyringSetOrFile writes to the OS keychain and, if that fails for a secret
+// the keychain does not already hold, to this scope's encrypted file so a
+// LaunchAgent (or any keychain that refuses Set) still keeps a successful
+// OAuth token. An overwrite the keychain refused is still an error: Get would
+// keep returning the old item.
+func (s *Store) keyringSetOrFile(key, value string) error {
+	err := s.keyringSet(key, value)
+	if err == nil {
+		_ = s.fileDelete(key)
+		return nil
+	}
+	if _, gerr := s.keyringGet(key); gerr == nil {
+		return err
+	}
+	if ferr := s.fileSet(key, value); ferr != nil {
+		return fmt.Errorf("%w (also failed to save in the encrypted file: %v)", err, ferr)
+	}
+	log.Printf("peaproxy: OS keychain refused to store %q (%v); saved it in the encrypted file instead", key, err)
+	return nil
 }
 
 // Get reads a secret. When secrets.lock cannot be opened for writing (a
@@ -263,7 +285,15 @@ func (s *Store) Get(id string, kind Kind) (string, error) {
 		return "", err
 	}
 	if s.backend == BackendKeyring {
-		return s.keyringGet(itemKey(id, kind))
+		v, err := s.keyringGet(itemKey(id, kind))
+		if err == nil || !errors.Is(err, ErrNotFound) {
+			return v, err
+		}
+		// A Keychain Set that failed (LaunchAgent, ACL) may have saved this
+		// secret in the encrypted file instead; leftover file-only accounts
+		// are copied into the keychain on open, and this read covers the
+		// window before that copy, or when the copy itself had to fall back.
+		return s.fileGet(itemKey(id, kind), !locked)
 	}
 	// shared: on this path a key file may be caught mid-creation by a writer
 	// holding the lock, so the key read has to tolerate one (#64).
@@ -283,7 +313,13 @@ func (s *Store) Delete(id string, kind Kind) error {
 	}
 	defer unlock()
 	if s.backend == BackendKeyring {
-		return s.keyringDelete(itemKey(id, kind))
+		k := itemKey(id, kind)
+		kerr := s.keyringDelete(k)
+		ferr := s.fileDelete(k)
+		if kerr != nil {
+			return kerr
+		}
+		return ferr
 	}
 	return s.fileDelete(itemKey(id, kind))
 }
@@ -307,7 +343,12 @@ func (s *Store) Prune(keepIDs []string) error {
 	}
 	defer unlock()
 	if s.backend == BackendKeyring {
-		return s.keyringPrune(keep)
+		kerr := s.keyringPrune(keep)
+		ferr := s.filePrune(keep)
+		if kerr != nil {
+			return kerr
+		}
+		return ferr
 	}
 	return s.filePrune(keep)
 }
