@@ -363,8 +363,9 @@ func TestEnsureKeepsTokenWhenRefreshFails(t *testing.T) {
 	}
 }
 
-// A persist failure must not roll the token back: the old refresh token is
-// already spent, so keeping it would lock the account out.
+// A persist failure must not roll the token back or fail the refresh: the old
+// refresh token is already spent, so keeping it would lock the account out,
+// and ListModels / Chat can still use the live token.
 func TestEnsureKeepsTokenWhenPersistFails(t *testing.T) {
 	var g RefreshGroup
 	a := &acct{token: stale("rt-1"), persist: func(Token) error { return errors.New("disk full") }}
@@ -372,8 +373,8 @@ func TestEnsureKeepsTokenWhenPersistFails(t *testing.T) {
 		5*time.Minute, func(context.Context, Token) (Token, error) {
 			return fresh("access-2", "rt-2"), nil
 		}, nil, a.persist)
-	if err == nil {
-		t.Fatal("persist failure should be reported")
+	if err != nil {
+		t.Fatalf("persist failure must not fail the refresh: %v", err)
 	}
 	tok, _ := a.snapshot()
 	if tok.RefreshToken != "rt-2" {

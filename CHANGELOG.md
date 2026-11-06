@@ -3,7 +3,7 @@
 ## 3.3.1
 
 - UI OAuth: Accounts login is `complete` only when the account is actually `oauth-ready` (secret stored, `HasOAuth()` true). A token exchange or secret-save failure is `error` with the real message. Previously `AuthComplete` returning nil marked the job complete even when Claude (`anthropic-oauth`) or Antigravity stayed `oauth-login-required` and no `secrets.*.enc` was written (#166, #167, #168).
-- Gateway: `PersistOAuth` returns the `saveOAuthFrom` error instead of swallowing it, so login (and refresh) callers see a failed secret save. The in-memory token is still kept for a later successful save.
+- Gateway: `PersistOAuth` returns the `saveOAuthFrom` error so UI login fails when the secret was not stored. A refresh that cannot save still keeps the live in-memory token, so catalog discovery and chat stay routable; the save failure is logged and the next successful save writes it.
 - Claude OAuth: a 2xx token body without an access token is rejected before persist.
 - Antigravity OAuth: login requests the `aicode` scope, discovers the Cloud Code project via `loadCodeAssist` on the daily host (same as `onboardUser` / `generateContent`), and refuses an empty access token, email, or project id instead of storing an unauthenticated account.
 

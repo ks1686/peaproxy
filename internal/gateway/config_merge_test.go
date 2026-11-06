@@ -59,7 +59,39 @@ func mergeRegistry() (*adapter.Registry, *persistHooks) {
 	reg.Register("persisting", func(opts adapter.Options) (adapter.Adapter, error) {
 		return &persistingNative{slowNative: slowNative{id: opts.ID}, persist: opts.PersistOAuth}, nil
 	})
+	reg.Register("ensuring", func(opts adapter.Options) (adapter.Adapter, error) {
+		tok := opts.OAuth
+		if tok.AccessToken == "" {
+			tok = oauth.Token{AccessToken: "old", RefreshToken: "rt-old", ExpiresAt: time.Now().Add(-time.Hour)}
+		}
+		return &ensuringNative{slowNative: slowNative{id: opts.ID}, persist: opts.PersistOAuth, token: tok}, nil
+	})
 	return reg, hooks
+}
+
+// ensuringNative refreshes through oauth.Ensure the way Claude and Antigravity
+// ListModels do, so a persist failure during refresh can be judged as a
+// catalog outcome rather than as a PersistOAuth unit-test.
+type ensuringNative struct {
+	slowNative
+	persist    func(oauth.Token) error
+	group      oauth.RefreshGroup
+	mu         sync.Mutex
+	commit     sync.Mutex
+	token      oauth.Token
+	generation uint64
+}
+
+func (a *ensuringNative) ListModels(ctx context.Context) ([]catalog.Model, error) {
+	if err := oauth.Ensure(ctx, &a.group, "ensuring:"+a.id, &a.commit, &a.mu, &a.token, &a.generation,
+		5*time.Minute,
+		func(context.Context, oauth.Token) (oauth.Token, error) {
+			return oauth.Token{AccessToken: "refreshed", RefreshToken: "rt-new", ExpiresAt: time.Now().Add(time.Hour)}, nil
+		},
+		nil, a.persist); err != nil {
+		return nil, err
+	}
+	return a.slowNative.ListModels(ctx)
 }
 
 func acct(id, token string) config.Provider {
@@ -306,6 +338,30 @@ func TestSaveOAuthDuringRefreshDoesNotDeadlock(t *testing.T) {
 	}
 	if got := tokens(loadDisk(t, path).Providers)["b"]; got != "refreshed" {
 		t.Fatalf("persisted token %q, want refreshed", got)
+	}
+}
+
+func TestRefreshKeepsModelsWhenRefreshPersistFails(t *testing.T) {
+	expired := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	gw, path, _ := newSavedGateway(t, nil, config.Provider{
+		ID: "a", Adapter: "ensuring", Tier: "paid",
+		OAuth: &config.OAuthToken{AccessToken: "old", RefreshToken: "rt-old", ExpiresAt: expired},
+	})
+	if err := os.WriteFile(path, []byte("providers: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gw.Refresh(context.Background())
+	var saw bool
+	for _, m := range gw.Models() {
+		if strings.HasSuffix(m.ID, ":unavailable") {
+			t.Fatalf("refresh persist failure must not mark the account unavailable: %+v", m)
+		}
+		if m.ID == "m" && m.AccountID == "a" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("want live model after a failed refresh save, got %+v", gw.Models())
 	}
 }
 
