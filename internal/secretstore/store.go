@@ -143,14 +143,19 @@ var openKeyringFn = openKeyring
 // keychain answered again.
 //
 // A config's own scoped store is the evidence when it names secrets, holds a
-// blob, or has already migrated (carry / migrated marker). An empty `[]`
-// index is not, unless that marker says the copy already ran. Before
+// blob that decrypts to at least one item, or has already migrated (carry /
+// migrated marker). An empty `[]` index is not, and neither is a leftover
+// enc whose size is > 0 but whose payload has no items: 3.3.3 treated that
+// vacuous blob as file-primary and hid OS keychain secrets from a LaunchAgent
+// auto open. An unreadable non-empty blob still pins the file, so a truncated
+// write cannot divert a file-primary store onto the keychain. Before
 // migration, the legacy directory-wide store it will migrate from is.
 func openAuto(dir, scope string) (*Store, error) {
-	index, enc := filepath.Join(dir, scopedName(IndexFileName, scope)), filepath.Join(dir, scopedName(EncryptedFileName, scope))
+	evidence := scope
 	if scope != "" && !(&Store{dir: dir, scope: scope}).scopeAlreadyMigrated() {
-		index, enc = filepath.Join(dir, IndexFileName), filepath.Join(dir, EncryptedFileName)
+		evidence = ""
 	}
+	index := filepath.Join(dir, scopedName(IndexFileName, evidence))
 	switch {
 	case keyringIndexHasKeys(index):
 		s, err := openKeyringFn(dir)
@@ -158,7 +163,7 @@ func openAuto(dir, scope string) (*Store, error) {
 			return nil, fmt.Errorf("secretstore: this config's secrets are in the OS keychain, which is unavailable: %w", err)
 		}
 		return s, nil
-	case nonEmptyFile(enc):
+	case fileBlobHasItems(dir, evidence):
 		return OpenFile(dir)
 	}
 	if s, err := openKeyringFn(dir); err == nil {
@@ -182,6 +187,23 @@ func keyringIndexHasKeys(path string) bool {
 func nonEmptyFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir() && info.Size() > 0
+}
+
+// fileBlobHasItems reports whether this scope's encrypted blob decrypts to at
+// least one secret. A leftover 0-item file (size > 0 after a prune, or a copy
+// of an empty legacy enc) is not proof the file backend owns the secrets. An
+// unreadable non-empty blob is treated as holding items so a truncated write
+// cannot split a file-primary store onto the keychain.
+func fileBlobHasItems(dir, scope string) bool {
+	s := &Store{dir: dir, scope: scope}
+	if !nonEmptyFile(s.encPath()) {
+		return false
+	}
+	blob, err := s.loadBlobExisting()
+	if err != nil {
+		return true
+	}
+	return len(blob.Items) > 0
 }
 
 // OpenFile always uses the AES-GCM file next to dir (CI / tests).
