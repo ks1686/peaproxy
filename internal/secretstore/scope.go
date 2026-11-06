@@ -233,8 +233,8 @@ func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 		}
 	default:
 		// The file backend copies the whole blob; one placeholder entry says
-		// there is something to copy.
-		if nonEmptyFile(legacy.encPath()) {
+		// there is something to copy. A leftover 0-item enc is not.
+		if fileBlobHasItems(legacy.dir, legacy.scope) {
 			keys = []string{""}
 		}
 	}
@@ -294,8 +294,10 @@ func (s *Store) persistMigratedLocked() error {
 }
 
 // scopeAlreadyMigrated reports whether this scope has finished a legacy copy
-// (or already holds secrets of its own). A `[]` index or a 0-byte blob is
-// not enough: those files can exist without a copy having run.
+// (or already holds secrets of its own). A `[]` index, a 0-byte blob, or a
+// leftover enc that decrypts to 0 items is not enough: those files can exist
+// without a copy having run, and treating them as finished hid Keychain
+// secrets from openAuto.
 func (s *Store) scopeAlreadyMigrated() bool {
 	if fileExists(s.carryPath()) || fileExists(s.migratedPath()) {
 		return true
@@ -304,7 +306,7 @@ func (s *Store) scopeAlreadyMigrated() bool {
 }
 
 func (s *Store) scopeHasSecrets() bool {
-	if nonEmptyFile(s.encPath()) {
+	if fileBlobHasItems(s.dir, s.scope) {
 		return true
 	}
 	return keyringIndexHasKeys(s.indexPath())
