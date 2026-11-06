@@ -662,3 +662,26 @@ func uuidLike(s string) bool {
 	}
 	return true
 }
+
+// A 2xx response is not proof that the exchange returned a usable token.
+func TestAuthCompleteRejectsMissingAccessTokenBeforePersist(t *testing.T) {
+	for _, body := range []string{`{}`, `{"access_token":""}`, `{"refresh_token":"refresh-only"}`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, body)
+			}))
+			t.Cleanup(srv.Close)
+			a := testAdapter(t, srv.URL)
+			a.pending = &pendingAuth{pkce: oauth.PKCE{Verifier: "ver"}, state: "st"}
+			persisted := false
+			a.persist = func(oauth.Token) error { persisted = true; return nil }
+			err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "code-1")
+			if err == nil || !strings.Contains(err.Error(), "missing access token") {
+				t.Fatalf("AuthComplete = %v, want missing access token", err)
+			}
+			if persisted || a.token.Valid() {
+				t.Fatal("empty token must not be committed or persisted")
+			}
+		})
+	}
+}

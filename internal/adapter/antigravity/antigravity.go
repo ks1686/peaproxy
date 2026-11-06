@@ -65,6 +65,7 @@ var scopes = []string{
 	"https://www.googleapis.com/auth/cloud-platform",
 	"https://www.googleapis.com/auth/userinfo.email",
 	"https://www.googleapis.com/auth/userinfo.profile",
+	"https://www.googleapis.com/auth/aicode",
 	"https://www.googleapis.com/auth/cclog",
 	"https://www.googleapis.com/auth/experimentsandconfigs",
 }
@@ -220,13 +221,25 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 	if err != nil {
 		return err
 	}
-	email, err := a.fetchEmail(ctx, tok.AccessToken)
-	if err == nil && email != "" {
-		tok.Email = email
+	if !tok.Valid() {
+		return fmt.Errorf("antigravity: token response missing access token")
 	}
+	email, err := a.fetchEmail(ctx, tok.AccessToken)
+	if err != nil {
+		return err
+	}
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return fmt.Errorf("antigravity: userinfo response missing email")
+	}
+	tok.Email = email
 	project, err := a.fetchProjectID(ctx, tok.AccessToken)
 	if err != nil {
 		return err
+	}
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return fmt.Errorf("antigravity: project ID discovery returned empty project")
 	}
 	tok.AccountID = project
 	tok = tok.WithExtra(projectExtra, project)
@@ -234,6 +247,9 @@ func (a *Adapter) AuthComplete(ctx context.Context, session adapter.AuthSession,
 }
 
 func (a *Adapter) storeToken(tok oauth.Token) error {
+	if !tok.Valid() {
+		return fmt.Errorf("antigravity: refusing to store token without access token")
+	}
 	a.commitMu.Lock()
 	defer a.commitMu.Unlock()
 	a.mu.Lock()
@@ -287,7 +303,14 @@ func (a *Adapter) postForm(ctx context.Context, form url.Values) (oauth.Token, e
 	if err != nil {
 		return oauth.Token{}, err
 	}
-	return oauth.ParseTokenResponse(raw)
+	tok, err := oauth.ParseTokenResponse(raw)
+	if err != nil {
+		return oauth.Token{}, err
+	}
+	if !tok.Valid() {
+		return oauth.Token{}, fmt.Errorf("antigravity: token response missing access token")
+	}
+	return tok, nil
 }
 
 func (a *Adapter) fetchEmail(ctx context.Context, access string) (string, error) {
@@ -319,7 +342,8 @@ func (a *Adapter) fetchProjectID(ctx context.Context, access string) (string, er
 	if err != nil {
 		return "", err
 	}
-	endpoint := strings.TrimRight(a.apiBase, "/") + "/" + APIVersion + ":loadCodeAssist"
+	// loadCodeAssist is served on the daily control-plane host (same as onboardUser).
+	endpoint := strings.TrimRight(a.dailyAPI, "/") + "/" + APIVersion + ":loadCodeAssist"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
