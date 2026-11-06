@@ -626,7 +626,10 @@ func (s *Server) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 	s.oauthJobs[body.ID] = job
 	s.oauthMu.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		// Wait as long as the device code is valid (clamped), not a fixed
+		// 5 minutes: xAI codes live 30m, and giving up early left the account
+		// on its old token with a "context deadline exceeded" error.
+		ctx, cancel := context.WithTimeout(context.Background(), adapter.DeviceWait(sess))
 		err := auth.AuthComplete(ctx, sess, "")
 		cancel()
 		// AuthComplete nil is not proof the secret was stored: an empty token

@@ -106,8 +106,9 @@ Kilo, MiniMax, Poe, and Z.AI Coding Plan logins are untested. Please report what
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Could not open a browser (%v). Open the URL manually.\n", err)
 				}
 			}
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Waiting for OAuth callback or device approval (5m). Codex also supports --device.")
-			waitCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+			wait := adapter.DeviceWait(sess)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Waiting for OAuth callback or device approval (%s). Codex also supports --device.\n", wait.Round(time.Minute))
+			waitCtx, cancel := context.WithTimeout(ctx, wait)
 			defer cancel()
 			if err := auth.AuthComplete(waitCtx, sess, ""); err != nil {
 				return err

@@ -115,6 +115,32 @@ type AuthSession struct {
 	VerificationURL string
 }
 
+// DeviceWait is how long a device-code login waits for the user to approve:
+// the code's own lifetime, clamped so a provider cannot hold a login open for
+// hours and a missing or zero expiry still gets a usable window.
+//
+// The CLI and the UI must derive the wait from the same session. Both used to
+// hardcode 5 minutes while xAI issues codes that live 30, so a user who
+// approved after five minutes got "context deadline exceeded" and the account
+// stayed on its old token.
+func DeviceWait(sess AuthSession) time.Duration {
+	const (
+		minWait = 5 * time.Minute
+		maxWait = 15 * time.Minute
+	)
+	wait := time.Duration(sess.ExpiresIn) * time.Second
+	if wait <= 0 {
+		wait = maxWait
+	}
+	if wait < minWait {
+		wait = minWait
+	}
+	if wait > maxWait {
+		wait = maxWait
+	}
+	return wait
+}
+
 // Adapter is the unit the router failsover across.
 type Adapter interface {
 	ID() string
