@@ -311,6 +311,9 @@ func TestAuthorizeURLUsesGoogleAntigravityClient(t *testing.T) {
 	if !strings.Contains(q.Get("scope"), "cloud-platform") {
 		t.Fatalf("scope %s", q.Get("scope"))
 	}
+	if !strings.Contains(q.Get("scope"), "aicode") {
+		t.Fatalf("scope missing aicode: %s", q.Get("scope"))
+	}
 }
 
 func TestExchangeFormAndProjectDiscovery(t *testing.T) {
@@ -680,5 +683,110 @@ func TestNonStreamChatWithOneSidedUsageReportsNone(t *testing.T) {
 	}
 	if strings.Contains(string(resp.Raw), `"usage"`) {
 		t.Fatalf("a half-measured call was reported as measured: %s", resp.Raw)
+	}
+}
+
+// A 2xx token body is not proof that Google returned a usable access token.
+func TestAuthCompleteRejectsMissingAccessTokenBeforePersist(t *testing.T) {
+	for _, body := range []string{`{}`, `{"access_token":""}`, `{"refresh_token":"refresh-only"}`, `{"error":"invalid_grant"}`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, body)
+			}))
+			t.Cleanup(srv.Close)
+			a := testAdapter(t, srv)
+			a.pending = &pendingAuth{state: "st", redirectURI: RedirectURI}
+			persisted := false
+			a.persist = func(oauth.Token) error { persisted = true; return nil }
+			err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "code-g")
+			if err == nil || !strings.Contains(err.Error(), "missing access token") {
+				t.Fatalf("AuthComplete = %v, want missing access token", err)
+			}
+			if persisted || a.token.Valid() {
+				t.Fatal("empty token must not be committed or persisted")
+			}
+		})
+	}
+}
+
+func TestAuthCompleteRequiresEmailAndProject(t *testing.T) {
+	t.Run("userinfo error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/token":
+				_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "ag-at", "refresh_token": "ag-rt", "expires_in": 3600})
+			case strings.Contains(r.URL.Path, "userinfo"):
+				http.Error(w, "nope", http.StatusUnauthorized)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		a := testAdapter(t, srv)
+		a.pending = &pendingAuth{state: "st"}
+		persisted := false
+		a.persist = func(oauth.Token) error { persisted = true; return nil }
+		err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "code-g")
+		if err == nil {
+			t.Fatal("expected userinfo error")
+		}
+		if persisted {
+			t.Fatal("must not persist without email")
+		}
+	})
+	t.Run("empty project", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.URL.Path == "/token":
+				_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "ag-at", "refresh_token": "ag-rt", "expires_in": 3600})
+			case strings.Contains(r.URL.Path, "userinfo"):
+				_ = json.NewEncoder(w).Encode(map[string]string{"email": "g@x.y"})
+			case strings.Contains(r.URL.Path, "loadCodeAssist"):
+				_ = json.NewEncoder(w).Encode(map[string]any{})
+			case strings.Contains(r.URL.Path, "onboardUser"):
+				_ = json.NewEncoder(w).Encode(map[string]any{"done": true, "response": map[string]any{}})
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		a := testAdapter(t, srv)
+		a.pending = &pendingAuth{state: "st"}
+		persisted := false
+		a.persist = func(oauth.Token) error { persisted = true; return nil }
+		err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "code-g")
+		if err == nil || (!strings.Contains(err.Error(), "project") && !strings.Contains(err.Error(), "onboardUser")) {
+			t.Fatalf("AuthComplete = %v, want project error", err)
+		}
+		if persisted {
+			t.Fatal("must not persist without project id")
+		}
+	})
+}
+
+func TestFetchProjectIDUsesDailyHost(t *testing.T) {
+	var loadURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "loadCodeAssist") {
+			loadURL = r.Host + r.URL.Path
+			_ = json.NewEncoder(w).Encode(map[string]any{"cloudaicompanionProject": "proj-daily"})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv)
+	// Point apiBase elsewhere so a mistaken apiBase load would miss the handler.
+	a.apiBase = "http://127.0.0.1:1"
+	a.dailyAPI = srv.URL
+	id, err := a.fetchProjectID(context.Background(), "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "proj-daily" {
+		t.Fatalf("project %q", id)
+	}
+	if loadURL == "" || strings.Contains(loadURL, "127.0.0.1:1") {
+		t.Fatalf("loadCodeAssist must hit dailyAPI, got %q", loadURL)
 	}
 }

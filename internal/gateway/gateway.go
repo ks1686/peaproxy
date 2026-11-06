@@ -201,12 +201,12 @@ func (g *Gateway) rebuild() error {
 			opts.OAuth = p.OAuth.Runtime()
 		}
 		id := p.ID
-		// A failed save must not fail the request that refreshed the token:
-		// SaveOAuth has already updated cfg in memory, persist has logged the
-		// error, and the next successful save writes the token.
+		// Report save failures to AuthComplete so the UI cannot toast a login
+		// that never reached the secret store. oauth.Ensure (refresh) keeps the
+		// in-memory token and does not fail ListModels or Chat: persist has
+		// logged the error, and the next successful save writes the token.
 		opts.PersistOAuth = func(tok oauth.Token) error {
-			_ = g.saveOAuthFrom(id, tok, epoch)
-			return nil
+			return g.saveOAuthFrom(id, tok, epoch)
 		}
 		adp, err := g.reg.Open(p.Adapter, opts)
 		if err != nil {

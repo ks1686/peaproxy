@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 )
@@ -170,11 +169,11 @@ func Ensure(
 		if p == nil {
 			return kept, nil
 		}
-		// A persist failure does not roll the token back: the refresh token it
-		// replaced is already spent, and the caller can still use this one.
-		if perr := p(kept); perr != nil {
-			return kept, fmt.Errorf("oauth: token refreshed but not saved: %w", perr)
-		}
+		// A persist failure does not roll the token back or fail the request:
+		// the refresh token it replaced is already spent, and the caller can
+		// still use this one. Gateway persist has already logged the error.
+		// Login (AuthComplete) calls persist directly and still sees it.
+		_ = p(kept)
 		return kept, nil
 	})
 	return err

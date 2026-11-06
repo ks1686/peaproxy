@@ -98,6 +98,37 @@ func TestExchangeAndRefreshUseJSONBodies(t *testing.T) {
 	}
 }
 
+func TestListModelsContinuesWhenRefreshPersistFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/v1/oauth/token"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "at-new", "refresh_token": "rt-new", "expires_in": 3600,
+			})
+		case strings.HasSuffix(r.URL.Path, "/v1/models"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{{"id": "claude-haiku-4-5-20251001", "display_name": "Haiku"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	a := testAdapter(t, srv.URL)
+	a.token = oauth.Token{AccessToken: "old", RefreshToken: "rt-old", ExpiresAt: time.Now().Add(-time.Minute)}
+	a.persist = func(oauth.Token) error { return errors.New("disk full") }
+	models, err := a.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("refresh persist failure must not fail ListModels: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "claude-haiku-4-5-20251001" {
+		t.Fatalf("%#v", models)
+	}
+	if a.token.AccessToken != "at-new" {
+		t.Fatalf("live token %q, want at-new", a.token.AccessToken)
+	}
+}
+
 func TestChatUsesBearerAndOAuthBeta(t *testing.T) {
 	var gotAuth, gotKey, gotBeta, gotVer string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -661,4 +692,27 @@ func uuidLike(s string) bool {
 		}
 	}
 	return true
+}
+
+// A 2xx response is not proof that the exchange returned a usable token.
+func TestAuthCompleteRejectsMissingAccessTokenBeforePersist(t *testing.T) {
+	for _, body := range []string{`{}`, `{"access_token":""}`, `{"refresh_token":"refresh-only"}`} {
+		t.Run(body, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, body)
+			}))
+			t.Cleanup(srv.Close)
+			a := testAdapter(t, srv.URL)
+			a.pending = &pendingAuth{pkce: oauth.PKCE{Verifier: "ver"}, state: "st"}
+			persisted := false
+			a.persist = func(oauth.Token) error { persisted = true; return nil }
+			err := a.AuthComplete(context.Background(), adapter.AuthSession{State: "st"}, "code-1")
+			if err == nil || !strings.Contains(err.Error(), "missing access token") {
+				t.Fatalf("AuthComplete = %v, want missing access token", err)
+			}
+			if persisted || a.token.Valid() {
+				t.Fatal("empty token must not be committed or persisted")
+			}
+		})
+	}
 }

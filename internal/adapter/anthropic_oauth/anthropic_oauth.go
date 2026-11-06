@@ -312,6 +312,9 @@ func parseClaudeToken(raw []byte) (oauth.Token, error) {
 	if err != nil {
 		return oauth.Token{}, err
 	}
+	if !tok.Valid() {
+		return oauth.Token{}, fmt.Errorf("anthropic_oauth: token response missing access token")
+	}
 	var extra struct {
 		Account struct {
 			UUID         string `json:"uuid"`
