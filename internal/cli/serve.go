@@ -31,6 +31,6 @@ func runServe(out io.Writer, cfg config.Config, path string, created bool) error
 	// which Models does not (#53). A count of 11 next to a list of 7 is worse
 	// than no count.
 	_, _ = fmt.Fprintf(out, "catalog: %d models (live ListModels; hide is listing-only)\n", len(gw.Listed(catalog.FilterAll)))
-	srv := server.New(server.Options{Gateway: gw, ClientRoot: os.Getenv("PEAPROXY_CLIENT_ROOT")})
+	srv := server.New(server.Options{Gateway: gw, ClientRoot: os.Getenv("PEAPROXY_CLIENT_ROOT"), Out: out})
 	return srv.ListenAndServe()
 }
