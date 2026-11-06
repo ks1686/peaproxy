@@ -143,10 +143,18 @@ func (s *Store) scopeLocked(legacy *Store, scope string) error {
 			return err
 		}
 	}
-	if migrated {
-		return nil
+	if !migrated {
+		if err := s.carryLocked(legacy); err != nil {
+			return err
+		}
 	}
-	return s.carryLocked(legacy)
+	if s.backend != BackendKeyring {
+		// File migrate copies leftover enc and never used to write .imported,
+		// so a later vacuous-enc keyring open resurrected pruned secrets from
+		// the never-pruned leftover blob. Record those keys as already seen.
+		return s.markEncItemsImportedLocked()
+	}
+	return nil
 }
 
 func readOnly(err error) bool {
@@ -320,19 +328,44 @@ func (s *Store) importedPath() string {
 // secrets.enc / secrets.<scope>.enc into this keyring scope. Copy, not move:
 // the blobs stay so another config can still migrate from them. Keys already
 // considered are recorded so a prune is not undone from the leftover blob.
+//
+// A finished file migrate copies the leftover blob and (now) records it in
+// .imported. Older file migrates did not, so a later prune that leaves a
+// vacuous scoped enc would otherwise let a keyring open copy the never-pruned
+// leftover back. When .migrated is present and this scope's keychain index
+// names no keys, leftover-legacy keys are marked seen and not imported;
+// scoped-enc items (a persist fallback) still are. A keyring-primary scope
+// whose index still names secrets keeps importing leftover enc (#175).
 func (s *Store) importFileSecretsLocked() error {
-	items, err := s.encItemsLocked()
-	if err != nil {
-		return err
-	}
-	if len(items) == 0 {
-		return nil
+	legacyItems := s.encItemsIn("")
+	scopedItems := map[string]string{}
+	if s.scope != "" {
+		scopedItems = s.encItemsIn(s.scope)
 	}
 	seen, err := s.loadImported()
 	if err != nil {
 		return err
 	}
+	items := make(map[string]string, len(scopedItems)+len(legacyItems))
+	for k, v := range scopedItems {
+		items[k] = v
+	}
 	changed := false
+	if s.skipLegacyEncImport() {
+		for k := range legacyItems {
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			changed = true
+		}
+	} else {
+		for k, v := range legacyItems {
+			if _, ok := items[k]; !ok {
+				items[k] = v
+			}
+		}
+	}
 	for k, v := range items {
 		if seen[k] {
 			continue
@@ -358,33 +391,70 @@ func (s *Store) importFileSecretsLocked() error {
 	return s.saveImported(seen)
 }
 
+func (s *Store) skipLegacyEncImport() bool {
+	return s.scope != "" && fileExists(s.migratedPath()) && !keyringIndexHasKeys(s.indexPath())
+}
+
+// markEncItemsImportedLocked records leftover enc keys as already considered
+// without copying them. File-backend migrate (and later file opens) must do
+// this so a prune plus a keyring open cannot resurrect them.
+func (s *Store) markEncItemsImportedLocked() error {
+	items, err := s.encItemsLocked()
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	seen, err := s.loadImported()
+	if err != nil {
+		return err
+	}
+	changed := false
+	for k := range items {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveImported(seen)
+}
+
 // encItemsLocked decrypts the legacy blob then this scope's blob. The scope
 // wins on a shared key (a persist fallback writes there). An unreadable blob
 // is skipped so a leftover corrupt secrets.enc cannot brick a keychain config.
 func (s *Store) encItemsLocked() (map[string]string, error) {
-	items := map[string]string{}
-	scopes := []string{""}
+	items := s.encItemsIn("")
 	if s.scope != "" {
-		scopes = append(scopes, s.scope)
-	}
-	for _, scope := range scopes {
-		tmp := &Store{dir: s.dir, scope: scope, now: s.now}
-		if !nonEmptyFile(tmp.encPath()) {
-			continue
-		}
-		blob, err := tmp.loadBlob(false)
-		if err != nil {
-			log.Printf("peaproxy: could not read %s while importing secrets into the OS keychain: %v", tmp.encPath(), err)
-			continue
-		}
-		for k, v := range blob.Items {
-			if k == "" || v == "" {
-				continue
-			}
+		for k, v := range s.encItemsIn(s.scope) {
 			items[k] = v
 		}
 	}
 	return items, nil
+}
+
+func (s *Store) encItemsIn(scope string) map[string]string {
+	items := map[string]string{}
+	tmp := &Store{dir: s.dir, scope: scope, now: s.now}
+	if !nonEmptyFile(tmp.encPath()) {
+		return items
+	}
+	blob, err := tmp.loadBlobExisting()
+	if err != nil {
+		log.Printf("peaproxy: could not read %s while importing secrets into the OS keychain: %v", tmp.encPath(), err)
+		return items
+	}
+	for k, v := range blob.Items {
+		if k == "" || v == "" {
+			continue
+		}
+		items[k] = v
+	}
+	return items
 }
 
 func (s *Store) loadImported() (map[string]bool, error) {

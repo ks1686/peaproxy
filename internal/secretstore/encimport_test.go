@@ -142,6 +142,68 @@ func TestPrunedEncOnlyAccountsAreNotResurrectedFromTheLeftoverBlob(t *testing.T)
 	}
 }
 
+// File migrate copies leftover secrets.enc (never moved, never pruned). After
+// the last scoped secret is deleted, this PR's vacuous-enc openAuto picks
+// keyring; import must not copy that leftover back into Keychain.
+func TestFileMigrateThenPruneDoesNotResurrectFromLegacyEncOnKeyringOpen(t *testing.T) {
+	dir := t.TempDir()
+	writeLegacyEnc(t, dir, "acct", oauthJSON("old-tok"))
+	file := scopedFile(t, dir, "config.yaml")
+	if got, err := file.Get("acct", KindOAuth); err != nil || accessToken(t, got) != "old-tok" {
+		t.Fatalf("setup file migrate: %q, %v", got, err)
+	}
+	if _, err := os.Stat(file.migratedPath()); err != nil {
+		t.Fatalf("setup: no migrated marker: %v", err)
+	}
+	if err := file.Prune(nil); err != nil {
+		t.Fatal(err)
+	}
+	if fileBlobHasItems(dir, "config.yaml") {
+		t.Fatal("setup: scoped enc still has items after prune")
+	}
+	legacy, err := OpenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := legacy.Get("acct", KindOAuth); err != nil || accessToken(t, got) != "old-tok" {
+		t.Fatalf("legacy secrets.enc was rewritten: %q, %v", got, err)
+	}
+
+	kr := &memKeyring{m: map[string]string{}}
+	s := scopedKeyring(t, dir, "config.yaml", kr)
+	if _, err := s.Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("pruned secret resurrected from leftover secrets.enc: %v", err)
+	}
+}
+
+// 3.3.3 file migrate wrote .migrated but not .imported. The same prune then
+// keyring open must still not resurrect, not only the path that recorded
+// leftover keys at migrate time.
+func TestFileMigrateWithoutImportedDoesNotResurrectAfterPrune(t *testing.T) {
+	dir := t.TempDir()
+	writeLegacyEnc(t, dir, "acct", oauthJSON("old-tok"))
+	file := scopedFile(t, dir, "config.yaml")
+	if err := os.Remove(file.importedPath()); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if err := file.Prune(nil); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := OpenFile(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := legacy.Get("acct", KindOAuth); err != nil || accessToken(t, got) != "old-tok" {
+		t.Fatalf("legacy secrets.enc was rewritten: %q, %v", got, err)
+	}
+
+	kr := &memKeyring{m: map[string]string{}}
+	s := scopedKeyring(t, dir, "config.yaml", kr)
+	if _, err := s.Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("pruned secret resurrected without .imported: %v", err)
+	}
+}
+
 type failSetKeyring struct {
 	memKeyring
 	err error
