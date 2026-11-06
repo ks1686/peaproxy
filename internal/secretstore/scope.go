@@ -143,7 +143,7 @@ func readOnly(err error) bool {
 // legacy store it would have migrated from, read as it is.
 func (s *Store) scopeReadOnly(scope string) error {
 	scoped := &Store{dir: s.dir, scope: scope}
-	if !fileExists(scoped.indexPath()) && !fileExists(scoped.encPath()) {
+	if !scoped.scopeAlreadyMigrated() {
 		return nil
 	}
 	s.scope = scope
@@ -188,11 +188,15 @@ func (s *Store) dirIDLocked() (string, error) {
 // another config in the same directory, or another directory whose keychain
 // items shared the old account-id names, may still have to migrate from it.
 // A marker file makes a migration that was cut short run again in full.
+// An empty `[]` index is not treated as finished: persist can write one
+// before any secret is copied, and skipping on the file's existence stranded
+// the legacy token (macOS 3.3.1, Claude oauth-login-required despite a
+// Keychain item still named account/oauth).
 func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 	marker := filepath.Join(s.dir, scopedName("secrets.migrating", s.scope))
 	_, merr := os.Stat(marker)
 	interrupted := merr == nil
-	if !interrupted && (fileExists(s.indexPath()) || fileExists(s.encPath())) {
+	if !interrupted && s.scopeAlreadyMigrated() {
 		return false, nil
 	}
 	var keys []string
@@ -250,7 +254,31 @@ func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 	if err := s.startCarryLocked(legacy); err != nil {
 		return false, err
 	}
+	if err := fslock.WriteAtomic(s.migratedPath(), nil, 0o600); err != nil {
+		return false, err
+	}
 	return true, os.Remove(marker)
+}
+
+func (s *Store) migratedPath() string {
+	return filepath.Join(s.dir, scopedName("secrets.migrated", s.scope))
+}
+
+// scopeAlreadyMigrated reports whether this scope has finished a legacy copy
+// (or already holds secrets of its own). A `[]` index or a 0-byte blob is
+// not enough: those files can exist without a copy having run.
+func (s *Store) scopeAlreadyMigrated() bool {
+	if fileExists(s.carryPath()) || fileExists(s.migratedPath()) {
+		return true
+	}
+	return s.scopeHasSecrets()
+}
+
+func (s *Store) scopeHasSecrets() bool {
+	if nonEmptyFile(s.encPath()) {
+		return true
+	}
+	return keyringIndexHasKeys(s.indexPath())
 }
 
 func fileExists(path string) bool {

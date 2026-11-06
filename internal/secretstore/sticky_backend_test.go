@@ -72,3 +72,20 @@ func TestAnEmptyKeychainIndexDoesNotPinTheKeychain(t *testing.T) {
 		t.Fatalf("empty index with a file store: %v, %v; want the file backend", s, err)
 	}
 }
+
+// A scoped `[]` index is not evidence this config's secrets live in the
+// keychain, so backend selection still consults the legacy index it will
+// migrate from.
+func TestAnEmptyScopedIndexFallsBackToTheLegacyIndex(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.config.yaml.index"), []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, IndexFileName), []byte(`["anthropic-oauth/oauth"]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withKeyringOpener(t, func(string) (*Store, error) { return nil, errors.New("User interaction is not allowed") })
+	if s, err := openAuto(dir, "config.yaml"); err == nil {
+		t.Fatalf("opened the %v backend; the legacy index says secrets are in the keychain", s.Backend())
+	}
+}

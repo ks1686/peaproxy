@@ -89,6 +89,16 @@ func TestAPrunedSecretIsNotResurrectedFromTheLegacyStore(t *testing.T) {
 		if _, err := open().Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("pruned secret came back: %v", err)
 		}
+		// The empty index prune leaves behind must not re-copy the never-
+		// pruned legacy store, including after the carry window closes.
+		s := open()
+		late := &Store{backend: backend, dir: s.dir, kr: s.kr, now: func() time.Time { return time.Now().Add(carryWindow + time.Hour) }}
+		if err := late.scopeTo("config.yaml"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := late.Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("pruned secret came back after the carry window: %v", err)
+		}
 	})
 }
 

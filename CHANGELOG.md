@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Secret store: an empty `secrets.<config>.index` (`[]`) no longer counts as a finished migration. 3.3.1 could write that file on a config save before copying a legacy Keychain token, then skip migration forever, so Claude (`anthropic-oauth`) stayed `oauth-login-required` while the old `peaproxy` / `account/oauth` item was still in Keychain.
+
 ## 3.3.1
 
 - UI OAuth: Accounts login is `complete` only when the account is actually `oauth-ready` (secret stored, `HasOAuth()` true). A token exchange or secret-save failure is `error` with the real message. Previously `AuthComplete` returning nil marked the job complete even when Claude (`anthropic-oauth`) or Antigravity stayed `oauth-login-required` and no `secrets.*.enc` was written (#166, #167, #168).

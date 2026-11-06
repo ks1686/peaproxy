@@ -141,11 +141,12 @@ var openKeyringFn = openKeyring
 // next load then read back; the reverse switch hid file secrets once the
 // keychain answered again.
 //
-// A config's own scoped store is the evidence when it exists; before its
-// migration, the legacy directory-wide store it will migrate from is.
+// A config's own scoped store is the evidence when it names secrets or
+// holds a blob; an empty `[]` index is not. Before migration, the legacy
+// directory-wide store it will migrate from is.
 func openAuto(dir, scope string) (*Store, error) {
 	index, enc := filepath.Join(dir, scopedName(IndexFileName, scope)), filepath.Join(dir, scopedName(EncryptedFileName, scope))
-	if scope != "" && !nonEmptyFile(index) && !nonEmptyFile(enc) {
+	if scope != "" && !keyringIndexHasKeys(index) && !nonEmptyFile(enc) {
 		index, enc = filepath.Join(dir, IndexFileName), filepath.Join(dir, EncryptedFileName)
 	}
 	switch {
