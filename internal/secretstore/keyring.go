@@ -250,5 +250,11 @@ func (s *Store) keyringPrune(keep map[string]struct{}) error {
 		}
 		delete(idx.keys, k)
 	}
+	if len(idx.keys) == 0 && len(idx.pending) == 0 && !fileExists(s.indexPath()) {
+		// Do not create a `[]` index for a scope that never held secrets.
+		// persistTo prunes on every successful save; that empty file used to
+		// make migrateLocked skip the legacy copy forever.
+		return nil
+	}
 	return s.saveIndex(idx)
 }

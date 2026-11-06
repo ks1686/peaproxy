@@ -89,6 +89,47 @@ func TestAPrunedSecretIsNotResurrectedFromTheLegacyStore(t *testing.T) {
 		if _, err := open().Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("pruned secret came back: %v", err)
 		}
+		// The empty index prune leaves behind must not re-copy the never-
+		// pruned legacy store, including after the carry window closes.
+		s := open()
+		late := &Store{backend: backend, dir: s.dir, kr: s.kr, now: func() time.Time { return time.Now().Add(carryWindow + time.Hour) }}
+		if err := late.scopeTo("config.yaml"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := late.Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("pruned secret came back after the carry window: %v", err)
+		}
+	})
+}
+
+// 3.3.1 copied the legacy store and left carry + scoped secrets, but no
+// secrets.<config>.migrated file. The next open must persist that marker
+// while the evidence still exists, or a later prune + carry expiry recopies
+// the never-pruned legacy token.
+func TestAPreMigratedScopeWithoutAMigratedMarkerDoesNotResurrectAfterPrune(t *testing.T) {
+	eachBackend(t, func(t *testing.T, backend Backend) {
+		legacy, open := carryStores(t, backend)
+		s := open()
+		if err := os.Remove(s.migratedPath()); err != nil {
+			t.Fatal(err)
+		}
+		s = open()
+		if _, err := os.Stat(s.migratedPath()); err != nil {
+			t.Fatalf("upgrade open did not persist the migrated marker: %v", err)
+		}
+		if err := s.Prune(nil); err != nil {
+			t.Fatal(err)
+		}
+		late := &Store{backend: backend, dir: s.dir, kr: s.kr, now: func() time.Time { return time.Now().Add(carryWindow + time.Hour) }}
+		if err := late.scopeTo("config.yaml"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := late.Get("acct", KindOAuth); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("pruned secret came back after a 3.3.1 upgrade: %v", err)
+		}
+		if got, err := legacy.Get("acct", KindOAuth); err != nil || got != "v1" {
+			t.Fatalf("legacy item was rewritten: %q, %v", got, err)
+		}
 	})
 }
 

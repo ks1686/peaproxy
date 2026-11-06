@@ -123,6 +123,80 @@ func TestExistingSecretsMigrateIntoTheConfigsScope(t *testing.T) {
 	})
 }
 
+// persistTo prunes on every successful save, so a 3.3.1 config that loaded
+// without copying the legacy Keychain token wrote secrets.<config>.index as
+// `[]`. That file used to make migrateLocked return without copying, leaving
+// Claude oauth-login-required while the old account/oauth item still existed.
+func TestAnEmptyScopedIndexDoesNotBlockLegacyKeyringMigration(t *testing.T) {
+	dir := t.TempDir()
+	kr := &memKeyring{m: map[string]string{}}
+	legacy := &Store{backend: BackendKeyring, dir: dir, kr: kr}
+	if err := legacy.Set("anthropic-oauth", KindOAuth, "legacy-tok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "secrets.config.yaml.index"), []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := scopedKeyring(t, dir, "config.yaml", kr)
+	if got, err := s.Get("anthropic-oauth", KindOAuth); err != nil || got != "legacy-tok" {
+		t.Fatalf("scoped store after empty-index open: %q, %v", got, err)
+	}
+	if got, err := legacy.Get("anthropic-oauth", KindOAuth); err != nil || got != "legacy-tok" {
+		t.Fatalf("legacy item was rewritten: %q, %v", got, err)
+	}
+}
+
+// An empty `[]` scoped index is the same migrate gate as a missing one: both
+// copy the legacy store unless a finished-migrate marker (carry or migrated)
+// or real scoped secrets say the copy already ran.
+func TestAnEmptyScopedIndexMigratesLikeAMissingIndex(t *testing.T) {
+	eachBackend(t, func(t *testing.T, backend Backend) {
+		open := func(t *testing.T, withEmptyIndex bool) *Store {
+			t.Helper()
+			dir := t.TempDir()
+			kr := &memKeyring{m: map[string]string{}}
+			legacy := &Store{backend: backend, dir: dir, kr: kr}
+			if err := legacy.Set("acct", KindOAuth, "tok"); err != nil {
+				t.Fatal(err)
+			}
+			if withEmptyIndex {
+				if err := os.WriteFile(filepath.Join(dir, "secrets.config.yaml.index"), []byte("[]"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := &Store{backend: backend, dir: dir, kr: kr}
+			if err := s.scopeTo("config.yaml"); err != nil {
+				t.Fatal(err)
+			}
+			return s
+		}
+		missing := open(t, false)
+		empty := open(t, true)
+		gotMissing, errMissing := missing.Get("acct", KindOAuth)
+		gotEmpty, errEmpty := empty.Get("acct", KindOAuth)
+		if errMissing != nil || gotMissing != "tok" {
+			t.Fatalf("missing index: %q, %v", gotMissing, errMissing)
+		}
+		if errEmpty != nil || gotEmpty != "tok" {
+			t.Fatalf("empty index: %q, %v", gotEmpty, errEmpty)
+		}
+	})
+}
+
+func TestPruneOfAnEmptyKeyringScopeDoesNotCreateAnIndex(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{backend: BackendKeyring, dir: dir, kr: &memKeyring{m: map[string]string{}}}
+	if err := s.scopeTo("config.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Prune([]string{"anthropic-oauth"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "secrets.config.yaml.index")); !os.IsNotExist(err) {
+		t.Fatalf("prune created an empty index: %v", err)
+	}
+}
+
 // A migration cut short (a crash, a keychain prompt dismissed) runs again on
 // the next open instead of leaving the scope with half the secrets.
 func TestAnInterruptedMigrationRunsAgain(t *testing.T) {
