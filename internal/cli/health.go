@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ks1686/peaproxy/internal/adapters"
+	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/config"
 	"github.com/ks1686/peaproxy/internal/gateway"
 	"github.com/ks1686/peaproxy/internal/usage"
@@ -20,6 +21,8 @@ func healthCmd(configPath *string) *cobra.Command {
 		Short: "Adapter health, quota remaining, cooldowns, and bind flags matching GET /admin/health, plus extra-usage refusals",
 		Long: `Prints the same fields as GET /admin/health (no admin token on loopback).
 Refreshes live ListModels so adapterHealth, quota, and models match a running serve.
+The models summary counts the client-visible catalog; adapterHealth models counts
+are discoveries before listing filters.
 Quota remaining is omitted when the provider does not report it (never invented as 0).
 One line GET /admin/health lacks: Anthropic third-party extra-usage refusals per
 account over the last 24h, from errors.jsonl (unknown when requestLog is off).
@@ -44,7 +47,7 @@ Examples:
 			lan := cfg.AllowNonLoopback && !config.IsLoopback(cfg.Bind)
 			adminRequired := lan
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: ok\nversion: %s\nbind: %s\nport: %d\noauth: subscription OAuth (ToS risk)\nconfig: %s\nusageFile: %s\nrequestLog: %v\nmodels: %d\nadapters: %s\nfailoverPolicy: %s\n",
-				version.Version, cfg.Bind, cfg.Port, path, usagePath, cfg.RequestLog, len(gw.Models()), strings.Join(adapters.Names(), ", "), cfg.FailoverPolicy())
+				version.Version, cfg.Bind, cfg.Port, path, usagePath, cfg.RequestLog, len(gw.Listed(catalog.FilterAll)), strings.Join(adapters.Names(), ", "), cfg.FailoverPolicy())
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "adapterHealth:")
 			health := gw.AdapterHealth()
 			if len(health) == 0 {
