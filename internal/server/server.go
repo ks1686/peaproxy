@@ -146,7 +146,7 @@ func (s *Server) ListenAndServe() error {
 		return err
 	}
 	s.setListenAddr(ln.Addr().String())
-	fmt.Fprintf(s.out, "peaproxy listening on http://%s\n", ln.Addr())
+	_, _ = fmt.Fprintf(s.out, "peaproxy listening on http://%s\n", ln.Addr())
 	// Adopt config changes another process makes -- `peaproxy auth login`, a
 	// catalog edit, a hand edit -- for as long as this server is up. Stopped by
 	// Shutdown, like the listener. It runs until the context is cancelled, so it
