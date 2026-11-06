@@ -43,6 +43,53 @@ func (s *Store) fileGet(key string, shared bool) (string, error) {
 	return v, nil
 }
 
+// fileGetExisting is the keyring overlay's file read: it never creates
+// secret.key, and maps a missing or unreadable blob to ErrNotFound /
+// ErrUnreadable so a leftover secrets.<scope>.enc cannot abort a keychain
+// config load.
+func (s *Store) fileGetExisting(key string) (string, error) {
+	blob, err := s.loadBlobExisting()
+	if err != nil {
+		return "", err
+	}
+	v, ok := blob.Items[key]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return v, nil
+}
+
+func (s *Store) fileDeleteExisting(key string) error {
+	blob, err := s.loadBlobExisting()
+	if err != nil {
+		return nil
+	}
+	if _, ok := blob.Items[key]; !ok {
+		return nil
+	}
+	delete(blob.Items, key)
+	return s.saveBlob(blob)
+}
+
+func (s *Store) filePruneExisting(keep map[string]struct{}) error {
+	blob, err := s.loadBlobExisting()
+	if err != nil {
+		return nil
+	}
+	changed := false
+	for k := range blob.Items {
+		if _, ok := keep[accountOf(k)]; ok {
+			continue
+		}
+		delete(blob.Items, k)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveBlob(blob)
+}
+
 func (s *Store) fileDelete(key string) error {
 	blob, err := s.loadBlob(false)
 	if err != nil {
@@ -78,24 +125,49 @@ func (s *Store) filePrune(keep map[string]struct{}) error {
 // which only the unlocked Get fallback may do; every other caller holds the
 // lock (#64).
 func (s *Store) loadBlob(shared bool) (fileBlob, error) {
+	return s.decodeBlob(true, shared)
+}
+
+func (s *Store) loadBlobExisting() (fileBlob, error) {
+	return s.decodeBlob(false, false)
+}
+
+func (s *Store) decodeBlob(createKey, shared bool) (fileBlob, error) {
 	empty := fileBlob{V: 1, Items: map[string]string{}}
 	raw, err := os.ReadFile(s.encPath())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return empty, nil
 		}
+		if !createKey {
+			return fileBlob{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
+		}
 		return fileBlob{}, err
 	}
-	key, err := s.keyFor(shared)
+	var key []byte
+	if createKey {
+		key, err = s.keyFor(shared)
+	} else {
+		key, err = s.loadExistingKey()
+	}
 	if err != nil {
+		if !createKey {
+			return fileBlob{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
+		}
 		return fileBlob{}, err
 	}
 	plain, err := decrypt(key, raw)
 	if err != nil {
+		if !createKey {
+			return fileBlob{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
+		}
 		return fileBlob{}, err
 	}
 	var blob fileBlob
 	if err := json.Unmarshal(plain, &blob); err != nil {
+		if !createKey {
+			return fileBlob{}, fmt.Errorf("%w: %v", ErrUnreadable, err)
+		}
 		return fileBlob{}, err
 	}
 	if blob.Items == nil {
@@ -105,6 +177,17 @@ func (s *Store) loadBlob(shared bool) (fileBlob, error) {
 		blob.V = 1
 	}
 	return blob, nil
+}
+
+func (s *Store) loadExistingKey() ([]byte, error) {
+	b, err := os.ReadFile(s.keyPath())
+	if err != nil {
+		return nil, err
+	}
+	if len(b) != 32 {
+		return nil, badKeyError(s.keyPath(), len(b))
+	}
+	return b, nil
 }
 
 func (s *Store) saveBlob(blob fileBlob) error {

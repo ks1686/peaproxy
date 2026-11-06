@@ -240,31 +240,7 @@ func (s *Store) Set(id string, kind Kind, value string) error {
 		return err
 	}
 	defer unlock()
-	if s.backend == BackendKeyring {
-		return s.keyringSetOrFile(itemKey(id, kind), value)
-	}
-	return s.fileSet(itemKey(id, kind), value)
-}
-
-// keyringSetOrFile writes to the OS keychain and, if that fails for a secret
-// the keychain does not already hold, to this scope's encrypted file so a
-// LaunchAgent (or any keychain that refuses Set) still keeps a successful
-// OAuth token. An overwrite the keychain refused is still an error: Get would
-// keep returning the old item.
-func (s *Store) keyringSetOrFile(key, value string) error {
-	err := s.keyringSet(key, value)
-	if err == nil {
-		_ = s.fileDelete(key)
-		return nil
-	}
-	if _, gerr := s.keyringGet(key); gerr == nil {
-		return err
-	}
-	if ferr := s.fileSet(key, value); ferr != nil {
-		return fmt.Errorf("%w (also failed to save in the encrypted file: %v)", err, ferr)
-	}
-	log.Printf("peaproxy: OS keychain refused to store %q (%v); saved it in the encrypted file instead", key, err)
-	return nil
+	return s.setLocked(itemKey(id, kind), value)
 }
 
 // Get reads a secret. When secrets.lock cannot be opened for writing (a
@@ -284,20 +260,7 @@ func (s *Store) Get(id string, kind Kind) (string, error) {
 	case !errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EROFS):
 		return "", err
 	}
-	if s.backend == BackendKeyring {
-		v, err := s.keyringGet(itemKey(id, kind))
-		if err == nil || !errors.Is(err, ErrNotFound) {
-			return v, err
-		}
-		// A Keychain Set that failed (LaunchAgent, ACL) may have saved this
-		// secret in the encrypted file instead; leftover file-only accounts
-		// are copied into the keychain on open, and this read covers the
-		// window before that copy, or when the copy itself had to fall back.
-		return s.fileGet(itemKey(id, kind), !locked)
-	}
-	// shared: on this path a key file may be caught mid-creation by a writer
-	// holding the lock, so the key read has to tolerate one (#64).
-	return s.fileGet(itemKey(id, kind), !locked)
+	return s.getLockedAt(itemKey(id, kind), !locked)
 }
 
 // Delete removes one secret.
@@ -312,16 +275,7 @@ func (s *Store) Delete(id string, kind Kind) error {
 		return err
 	}
 	defer unlock()
-	if s.backend == BackendKeyring {
-		k := itemKey(id, kind)
-		kerr := s.keyringDelete(k)
-		ferr := s.fileDelete(k)
-		if kerr != nil {
-			return kerr
-		}
-		return ferr
-	}
-	return s.fileDelete(itemKey(id, kind))
+	return s.deleteLocked(itemKey(id, kind))
 }
 
 // Prune drops secrets whose account id is not in keepIDs.
@@ -342,15 +296,70 @@ func (s *Store) Prune(keepIDs []string) error {
 		return err
 	}
 	defer unlock()
-	if s.backend == BackendKeyring {
-		kerr := s.keyringPrune(keep)
-		ferr := s.filePrune(keep)
-		if kerr != nil {
-			return kerr
-		}
-		return ferr
+	return s.pruneLocked(keep)
+}
+
+func (s *Store) getLocked(k string) (string, error) {
+	return s.getLockedAt(k, false)
+}
+
+func (s *Store) getLockedAt(k string, shared bool) (string, error) {
+	if s.backend != BackendKeyring {
+		// shared: on this path a key file may be caught mid-creation by a writer
+		// holding the lock, so the key read has to tolerate one (#64).
+		return s.fileGet(k, shared)
 	}
-	return s.filePrune(keep)
+	v, err := s.keyringGet(k)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		return v, err
+	}
+	v, err = s.fileGetExisting(k)
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnreadable) {
+		return v, err
+	}
+	return "", fmt.Errorf("%w: %v", ErrUnreadable, err)
+}
+
+// setLocked writes to the OS keychain and, if that fails for a secret the
+// keychain does not already hold, to this scope's encrypted file so a
+// LaunchAgent (or any keychain that refuses Set) still keeps a successful
+// OAuth token. An overwrite the keychain refused is still an error: Get would
+// keep returning the old item. Fallback runs only on ErrNotFound; any other
+// Get error (ErrUnreadable, ACL) would hide the file copy.
+func (s *Store) setLocked(k, v string) error {
+	if s.backend != BackendKeyring {
+		return s.fileSet(k, v)
+	}
+	err := s.keyringSet(k, v)
+	if err == nil {
+		return nil
+	}
+	if _, gerr := s.keyringGet(k); !errors.Is(gerr, ErrNotFound) {
+		return err
+	}
+	if ferr := s.fileSet(k, v); ferr != nil {
+		return fmt.Errorf("%w (also failed to save in the encrypted file: %v)", err, ferr)
+	}
+	log.Printf("peaproxy: OS keychain refused to store %q (%v); saved it in the encrypted file instead", k, err)
+	return nil
+}
+
+func (s *Store) deleteLocked(k string) error {
+	if s.backend != BackendKeyring {
+		return s.fileDelete(k)
+	}
+	kerr := s.keyringDelete(k)
+	_ = s.fileDeleteExisting(k)
+	return kerr
+}
+
+func (s *Store) pruneLocked(keep map[string]struct{}) error {
+	if s.backend != BackendKeyring {
+		return s.filePrune(keep)
+	}
+	kerr := s.keyringPrune(keep)
+	_ = s.filePruneExisting(keep)
+	return kerr
 }
 
 // lock takes secrets.lock for one whole operation, so no two PeaProxy

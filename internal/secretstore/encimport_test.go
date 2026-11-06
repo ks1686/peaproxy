@@ -192,3 +192,103 @@ func TestKeyringSetFallsBackToTheEncryptedFile(t *testing.T) {
 		t.Fatalf("warning must name the secret: %q", warn)
 	}
 }
+
+// A refused overwrite must not report success: Get only reads the file on
+// ErrNotFound, so falling back while the keychain still holds the old item
+// would leave the old token live.
+func TestKeyringSetFallsBackOnlyWhenTheKeychainItemIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	mem := memKeyring{m: map[string]string{}}
+	s := &Store{backend: BackendKeyring, dir: dir, kr: &mem}
+	if err := s.scopeTo("config.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("openai-oauth", KindOAuth, oauthJSON("old-tok")); err != nil {
+		t.Fatal(err)
+	}
+	s.kr = &failSetKeyring{memKeyring: mem, err: errors.New("User interaction is not allowed")}
+	if err := s.Set("openai-oauth", KindOAuth, oauthJSON("new-tok")); err == nil {
+		t.Fatal("Set reported success for a refused overwrite")
+	}
+	got, err := s.Get("openai-oauth", KindOAuth)
+	if err != nil || accessToken(t, got) != "old-tok" {
+		t.Fatalf("Get after refused overwrite: %q, %v; want the old keychain token", got, err)
+	}
+}
+
+type unreadableGetKeyring struct {
+	failSetKeyring
+}
+
+func (u *unreadableGetKeyring) Get(string, string) (string, error) {
+	return "", ErrUnreadable
+}
+
+func TestKeyringSetDoesNotFallBackOnUnreadableGet(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{backend: BackendKeyring, dir: dir, kr: &unreadableGetKeyring{failSetKeyring: failSetKeyring{memKeyring: memKeyring{m: map[string]string{}}, err: errors.New("User interaction is not allowed")}}}
+	if err := s.scopeTo("config.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("openai-oauth", KindOAuth, oauthJSON("ui-tok")); err == nil {
+		t.Fatal("Set reported success when Get was ErrUnreadable, not ErrNotFound")
+	}
+	if nonEmptyFile(s.encPath()) {
+		t.Fatal("fallback wrote the encrypted file for an unreadable keychain item")
+	}
+}
+
+// A leftover undecryptable scoped enc must not fail a keyring Get/Prune, and
+// a miss must not create secret.key.
+func TestKeyringGetTreatsAnUnreadableFallbackBlobAsAbsent(t *testing.T) {
+	dir := t.TempDir()
+	kr := &memKeyring{m: map[string]string{}}
+	s := scopedKeyring(t, dir, "config.yaml", kr)
+	if err := s.Set("anthropic-oauth", KindOAuth, oauthJSON("claude-tok")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.encPath(), []byte(Magic+"garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(s.keyPath()); !os.IsNotExist(err) {
+		t.Fatal("setup: secret.key already exists")
+	}
+
+	if got, err := s.Get("anthropic-oauth", KindOAuth); err != nil || accessToken(t, got) != "claude-tok" {
+		t.Fatalf("keychain account: %q, %v", got, err)
+	}
+	_, err := s.Get("antigravity", KindOAuth)
+	if err == nil || (!errors.Is(err, ErrNotFound) && !errors.Is(err, ErrUnreadable)) {
+		t.Fatalf("missing account with a corrupt fallback blob: %v", err)
+	}
+	if _, err := os.Stat(s.keyPath()); !os.IsNotExist(err) {
+		t.Fatal("Get created secret.key while reading an unreadable fallback blob")
+	}
+	if err := s.Prune([]string{"anthropic-oauth"}); err != nil {
+		t.Fatalf("Prune with an unreadable fallback blob: %v", err)
+	}
+	if err := s.Delete("antigravity", KindOAuth); err != nil {
+		t.Fatalf("Delete with an unreadable fallback blob: %v", err)
+	}
+
+	_ = os.Remove(s.encPath())
+	file := &Store{backend: BackendFile, dir: dir, scope: s.scope}
+	if err := file.Set("dummy", KindAPIKey, "x"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(s.encPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 0xff
+	if err := os.WriteFile(s.encPath(), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Get("antigravity", KindOAuth)
+	if err == nil || (!errors.Is(err, ErrNotFound) && !errors.Is(err, ErrUnreadable)) {
+		t.Fatalf("missing account with a tampered fallback blob: %v", err)
+	}
+	if err := s.Prune([]string{"anthropic-oauth"}); err != nil {
+		t.Fatalf("Prune with a tampered fallback blob: %v", err)
+	}
+}

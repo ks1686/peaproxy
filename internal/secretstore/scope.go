@@ -258,7 +258,7 @@ func (s *Store) migrateLocked(legacy *Store) (bool, error) {
 			if err != nil {
 				return false, fmt.Errorf("secretstore: migrating %q from the legacy keychain items: %w", k, err)
 			}
-			if err := s.keyringSet(k, v); err != nil {
+			if err := s.setLocked(k, v); err != nil {
 				return false, fmt.Errorf("secretstore: migrating %q into this config's keychain items: %w", k, err)
 			}
 		}
@@ -341,7 +341,7 @@ func (s *Store) importFileSecretsLocked() error {
 			// Already in the keychain; remember so a later prune does not
 			// copy it back from the never-pruned leftover blob.
 		case errors.Is(gerr, ErrNotFound), errors.Is(gerr, ErrUnreadable):
-			if err := s.keyringSetOrFile(k, v); err != nil {
+			if err := s.setLocked(k, v); err != nil {
 				return fmt.Errorf("secretstore: importing %q from the encrypted file: %w", k, err)
 			}
 		default:
