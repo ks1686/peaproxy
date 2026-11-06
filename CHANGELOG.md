@@ -1,10 +1,25 @@
 # Changelog
 
-## Unreleased
+## 3.3.5
+
+- Claude OAuth: the Praison AI skill trio (`skill_manage`, `skill_view`, `skills_list`) is aliased like OpenCode's core tools, so a request carrying Hermes's 20-tool set no longer trips Anthropic's "Third-party apps now draw from extra usage" refusal even when the workspace has usage. Claude Code exposes a single `Skill` tool, so the first of the trio is sent as `Skill` and the other two keep their own names; a claimed-upstream guard stops two client tools from taking the same upstream name, which the reverse map cannot restore.
+- OAuth: a device-code login waits out the code's own lifetime instead of a hardcoded 5 minutes. xAI issues codes that live 30 minutes, so approving after five minutes cancelled the poll, saved no token, and left the account on its old credential -- which then read as "the account is out of usage". `adapter.DeviceWait` clamps the wait to [5m, 15m], both the CLI and the UI use it, and the CLI prints the window it will actually wait.
+- Admin: `GET /admin/health` and `POST /admin/catalog/refresh` count client-visible models (`len(gw.Listed(catalog.FilterAll))`) instead of `len(gw.Models())`, so `peaproxy health` and the UI agree after a `hide`/`expose` edit (#172).
+- Server/CLI: a clean startup writes the `peaproxy listening on …` line to stdout, so a launchd error log stays empty on a normal boot (#171). `peaproxy status` probes `/healthz` and prints a real `phase:` beside the configured `listen:`; the misleading `status:` (CLI version) became `version:` (#170).
+
+## 3.3.4
 
 - Secret store: a leftover `secrets.<config>.enc` that decrypts to 0 items (file size still > 0) no longer pins the encrypted-file backend. 3.3.3 treated any non-empty enc as file-primary, so a LaunchAgent auto open never read Keychain and a new OAuth login that landed there stayed `oauth-login-required`. An empty `[]` index plus that vacuous blob now falls through to the OS keychain when it works. A file-backend migrate that later prunes the last scoped secret does not then resurrect that token from the never-pruned leftover `secrets.enc` when auto switches to Keychain.
+
+## 3.3.3
+
 - Secret store: a keychain-primary open copies leftover `secrets.enc` / `secrets.<config>.enc` items into the scoped keychain, so accounts that lived only in the encrypted file (Antigravity, OpenAI, …) are not stranded after a partial Keychain migrate. If a Keychain write fails (common for a LaunchAgent with no UI prompt), that secret is saved in the encrypted file instead so OAuth login can still become `oauth-ready`.
+
+## 3.3.2
+
 - Secret store: an empty `secrets.<config>.index` (`[]`) no longer counts as a finished migration. 3.3.1 could write that file on a config save before copying a legacy Keychain token, then skip migration forever, so Claude (`anthropic-oauth`) stayed `oauth-login-required` while the old `peaproxy` / `account/oauth` item was still in Keychain.
+
+## Unreleased
 
 ## 3.3.1
 
