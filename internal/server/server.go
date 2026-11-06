@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,6 +50,7 @@ type Server struct {
 	oauthJobs  map[string]*oauthJob
 	clientRoot string
 	listenAddr atomic.Value
+	out        io.Writer
 }
 
 type oauthJob struct {
@@ -64,11 +66,19 @@ type Options struct {
 	Config     config.Config
 	Models     []catalog.Model
 	ClientRoot string
+	// Out receives the startup listen line. Nil means os.Stdout: a successful
+	// bind is not an error, so it must not land in a service manager's stderr
+	// log (#171).
+	Out io.Writer
 }
 
 // New builds an HTTP server that is not yet listening.
 func New(opts Options) *Server {
-	s := &Server{gw: opts.Gateway, oauthJobs: map[string]*oauthJob{}, clientRoot: opts.ClientRoot}
+	out := opts.Out
+	if out == nil {
+		out = os.Stdout
+	}
+	s := &Server{gw: opts.Gateway, oauthJobs: map[string]*oauthJob{}, clientRoot: opts.ClientRoot, out: out}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", s.handleOpenAIModels)
 	mux.HandleFunc("GET /v0/catalog", s.handleCatalogAPI)
@@ -136,7 +146,7 @@ func (s *Server) ListenAndServe() error {
 		return err
 	}
 	s.setListenAddr(ln.Addr().String())
-	log.Printf("peaproxy listening on http://%s", ln.Addr())
+	_, _ = fmt.Fprintf(s.out, "peaproxy listening on http://%s\n", ln.Addr())
 	// Adopt config changes another process makes -- `peaproxy auth login`, a
 	// catalog edit, a hand edit -- for as long as this server is up. Stopped by
 	// Shutdown, like the listener. It runs until the context is cancelled, so it
@@ -482,7 +492,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"config":             s.gw.ConfigPath(),
 		"usageFile":          usagePath,
 		"requestLog":         cfg.RequestLog,
-		"models":             len(s.gw.Models()),
+		// Client-visible count, matching serve and GET /v1/models: Listed
+		// excludes hidden rows and unavailable placeholders, Models does not
+		// (#53, #172). The CLI health command mirrors this field.
+		"models":             len(s.gw.Listed(catalog.FilterAll)),
 		"adapters":           adapters.Names(),
 		"failoverPolicy":     cfg.FailoverPolicy(),
 		"adapterHealth":      s.gw.AdapterHealth(),
@@ -725,7 +738,9 @@ func (s *Server) handleAdminCatalog(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	s.gw.Refresh(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "models": len(s.gw.Models())})
+	// Same client-visible count as /admin/health and GET /v1/models, so the
+	// three never disagree (#172).
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "models": len(s.gw.Listed(catalog.FilterAll))})
 }
 
 func (s *Server) handleCatalogOverlay(w http.ResponseWriter, r *http.Request) {

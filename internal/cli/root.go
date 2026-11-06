@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -301,7 +302,12 @@ func statusCmd(configPath *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
 		Short: "Show bind address and phase",
-		Long: `Examples:
+		Long: `Prints the configured bind address and whether a gateway is answering there.
+
+The bind and port are configuration, not a liveness check. phase is the
+result of probing the listener, so "not running" means nothing answered.
+
+Examples:
   peaproxy status
 `,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -310,10 +316,23 @@ func statusCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "status: %s\nlisten: %s\nconfig: %s\nrequestLog: %v\noauth: subscription (ToS risk; docs/OAUTH.md)\nsecrets: OS keychain or encrypted file (docs/CONFIG.md)\nui: http://%s/\n", version.Version, cfg.Addr(), path, cfg.RequestLog, cfg.Addr())
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "version: %s\nphase: %s\nlisten: %s\nconfig: %s\nrequestLog: %v\noauth: subscription (ToS risk; docs/OAUTH.md)\nsecrets: OS keychain or encrypted file (docs/CONFIG.md)\nui: http://%s/\n", version.Version, probePhase(cfg.Addr()), cfg.Addr(), path, cfg.RequestLog, cfg.Addr())
 			return nil
 		},
 	}
+}
+
+// probePhase reports whether a gateway is serving on addr. /healthz is the
+// lightest endpoint that only peaproxy serves, so an answer means the gateway
+// is up; a dial error or timeout means it is not (#170).
+func probePhase(addr string) string {
+	client := &http.Client{Timeout: time.Second}
+	resp, err := client.Get("http://" + addr + "/healthz")
+	if err != nil {
+		return "not running"
+	}
+	_ = resp.Body.Close()
+	return "running"
 }
 
 func configCmd(configPath *string) *cobra.Command {

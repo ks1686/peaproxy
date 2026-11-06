@@ -2,6 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,6 +105,49 @@ func TestStatusUsesDefaultBind(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "127.0.0.1:8317") {
 		t.Fatalf("%s", out)
+	}
+}
+
+func TestStatusPrintsPhase(t *testing.T) {
+	isolateUserConfig(t)
+	out := &bytes.Buffer{}
+	if err := ExecuteWithArgs([]string{"status"}, out); err != nil {
+		t.Fatal(err)
+	}
+	// The bind line is configuration; phase is the probe result. Both must be
+	// present so the output cannot be read as a liveness check on its own (#170).
+	if !strings.Contains(out.String(), "listen: 127.0.0.1:8317") {
+		t.Fatalf("missing configured listen line:\n%s", out)
+	}
+	if !strings.Contains(out.String(), "phase: ") {
+		t.Fatalf("missing phase line:\n%s", out)
+	}
+}
+
+func TestProbePhaseReportsRunning(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := probePhase(u.Host); got != "running" {
+		t.Fatalf("phase = %q, want running", got)
+	}
+}
+
+func TestProbePhaseReportsNotRunning(t *testing.T) {
+	// Reserve a port, then close it so nothing is listening.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	_ = l.Close()
+	if got := probePhase(addr); got != "not running" {
+		t.Fatalf("phase = %q, want not running", got)
 	}
 }
 

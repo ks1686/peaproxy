@@ -126,6 +126,43 @@ func TestHealthReportsLoopbackBind(t *testing.T) {
 	}
 }
 
+func TestAdminHealthModelsCountsClientVisible(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/admin/health", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	// testServer hides secret-model, so the raw catalog holds 2 rows while
+	// /v1/models serves 1. The summary must match the client-visible count,
+	// not the raw inventory (#172).
+	if got := int(body["models"].(float64)); got != 1 {
+		t.Fatalf("models = %v, want 1 (client-visible)", body["models"])
+	}
+}
+
+func TestAdminRefreshModelsCountsClientVisible(t *testing.T) {
+	s, _ := testServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/admin/catalog/refresh", nil)
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := int(body["models"].(float64)); got != 1 {
+		t.Fatalf("models = %v, want 1 (client-visible)", body["models"])
+	}
+}
+
 func TestV1ModelsHidesModelButChatStillRoutes(t *testing.T) {
 	s, _ := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
