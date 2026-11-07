@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/ks1686/peaproxy/internal/config"
 )
 
 func TestRouteEchoesClientModel(t *testing.T) {
@@ -32,7 +34,7 @@ func TestRouteEchoesClientModel(t *testing.T) {
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	)
-	gw.cfg.Routes = map[string]string{"code": "llama3.2"}
+	gw.cfg.Routes = map[string]config.Route{"code": {Target: "llama3.2"}}
 	resp, account, err := gw.Chat(context.Background(), []byte(`{"model":"code","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil || account.Account != "acct-a" || resp.Content != "ok" {
 		t.Fatalf("%v %s %#v", err, account.Account, resp)

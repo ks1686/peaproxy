@@ -24,14 +24,14 @@ func TestOnlyOneRequestProbesARecoveringAccount(t *testing.T) {
 	a, b := 0, 0
 	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
 	gw.cool["acct-a"] = cooldownSlots{wide: Cooldown{AccountID: "acct-a", Until: time.Now().Add(-time.Millisecond)}}
-	if first, _ := gw.candidates("m", ""); countID(first, "acct-a") != 1 {
+	if first, _ := gw.candidates("m", "", ""); countID(first, "acct-a") != 1 {
 		t.Fatalf("the first request after expiry should be able to probe acct-a: %v", ids(first))
 	}
 	release, err := gw.admit(context.Background(), "acct-a")
 	if err != nil {
 		t.Fatalf("the first attempt could not take the probe: %v", err)
 	}
-	if second, _ := gw.candidates("m", ""); countID(second, "acct-a") != 0 {
+	if second, _ := gw.candidates("m", "", ""); countID(second, "acct-a") != 0 {
 		t.Fatalf("a second request listed acct-a while its probe is out: %v", ids(second))
 	}
 	if _, err := gw.admit(context.Background(), "acct-a"); !admissionRejection(err) {
@@ -40,7 +40,7 @@ func TestOnlyOneRequestProbesARecoveringAccount(t *testing.T) {
 	gw.rememberSuccess("", "m", "acct-a")
 	release()
 	for i := 0; i < 2; i++ {
-		if cands, _ := gw.candidates("m", ""); countID(cands, "acct-a") != 1 {
+		if cands, _ := gw.candidates("m", "", ""); countID(cands, "acct-a") != 1 {
 			t.Fatalf("after a successful probe acct-a is healthy again: %v", ids(cands))
 		}
 		release, err := gw.admit(context.Background(), "acct-a")
@@ -59,7 +59,7 @@ func TestListingARecoveringAccountDoesNotHoldItsProbe(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
 	gw.cool["acct-a"] = cooldownSlots{wide: Cooldown{AccountID: "acct-a", Until: time.Now().Add(-time.Millisecond)}}
 	for i := 0; i < 3; i++ {
-		if cands, _ := gw.candidates("m", ""); countID(cands, "acct-a") != 1 {
+		if cands, _ := gw.candidates("m", "", ""); countID(cands, "acct-a") != 1 {
 			t.Fatalf("request %d lost acct-a although nobody is trying it: %v", i+1, ids(cands))
 		}
 	}
@@ -73,7 +73,7 @@ func TestExplainingARouteDoesNotTakeTheProbe(t *testing.T) {
 	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
 	gw.cool["acct-a"] = cooldownSlots{wide: Cooldown{AccountID: "acct-a", Until: time.Now().Add(-time.Millisecond)}}
 	_ = gw.ExplainRoute(context.Background(), "m")
-	cands, _ := gw.candidates("m", "")
+	cands, _ := gw.candidates("m", "", "")
 	for _, in := range cands {
 		if in.Provider.ID == "acct-a" {
 			return
@@ -96,7 +96,7 @@ func TestAProbeEndsWithItsAttempt(t *testing.T) {
 	a, b := 0, 0
 	gw := twoAccountGateway(t, countOK(&a, "a"), countOK(&b, "b"))
 	gw.cool["acct-a"] = cooldownSlots{wide: Cooldown{AccountID: "acct-a", Until: time.Now().Add(-time.Millisecond)}}
-	_, _ = gw.candidates("m", "")
+	_, _ = gw.candidates("m", "", "")
 	release, err := gw.admit(context.Background(), "acct-a")
 	if err != nil {
 		t.Fatal(err)

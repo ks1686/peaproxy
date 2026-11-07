@@ -230,7 +230,7 @@ func streamGateway(t *testing.T, baseURL string) *Gateway {
 	// A route alias is the everyday case the issue describes: the client asks
 	// for "client-model", the route resolves to the upstream's own id, and the
 	// upstream echoes that id back in every event.
-	cfg.Routes = map[string]string{"client-model": "upstream-model"}
+	cfg.Routes = map[string]config.Route{"client-model": {Target: "upstream-model"}}
 	cfg.Providers = []config.Provider{{ID: "only", Adapter: "openai_compat", Tier: "paid", BaseURL: baseURL + "/v1"}}
 	g, err := New(cfg, "", nil)
 	if err != nil {

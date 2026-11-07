@@ -52,7 +52,7 @@ func TestATransportBlipDoesNotCoolTheOnlyAccount(t *testing.T) {
 	if cs := gw.Cooldowns(); len(cs) != 0 {
 		t.Fatalf("a transport failure cooled the only account: %+v", cs)
 	}
-	if cands, _ := gw.candidates("m", ""); countID(cands, "only") != 1 {
+	if cands, _ := gw.candidates("m", "", ""); countID(cands, "only") != 1 {
 		t.Fatalf("the only account left rotation after a transport blip: %v", ids(cands))
 	}
 }
@@ -160,7 +160,7 @@ func TestAStreamReleasesTheProbeWhenItCommits(t *testing.T) {
 	if gw.admission.Probing("only") {
 		t.Fatal("the probe is still held by a stream that already committed")
 	}
-	if cands, _ := gw.candidates("m", ""); countID(cands, "only") != 1 {
+	if cands, _ := gw.candidates("m", "", ""); countID(cands, "only") != 1 {
 		t.Fatalf("a second request could not use the account while the first streams: %v", ids(cands))
 	}
 	slot, err := gw.admit(context.Background(), "only")

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ks1686/peaproxy/internal/catalog"
 	"github.com/ks1686/peaproxy/internal/fslock"
 	"github.com/ks1686/peaproxy/internal/oauth"
 	"github.com/ks1686/peaproxy/internal/router"
@@ -25,6 +26,10 @@ const (
 	DefaultBind   = "127.0.0.1"
 	DefaultPort   = 8317
 )
+
+// Route is the on-disk form of catalog.Route. The alias keeps one type, so a
+// route read from YAML is the same value the gateway applies.
+type Route = catalog.Route
 
 // Config is the on-disk schema. schemaVersion must be bumped on breaking changes.
 type Config struct {
@@ -41,7 +46,7 @@ type Config struct {
 	RequestEngine    RequestEnginePrefs  `yaml:"requestEngine,omitempty"`
 	AutomaticRoutes  AutomaticRoutePrefs `yaml:"automaticRoutes,omitempty"`
 	Optimization     OptimizationPrefs   `yaml:"optimization,omitempty"`
-	Routes           map[string]string   `yaml:"routes,omitempty"`
+	Routes           map[string]Route    `yaml:"routes,omitempty"`
 	Providers        []Provider          `yaml:"providers"`
 }
 
@@ -585,15 +590,20 @@ func (c Config) validateFile() error {
 			return fmt.Errorf("catalog.rename %q has an empty display name", id)
 		}
 	}
-	for name, target := range c.Routes {
-		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || strings.ContainsAny(name, " \t\r\n") {
+	for name, route := range c.Routes {
+		if strings.TrimSpace(name) == "" || name != strings.TrimSpace(name) || strings.ContainsAny(name, " 	\r\n") {
 			return fmt.Errorf("routes name %q must be a non-empty id without spaces", name)
 		}
-		if strings.TrimSpace(target) == "" {
+		if strings.TrimSpace(route.Target) == "" {
 			return fmt.Errorf("routes %q has an empty target", name)
 		}
-		if strings.TrimSpace(target) == name {
+		if strings.TrimSpace(route.Target) == name {
 			return fmt.Errorf("routes %q must target a different live model id", name)
+		}
+		if route.Account != "" {
+			if _, ok := ids[route.Account]; !ok {
+				return fmt.Errorf("routes %q names account %q, which is not in providers", name, route.Account)
+			}
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(c.Failover.Policy)) {

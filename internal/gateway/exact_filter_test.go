@@ -28,7 +28,7 @@ func TestFreeOnlyPrefersTheFreeAccountWhenOneModelHasBoth(t *testing.T) {
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	model, cands, _, err := gw.routeResolved(context.Background(), body, "m")
+	model, cands, _, err := gw.routeResolved(context.Background(), body, "m", "m")
 	if err != nil {
 		t.Fatalf("a free account could serve the model, but the request was refused: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestFreeOnlyStillRefusesWhenNoAccountIsFree(t *testing.T) {
 	gw.Refresh(context.Background())
 
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
-	if _, _, _, err := gw.routeResolved(context.Background(), body, "m"); err == nil {
+	if _, _, _, err := gw.routeResolved(context.Background(), body, "m", "m"); err == nil {
 		t.Fatal("every account was paid and the request was served anyway")
 	} else if !strings.Contains(err.Error(), "freeOnly") {
 		t.Fatalf("the refusal does not name the setting: %v", err)

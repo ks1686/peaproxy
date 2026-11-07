@@ -107,7 +107,7 @@ func TestCloneIsDeep(t *testing.T) {
 	*cp.AutomaticRoutes.Prices["k"].Input = 42
 	cp.Providers[0].OAuth.Extra["x"] = "y"
 	cp.Providers[0].OAuth.AccessToken = "changed"
-	cp.Routes["r"] = "t"
+	cp.Routes["r"] = Route{Target: "t"}
 	cp.AutomaticRoutes.Auto[0] = "changed"
 	cp.Hide.Models[0] = "changed"
 	cp.Catalog.Rename["k"] = "changed"
@@ -131,7 +131,7 @@ func TestCloneIsDeep(t *testing.T) {
 }
 
 func TestClonePreservesNilAndEmpty(t *testing.T) {
-	c := Config{Hide: HideList{Models: []string{}}, Routes: map[string]string{}}
+	c := Config{Hide: HideList{Models: []string{}}, Routes: map[string]Route{}}
 	cp := Clone(c)
 	if cp.Hide.Providers != nil || cp.Hide.Models == nil || cp.Routes == nil || cp.Catalog.Rename != nil {
 		t.Fatalf("nil/empty not preserved: %#v", cp)

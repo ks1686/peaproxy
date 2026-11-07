@@ -1387,7 +1387,7 @@ cooledAlpha:
 
 func mustCandidates(t *testing.T, gw *Gateway, model string) []instance {
 	t.Helper()
-	cands, retry := gw.candidates(model, "")
+	cands, retry := gw.candidates(model, "", "")
 	if retry != 0 {
 		t.Fatalf("retry %s", retry)
 	}

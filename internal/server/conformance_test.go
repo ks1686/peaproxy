@@ -112,7 +112,7 @@ func TestConformanceRouteAliasIsClientVisibleButUpstreamReceivesItsTarget(t *tes
 		SchemaVersion: 1,
 		Bind:          "127.0.0.1",
 		Port:          8317,
-		Routes:        map[string]string{"coding": "provider-model"},
+		Routes:        map[string]config.Route{"coding": {Target: "provider-model"}},
 		Providers: []config.Provider{{
 			ID: "local", Adapter: "openai_compat", Tier: "local", BaseURL: upstream.URL + "/v1",
 		}},

@@ -509,35 +509,50 @@ func TestValidateRejectsEmptyAdapterAndBadTier(t *testing.T) {
 
 func TestValidateRoutes(t *testing.T) {
 	cfg := config.Default()
-	cfg.Routes = map[string]string{" code": "llama3.2"}
+	cfg.Routes = map[string]config.Route{" code": {Target: "llama3.2"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routes") {
 		t.Fatalf("padded name: %v", err)
 	}
 	cfg = config.Default()
-	cfg.Routes = map[string]string{"code": "  "}
+	cfg.Routes = map[string]config.Route{"code": {Target: "  "}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routes") {
 		t.Fatalf("empty target: %v", err)
 	}
 	cfg = config.Default()
-	cfg.Routes = map[string]string{"code": "code"}
+	cfg.Routes = map[string]config.Route{"code": {Target: "code"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "routes") {
 		t.Fatalf("name equals target: %v", err)
 	}
 	cfg = config.Default()
-	cfg.Routes = map[string]string{"code": "llama3.2"}
+	cfg.Routes = map[string]config.Route{"code": {Target: "llama3.2"}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	cfg = config.Default()
-	cfg.Routes = map[string]string{"pea/auto": "llama3.2"}
+	cfg.Routes = map[string]config.Route{"pea/auto": {Target: "llama3.2"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "automatic") {
 		t.Fatalf("alias collision: %v", err)
 	}
 }
 
+// A pinned route is only meaningful if the account exists: a typo would
+// otherwise look like a provider choice and then refuse every request.
+func TestValidateRouteAccountMustExist(t *testing.T) {
+	cfg := config.Default()
+	cfg.Routes = map[string]config.Route{"code": {Target: "llama3.2", Account: "nope"}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "account") {
+		t.Fatalf("unknown account: %v", err)
+	}
+	cfg = config.Default()
+	cfg.Routes = map[string]config.Route{"code": {Target: "llama3.2", Account: "ollama-local"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRouteAliasCollisionRejected(t *testing.T) {
 	cfg := config.Default()
-	cfg.Routes = map[string]string{"pea/free": "llama3.2"}
+	cfg.Routes = map[string]config.Route{"pea/free": {Target: "llama3.2"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "automatic") {
 		t.Fatalf("error = %v", err)
 	}
