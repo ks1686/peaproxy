@@ -172,6 +172,9 @@ func TestPinnedRouteCooledAccountDoesNotFailOver(t *testing.T) {
 	if !strings.Contains(err.Error(), "acct-b") {
 		t.Fatalf("the cooldown does not name the pinned account: %v", err)
 	}
+	if strings.Contains(err.Error(), "acct-a") {
+		t.Fatalf("the cooldown names an account the route does not call: %v", err)
+	}
 	if hits != 0 {
 		t.Fatalf("upstream hits %d, want none", hits)
 	}

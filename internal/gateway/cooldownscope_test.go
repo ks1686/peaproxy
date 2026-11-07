@@ -123,10 +123,10 @@ func TestHealthReportsCooldownWhileAnySlotIsActive(t *testing.T) {
 func TestCooldownCauseIgnoresAnotherModelsCooldown(t *testing.T) {
 	g := cooldownGateway(t)
 	g.markCooldown("a", "model-one", modelScoped(time.Minute), false)
-	if err := g.cooldownCause("model-two"); err != nil {
+	if err := g.cooldownCause("model-two", ""); err != nil {
 		t.Errorf("a cooldown for model-one blocked model-two: %v", err)
 	}
-	if err := g.cooldownCause("model-one"); err == nil {
+	if err := g.cooldownCause("model-one", ""); err == nil {
 		t.Error("model-one is cooling but no cause was reported")
 	}
 }

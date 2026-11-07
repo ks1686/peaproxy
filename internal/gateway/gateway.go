@@ -833,7 +833,7 @@ func (g *Gateway) route(ctx context.Context, raw []byte, model, client string) (
 	cands, retry := g.candidates(model, session, client)
 	if len(cands) == 0 {
 		if retry > 0 {
-			return nil, session, router.CooldownError{RetryAfter: retry, Err: g.cooldownCause(model)}
+			return nil, session, router.CooldownError{RetryAfter: retry, Err: g.cooldownCause(model, client)}
 		}
 		return nil, session, router.ErrNoAccount
 	}
@@ -846,12 +846,16 @@ func (g *Gateway) route(ctx context.Context, raw []byte, model, client string) (
 // active cooldown entry is named as recovering, e.g. one just out of cooldown
 // while another request holds its half-open probe. A cooldown scoped to
 // another model is skipped.
-func (g *Gateway) cooldownCause(model string) error {
+func (g *Gateway) cooldownCause(model, client string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
 	var parts []string
-	for _, id := range catalog.AccountsForModel(g.models, g.queryLocked(), model) {
+	ids := catalog.AccountsForModel(g.models, g.queryLocked(), model)
+	if pin := pinnedAccount(g.cfg.Routes, client); pin != "" {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return id != pin })
+	}
+	for _, id := range ids {
 		slots := g.cool[id]
 		c, ok := activeCooldown(slots, model, now)
 		if !ok {
