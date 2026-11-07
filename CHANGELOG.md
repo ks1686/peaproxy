@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.3.6
+
+- Routes: a route name can pin the account it calls, so one model id served by several providers can be offered as distinct client-facing names. `routes: {copilot-gpt-6-sol: {target: gpt-6-sol, account: copilot-oauth}}` calls only `copilot-oauth` and does not fail over; a cooled pinned account surfaces as a cooldown naming it. The catalog row names the account. The short form (`routes: {code: llama3.2}`) still means every account that lists the target, and saving a config never reshapes an unpinned route. `account` must be an id in `providers`.
+
 ## 3.3.5
 
 - Claude OAuth: the Praison AI skill trio (`skill_manage`, `skill_view`, `skills_list`) is aliased like OpenCode's core tools, so a request carrying Hermes's 20-tool set no longer trips Anthropic's "Third-party apps now draw from extra usage" refusal even when the workspace has usage. Claude Code exposes a single `Skill` tool, so the first of the trio is sent as `Skill` and the other two keep their own names; a claimed-upstream guard stops two client tools from taking the same upstream name, which the reverse map cannot restore.
