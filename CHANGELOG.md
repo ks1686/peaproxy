@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.3.7
+
+- Routes: a pinned route's cooldown now names the pinned account. `cooldownCause` walked every account that lists the target, so `xai-grok-4.7` with the xAI account cooling reported `copilot-oauth` — the one account the request was never going to use. It is filtered the same way the candidate list is.
+
 ## 3.3.6
 
 - Routes: a route name can pin the account it calls, so one model id served by several providers can be offered as distinct client-facing names. `routes: {copilot-gpt-6-sol: {target: gpt-6-sol, account: copilot-oauth}}` calls only `copilot-oauth` and does not fail over; a cooled pinned account surfaces as a cooldown naming it. The catalog row names the account. The short form (`routes: {code: llama3.2}`) still means every account that lists the target, and saving a config never reshapes an unpinned route. `account` must be an id in `providers`.
