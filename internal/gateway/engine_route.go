@@ -32,9 +32,9 @@ func (g *Gateway) promptBody(raw []byte, adapterName string) []byte {
 	return out
 }
 
-func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model string) (string, []instance, string, error) {
+func (g *Gateway) routeResolved(ctx context.Context, raw []byte, model, client string) (string, []instance, string, error) {
 	if !router.Automatic(model) {
-		cands, session, err := g.route(ctx, raw, model)
+		cands, session, err := g.route(ctx, raw, model, client)
 		if err != nil {
 			return model, cands, session, err
 		}

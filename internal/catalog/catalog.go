@@ -281,7 +281,7 @@ type OpenAIModel struct {
 // only client-facing id. When ForClients is set and expose is a non-empty
 // subset that omits the route name, that alias is left off the list.
 // Missing targets are omitted. Pin and rename on the target are not copied.
-func ApplyRoutes(listed, all []Model, q Query, routes map[string]string) []Model {
+func ApplyRoutes(listed, all []Model, q Query, routes map[string]Route) []Model {
 	if len(routes) == 0 {
 		return listed
 	}
@@ -302,7 +302,8 @@ func ApplyRoutes(listed, all []Model, q Query, routes map[string]string) []Model
 		out = append(out, m)
 	}
 	for _, name := range names {
-		target := strings.TrimSpace(routes[name])
+		route := routes[name]
+		target := strings.TrimSpace(route.Target)
 		src, ok := FindRoutable(all, q, target)
 		if !ok {
 			continue
@@ -314,6 +315,11 @@ func ApplyRoutes(listed, all []Model, q Query, routes map[string]string) []Model
 		alias.ID = name
 		alias.DisplayName = name
 		alias.AliasOf = target
+		if route.Account != "" {
+			// A pinned route names one account. Say so on the row: the name
+			// calls that provider, and the request is filtered to it.
+			alias.AccountID = route.Account
+		}
 		alias.Pinned = false
 		alias.Hidden = false
 		alias.Exposed = true

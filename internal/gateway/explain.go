@@ -72,7 +72,7 @@ func (g *Gateway) ExplainRoute(ctx context.Context, model string) RouteExplanati
 		ex.Incomplete = "session affinity is checked per request body; this explanation used no body"
 	}
 
-	cands, retry := g.candidatesFor(model, router.SessionFrom(ctx), true)
+	cands, retry := g.candidatesFor(model, router.SessionFrom(ctx), model, true)
 	switch {
 	case len(cands) > 0:
 		for _, inst := range cands {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -516,14 +517,14 @@ func (g *Gateway) resolveBody(raw []byte) (string, []byte, error) {
 	peek := jsonx.PeekBody(raw)
 	clientModel := strings.TrimSpace(peek.Model)
 	g.mu.RLock()
-	target, ok := g.cfg.Routes[clientModel]
+	route, ok := g.cfg.Routes[clientModel]
 	models := g.models
 	q := g.queryLocked()
 	g.mu.RUnlock()
 	if !ok {
 		return clientModel, raw, nil
 	}
-	target = strings.TrimSpace(target)
+	target := strings.TrimSpace(route.Target)
 	if _, found := catalog.FindRoutable(models, q, target); !found {
 		return "", nil, fmt.Errorf("route %q targets %q which is not in the live catalog", clientModel, target)
 	}
@@ -824,12 +825,12 @@ func (g *Gateway) rememberSticky(model, account string) {
 	g.sticky[model] = account
 }
 
-func (g *Gateway) route(ctx context.Context, raw []byte, model string) ([]instance, string, error) {
+func (g *Gateway) route(ctx context.Context, raw []byte, model, client string) ([]instance, string, error) {
 	session := router.SessionFrom(ctx)
 	if session == "" {
 		session = router.SessionFromBody(raw)
 	}
-	cands, retry := g.candidates(model, session)
+	cands, retry := g.candidates(model, session, client)
 	if len(cands) == 0 {
 		if retry > 0 {
 			return nil, session, router.CooldownError{RetryAfter: retry, Err: g.cooldownCause(model)}
@@ -1137,15 +1138,22 @@ func containsID(ids []string, want string) bool {
 	return false
 }
 
-func (g *Gateway) candidates(model, session string) ([]instance, time.Duration) {
-	return g.candidatesFor(model, session, false)
+func (g *Gateway) candidates(model, session, client string) ([]instance, time.Duration) {
+	return g.candidatesFor(model, session, client, false)
+}
+
+// pinnedAccount returns the account a client-facing route name is pinned to.
+// An unknown name, or a route with no account, is not pinned. Callers hold
+// g.mu; the map is only read.
+func pinnedAccount(routes map[string]catalog.Route, client string) string {
+	return strings.TrimSpace(routes[strings.TrimSpace(client)].Account)
 }
 
 // candidatesFor lists the accounts a request for model may use. peek is for
 // read-only callers (ExplainRoute): it neither prunes cooldowns nor takes a
 // half-open probe, and treats a recovering account as eligible unless another
 // request holds its probe.
-func (g *Gateway) candidatesFor(model, session string, peek bool) ([]instance, time.Duration) {
+func (g *Gateway) candidatesFor(model, session, client string, peek bool) ([]instance, time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
@@ -1179,6 +1187,11 @@ func (g *Gateway) candidatesFor(model, session string, peek bool) ([]instance, t
 	}
 	q := g.queryLocked()
 	ids := catalog.AccountsForModel(g.models, q, model)
+	// A route pinned to one account calls only that account: the client chose a
+	// provider, and failing over to a different one would contradict the name.
+	if pin := pinnedAccount(g.cfg.Routes, client); pin != "" {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return id != pin })
+	}
 	// An id nobody lists must not be fanned out. A typo would otherwise spend
 	// quota on every account.
 	if len(ids) == 0 {

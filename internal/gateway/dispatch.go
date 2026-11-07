@@ -31,7 +31,7 @@ func (g *Gateway) Chat(ctx context.Context, raw []byte) (adapter.ChatResponse, C
 	if err != nil {
 		return adapter.ChatResponse{}, Call{}, err
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return adapter.ChatResponse{}, Call{}, err
 	}
@@ -226,7 +226,7 @@ func (g *Gateway) ChatStream(ctx context.Context, raw []byte, w io.Writer) (Call
 	if err != nil {
 		return Call{}, err
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return Call{}, err
 	}
@@ -322,7 +322,7 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 	if !g.supportsImageOut(model) {
 		return adapter.ImageResponse{}, Call{}, adapter.ErrModelNotImageOut
 	}
-	model, cands, session, err := g.routeResolved(ctx, body, model)
+	model, cands, session, err := g.routeResolved(ctx, body, model, client)
 	if err != nil {
 		return adapter.ImageResponse{}, Call{}, err
 	}
@@ -380,11 +380,11 @@ func (g *Gateway) EditImage(ctx context.Context, raw []byte, contentType string)
 func (g *Gateway) routeTarget(name string) (string, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	target, ok := g.cfg.Routes[strings.TrimSpace(name)]
+	route, ok := g.cfg.Routes[strings.TrimSpace(name)]
 	if !ok {
 		return "", false
 	}
-	target = strings.TrimSpace(target)
+	target := strings.TrimSpace(route.Target)
 	if _, found := catalog.FindRoutable(g.models, g.queryLocked(), target); !found {
 		return "", false
 	}
@@ -411,7 +411,7 @@ func (g *Gateway) GenerateImage(ctx context.Context, raw []byte) (adapter.ImageR
 	if !g.supportsImageOut(model) {
 		return adapter.ImageResponse{}, Call{}, adapter.ErrModelNotImageOut
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return adapter.ImageResponse{}, Call{}, err
 	}
@@ -492,7 +492,7 @@ func (g *Gateway) CreateEmbeddings(ctx context.Context, raw []byte) (adapter.Emb
 	if !g.supportsEmbeddings(model) {
 		return adapter.EmbeddingResponse{}, Call{}, adapter.ErrModelNotEmbeddings
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return adapter.EmbeddingResponse{}, Call{}, err
 	}
@@ -599,7 +599,7 @@ func (g *Gateway) Responses(ctx context.Context, raw []byte) ([]byte, Call, erro
 	if err != nil {
 		return nil, Call{}, err
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return nil, Call{}, err
 	}
@@ -707,7 +707,7 @@ func (g *Gateway) ResponsesStream(ctx context.Context, raw []byte, w io.Writer) 
 	if err != nil {
 		return Call{}, err
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return Call{}, err
 	}
@@ -875,7 +875,7 @@ func (g *Gateway) ClaudeChat(ctx context.Context, raw []byte) ([]byte, Call, err
 	if err != nil {
 		return nil, Call{}, err
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return nil, Call{}, err
 	}
@@ -977,7 +977,7 @@ func (g *Gateway) ClaudeChatStream(ctx context.Context, raw []byte, w io.Writer)
 	if err != nil {
 		return Call{}, err
 	}
-	model, cands, session, err := g.routeResolved(ctx, raw, model)
+	model, cands, session, err := g.routeResolved(ctx, raw, model, client)
 	if err != nil {
 		return Call{}, err
 	}

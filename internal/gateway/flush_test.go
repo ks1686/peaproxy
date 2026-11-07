@@ -39,7 +39,7 @@ func claudeStreamGateway(t *testing.T, adapterName string) *Gateway {
 
 	cfg := config.Config{
 		SchemaVersion: 1, Bind: "127.0.0.1", Port: 8317,
-		Routes: map[string]string{"friendly": "zzupstream-model"},
+		Routes: map[string]config.Route{"friendly": {Target: "zzupstream-model"}},
 		Providers: []config.Provider{{
 			ID: "acct", Adapter: adapterName, Tier: "paid", BaseURL: up.URL,
 			OAuth: &config.OAuthToken{AccessToken: "t", RefreshToken: "r"},
