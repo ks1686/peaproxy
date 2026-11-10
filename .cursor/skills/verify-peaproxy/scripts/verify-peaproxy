@@ -4,6 +4,8 @@
 set -euo pipefail
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CHILD_PID=""
+CLEANUP_STATE_ON_EXIT=0
 
 die() {
   printf 'verify-peaproxy: %s\n' "$*" >&2
@@ -149,6 +151,8 @@ ensure_state_dir() {
   assert_state_private "$STATE"
   if [[ ! -d "$STATE" ]]; then
     mkdir -m 700 "$STATE" || die "could not create the state directory"
+    # A failed command that created this directory removes it on the way out.
+    CLEANUP_STATE_ON_EXIT=1
     assert_state_private "$STATE"
   fi
 }
@@ -159,7 +163,7 @@ ensure_evidence_dir() {
     die "evidence directory is a symlink"
   fi
   if [[ ! -e "$EVIDENCE" ]]; then
-    mkdir -m 700 "$EVIDENCE" || die "could not create the evidence directory"
+    mkdir -p -m 700 "$EVIDENCE" || die "could not create the evidence directory"
   fi
   if [[ ! -d "$EVIDENCE" ]]; then
     die "evidence path exists and is not a directory"
@@ -248,14 +252,14 @@ free_port() {
 # expand ISOLATION_ENV themselves so a backgrounded command's $! is the
 # child, not this function.
 prepare_home() {
-  mkdir -m 700 -p "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data" || true
-  chmod 700 "$STATE/home" "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data" 2>/dev/null || true
+  mkdir -m 700 -p "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data" "$STATE/home/tmp" || true
+  chmod 700 "$STATE/home" "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data" "$STATE/home/tmp" 2>/dev/null || true
   # Read Go's own config in this shell, before HOME moves. `go env -w` lives in
   # GOENV, which is not an exported variable. GOPATH follows HOME unless it is
   # passed through, and the checksum database is $GOPATH/pkg/sumdb.
-  GOMODCACHE_KEEP=$(GOTELEMETRY=off go env GOMODCACHE 2>/dev/null || true)
-  GOENV_KEEP=$(GOTELEMETRY=off go env GOENV 2>/dev/null || true)
-  GOPATH_KEEP=$(GOTELEMETRY=off go env GOPATH 2>/dev/null || true)
+  GOMODCACHE_KEEP=$(go env GOMODCACHE 2>/dev/null || true)
+  GOENV_KEEP=$(go env GOENV 2>/dev/null || true)
+  GOPATH_KEEP=$(go env GOPATH 2>/dev/null || true)
   if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
     PW_BROWSERS_KEEP=$PLAYWRIGHT_BROWSERS_PATH
   else
@@ -294,6 +298,7 @@ isolation_argv() {
     -u PEAPROXY_FAILOVER_POLICY
     -u PI_CODING_AGENT_DIR
     "HOME=$STATE/home"
+    "TMPDIR=$STATE/home/tmp"
     "XDG_CONFIG_HOME=$STATE/home/config"
     "XDG_CACHE_HOME=$STATE/home/cache"
     "XDG_DATA_HOME=$STATE/home/data"
@@ -321,7 +326,8 @@ alive() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
-# ps works on Linux and macOS. LC_ALL=C keeps lstart stable across calls.
+# ps works on Linux and macOS. proc_start forces UTC so launch and cleanup
+# can run under different TZ values and still see the same lstart text.
 proc_cmdline() {
   local pid=$1 out
   out=$(LC_ALL=C ps -ww -o command= -p "$pid" 2>/dev/null) || return 1
@@ -333,7 +339,7 @@ proc_cmdline() {
 
 proc_start() {
   local pid=$1 out
-  out=$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null) || return 1
+  out=$(TZ=UTC0 LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null) || return 1
   out=${out#"${out%%[![:space:]]*}"}
   out=${out%"${out##*[![:space:]]}"}
   [[ -n "$out" ]] || return 1
@@ -412,17 +418,31 @@ abandon_pid() {
 
 arm_child() {
   CHILD_PID=$1
-  trap 'if [[ -n "${CHILD_PID:-}" ]]; then abandon_pid "$CHILD_PID"; fi' EXIT
 }
 
 disarm_child() {
   CHILD_PID=""
+}
+
+# Stop a child we have not handed off, and drop a state directory this
+# failed command created. exit inside the trap is safe because the trap
+# is cleared first.
+on_exit() {
+  local rc=$?
   trap - EXIT
+  if [[ -n "${CHILD_PID:-}" ]]; then
+    abandon_pid "$CHILD_PID" || true
+  fi
+  if [[ "$rc" -ne 0 && "${CLEANUP_STATE_ON_EXIT:-}" == 1 ]]; then
+    remove_state || true
+  fi
+  exit "$rc"
 }
 
 # Signal pid only when it is still the process we launched. kind is
-# serve, browser, or mock. start is `ps -o lstart=` recorded at launch.
-# An empty start means this run never recorded one. A mismatch skips the pid.
+# serve, browser, or mock. start is the UTC lstart recorded at launch.
+# An empty start means this run never recorded one. A live pid whose
+# identity does not match returns 1 and is not signaled.
 kill_owned() {
   local pid=$1 start=$2 kind=$3
   local i cmdln now
@@ -434,17 +454,17 @@ kill_owned() {
   fi
   if ! cmdln=$(proc_cmdline "$pid"); then
     printf 'verify-peaproxy: skip pid %s, command line is unreadable\n' "$pid" >&2
-    return 0
+    return 1
   fi
   if ! cmdline_matches "$kind" "$cmdln"; then
     printf 'verify-peaproxy: skip pid %s, command line is not this %s: %s\n' "$pid" "$kind" "$cmdln" >&2
-    return 0
+    return 1
   fi
   if [[ -n "$start" ]]; then
     now=$(proc_start "$pid" || true)
     if [[ "$now" != "$start" ]]; then
       printf 'verify-peaproxy: skip pid %s, start time %s does not match recorded %s\n' "$pid" "${now:-missing}" "$start" >&2
-      return 0
+      return 1
     fi
   fi
   kill "$pid" 2>/dev/null || true
@@ -459,13 +479,13 @@ kill_owned() {
   fi
   if ! cmdln=$(proc_cmdline "$pid") || ! cmdline_matches "$kind" "$cmdln"; then
     printf 'verify-peaproxy: skip pid %s, command line changed before SIGKILL\n' "$pid" >&2
-    return 0
+    return 1
   fi
   if [[ -n "$start" ]]; then
     now=$(proc_start "$pid" || true)
     if [[ "$now" != "$start" ]]; then
       printf 'verify-peaproxy: skip pid %s, start time changed before SIGKILL\n' "$pid" >&2
-      return 0
+      return 1
     fi
   fi
   kill -9 "$pid" 2>/dev/null || true
@@ -499,12 +519,15 @@ bound_timeout() {
 cmd_launch() {
   require_dirs
   if [[ -f "$STATE/run.env" ]]; then
+    # This directory belonged to the caller. A refused relaunch must not delete it.
+    CLEANUP_STATE_ON_EXIT=0
     load_run_env "$STATE/run.env"
     if alive "${PID:-}"; then
       die "a serve pid is already recorded in $STATE. Run cleanup before launch."
     fi
     die "$STATE already has run.env. Run cleanup before launch."
   fi
+  CLEANUP_STATE_ON_EXIT=1
   remove_state
   mkdir -m 700 "$STATE" "$STATE/bin" "$STATE/config" "$STATE/client-root" "$STATE/harness"
   ensure_evidence_dir
@@ -795,7 +818,9 @@ cmd_browser() {
       if [[ -S "$STATE/browser.sock" ]]; then
         browser_call '{"op":"stop"}' >/dev/null 2>&1 || true
       fi
-      kill_owned "${BROWSER_PID:-}" "${BROWSER_PID_START:-}" browser
+      if ! kill_owned "${BROWSER_PID:-}" "${BROWSER_PID_START:-}" browser; then
+        die "browser pid is still running and its identity does not match. It was not stopped."
+      fi
       BROWSER_PID=""
       BROWSER_PID_START=""
       persist_state
@@ -875,7 +900,9 @@ cmd_mock() {
       die "timed out waiting for the mock. Stopped that process."
       ;;
     stop)
-      kill_owned "${MOCK_PID:-}" "${MOCK_PID_START:-}" mock
+      if ! kill_owned "${MOCK_PID:-}" "${MOCK_PID_START:-}" mock; then
+        die "mock pid is still running and its identity does not match. It was not stopped."
+      fi
       MOCK_PID=""
       MOCK_PID_START=""
       persist_state
@@ -931,9 +958,13 @@ cmd_cleanup() {
     if [[ -S "$STATE/browser.sock" ]]; then
       node "$SCRIPT_DIR/browser.mjs" call "$STATE/browser.sock" '{"op":"stop"}' >/dev/null 2>&1 || true
     fi
-    kill_owned "${BROWSER_PID:-}" "${BROWSER_PID_START:-}" browser
-    kill_owned "${MOCK_PID:-}" "${MOCK_PID_START:-}" mock
-    kill_owned "${PID:-}" "${PID_START:-}" serve
+    local unconfirmed=0
+    kill_owned "${BROWSER_PID:-}" "${BROWSER_PID_START:-}" browser || unconfirmed=1
+    kill_owned "${MOCK_PID:-}" "${MOCK_PID_START:-}" mock || unconfirmed=1
+    kill_owned "${PID:-}" "${PID_START:-}" serve || unconfirmed=1
+    if [[ "$unconfirmed" == 1 ]]; then
+      die "a recorded process is still running and its identity does not match. State directory kept."
+    fi
   fi
   local evidence_real state_real
   evidence_real=$(realpath "$EVIDENCE")
@@ -945,6 +976,8 @@ cmd_cleanup() {
   [[ -d "$EVIDENCE" ]] || die "evidence directory disappeared during cleanup"
   printf 'cleaned\nevidence: %s\n' "$EVIDENCE"
 }
+
+trap on_exit EXIT
 
 main() {
   local cmd=${1:-}

@@ -19,7 +19,7 @@ export PEAPROXY_VERIFY_EVIDENCE=/opt/cursor/artifacts/peaproxy-verify-$RUN_ID
 .cursor/skills/verify-peaproxy/scripts/verify-peaproxy launch
 ```
 
-Both paths must be absolute, must not contain whitespace, and the state directory's basename must start with `pea-v-`. The state directory must be owned by the current user and its mode must be 700. The helper refuses any other owner or mode before it reads the directory. `run.env` is `KEY=value` data. The helper does not execute it. The evidence directory must be outside the state directory and outside the git repo. Two runs need two state directories and two evidence directories. The evidence directory is mode 700 and the files the helper writes there are mode 600.
+Both paths must be absolute, must not contain whitespace, and the state directory's basename must start with `pea-v-`. The state directory must be owned by the current user and its mode must be 700. The helper refuses any other owner or mode before it reads the directory. `run.env` is `KEY=value` data. The helper does not execute it. The evidence directory must be outside the state directory and outside the git repo. The helper creates missing parent directories of the evidence path. Two runs need two state directories and two evidence directories. The evidence directory is mode 700 and the files the helper writes there are mode 600.
 
 `launch` builds `./cmd/peaproxy` with `GOTOOLCHAIN=auto` (go.mod requires Go 1.26.9), installs Playwright 1.64.1 under the state directory, and starts `serve`. It writes the first-run config with `config init`, then sets that file's `port` to a free loopback port before `serve` so the file and the listener agree. `peaproxy serve --port` alone does not save the port, and `peaproxy status` probes the port in the file.
 
@@ -32,7 +32,7 @@ The first-run file includes the `ollama-local` skeleton. That is a usable Accoun
 
 The helper forces `PEAPROXY_SECRET_BACKEND=file` and `PEAPROXY_CLIENT_ROOT` to the state directory's `client-root`. It unsets `PEAPROXY_BIND`, `PEAPROXY_PORT`, `PEAPROXY_ALLOW_LAN`, `PEAPROXY_ADMIN_TOKEN`, `PEAPROXY_REQUEST_LOG`, `PEAPROXY_FAILOVER_POLICY`, and `PI_CODING_AGENT_DIR` for the serve process and for every `cli` invocation. Do not export those variables in the shell you use to drive the instance.
 
-The serve process, every `cli` invocation, the Go build, npm, and the browser run with `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, and `GOCACHE` under `home` in the state directory. Chrome crash reports, Go telemetry, the Go build cache, and the fontconfig cache stay there. Before the build, the helper reads `go env GOMODCACHE`, `go env GOENV`, and `go env GOPATH` in the real environment and passes them through, so settings from `go env -w` still apply and the checksum database stays in that GOPATH. If `~/.npmrc` exists, npm sees it through `NPM_CONFIG_USERCONFIG`. Cleanup makes the state tree writable and then deletes it.
+The serve process, every `cli` invocation, the Go build, npm, and the browser run with `HOME`, `TMPDIR`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, and `GOCACHE` under `home` in the state directory. Chrome crash reports, Chrome and Playwright temp files, Go telemetry from those commands, the Go build cache, and the fontconfig cache stay there. Before the build, the helper reads `go env GOMODCACHE`, `go env GOENV`, and `go env GOPATH` in the real environment and passes them through, so settings from `go env -w` still apply and the checksum database stays in that GOPATH. If `~/.npmrc` exists, npm sees it through `NPM_CONFIG_USERCONFIG`. Cleanup makes the state tree writable and then deletes it. A launch that fails after creating the state directory removes that directory on the way out.
 
 ## Doctor
 
@@ -106,7 +106,7 @@ cp "$PEAPROXY_VERIFY_STATE/serve.log" "$PEAPROXY_VERIFY_EVIDENCE/serve.log"
 .cursor/skills/verify-peaproxy/scripts/verify-peaproxy evidence check accounts/added.png serve.log run.env
 ```
 
-Launch records `ps -o lstart=` for the serve process in `run.env` as `PID_START`. `browser start` and `mock start` record `BROWSER_PID_START` and `MOCK_PID_START` the same way. If that read fails, the helper stops the process it just started. Cleanup sends `stop` to the browser helper, then signals the recorded browser pid, mock pid, and serve pid only when `ps -o command=` still matches the process this run launched and the recorded start time still matches. On a mismatch it prints a skip message and does not signal that pid. It does not kill by process name. It then makes the state tree writable and deletes it. It leaves the evidence directory in place. `evidence check` fails if a listed file is missing, empty, a symlink, or outside the evidence directory. Run it after cleanup. Also confirm the recorded serve pid is gone with `kill -0`. The listen-socket check in doctor reads Linux `/proc`.
+Launch records `TZ=UTC0 LC_ALL=C ps -o lstart=` for the serve process in `run.env` as `PID_START`. `browser start` and `mock start` record `BROWSER_PID_START` and `MOCK_PID_START` the same way, also in UTC. The caller's `TZ` does not change the recorded text. If that read fails, the helper stops the process it just started. Cleanup sends `stop` to the browser helper, then signals the recorded browser pid, mock pid, and serve pid only when `ps -o command=` still matches the process this run launched and the recorded UTC start time still matches. On a mismatch it prints a skip message and does not signal that pid. It does not kill by process name. If any recorded pid is still running and its identity does not match, cleanup keeps the state directory, exits nonzero, and does not print `cleaned`. When every recorded pid is gone or was stopped, cleanup makes the state tree writable and deletes it. It leaves the evidence directory in place. `evidence check` fails if a listed file is missing, empty, a symlink, or outside the evidence directory. Run it after cleanup. Also confirm the recorded serve pid is gone with `kill -0`. The listen-socket check in doctor reads Linux `/proc`.
 
 Run cleanup after a failed launch too, so the next launch is not blocked by a leftover pid or `run.env`.
 
@@ -118,7 +118,9 @@ The only command to invoke is the executable script. `browser.mjs` and `mock.mjs
 .cursor/skills/verify-peaproxy/scripts/verify-peaproxy --help
 ```
 
-`chmod +x` is already set in git for `scripts/verify-peaproxy`, `scripts/browser.mjs`, and `scripts/mock.mjs`. Invoke the shell script. Do not call the `.mjs` files yourself.
+`chmod +x` is already set in git for `scripts/verify-peaproxy`, `scripts/browser.mjs`, `scripts/mock.mjs`, and `scripts/regress.sh`. Invoke the shell script. Do not call the `.mjs` files yourself.
+
+`scripts/regress.sh` runs the cleanup, time zone, temp directory, and evidence checks, then drives Accounts. Run it from any directory.
 
 ## Maintenance
 
