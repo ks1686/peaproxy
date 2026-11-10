@@ -19,7 +19,7 @@ usage: verify-peaproxy <command>
   env
   cli -- <peaproxy args>
   api GET|POST <path>
-  api wait GET <path> --contains <text> [--timeout <seconds>]
+  api wait GET <path> --contains <text> [--timeout <1-120 seconds>]
   browser start|stop
   browser goto <path>
   browser reload
@@ -107,17 +107,113 @@ require_dirs() {
   if ((${#sock} > 100)); then
     die "state path is too long for a unix socket. Use a short path such as /tmp/pea-v-run."
   fi
-  mkdir -p "$STATE" "$EVIDENCE"
+  ensure_state_dir
+  ensure_evidence_dir
+}
+
+stat_owner_mode() {
+  local dir=$1
+  if stat -c '%u %a' "$dir" >/dev/null 2>&1; then
+    stat -c '%u %a' "$dir"
+  else
+    stat -f '%u %OLp' "$dir"
+  fi
+}
+
+# A state directory someone else created, or one that is not mode 700, is refused
+# before run.env is read. Do not chmod it into compliance.
+assert_state_private() {
+  local dir=$1 owner mode
+  if [[ -L "$dir" ]]; then
+    die "state directory is a symlink"
+  fi
+  if [[ ! -e "$dir" ]]; then
+    return 0
+  fi
+  if [[ ! -d "$dir" ]]; then
+    die "state path exists and is not a directory"
+  fi
+  # Avoid a process substitution. It opens /dev/fd, which disappears with /proc.
+  owner_mode=$(stat_owner_mode "$dir") || die "could not stat the state directory"
+  owner=${owner_mode%%[[:space:]]*}
+  mode=${owner_mode##*[[:space:]]}
+  if [[ "$owner" != "$(id -u)" ]]; then
+    die "state directory must be owned by the current user"
+  fi
+  if [[ "$mode" != "700" ]]; then
+    die "state directory must be mode 700"
+  fi
+}
+
+ensure_state_dir() {
+  assert_state_private "$STATE"
+  if [[ ! -d "$STATE" ]]; then
+    mkdir -m 700 "$STATE" || die "could not create the state directory"
+    assert_state_private "$STATE"
+  fi
+}
+
+ensure_evidence_dir() {
+  local owner mode
+  if [[ -L "$EVIDENCE" ]]; then
+    die "evidence directory is a symlink"
+  fi
+  if [[ ! -e "$EVIDENCE" ]]; then
+    mkdir -m 700 "$EVIDENCE" || die "could not create the evidence directory"
+  fi
+  if [[ ! -d "$EVIDENCE" ]]; then
+    die "evidence path exists and is not a directory"
+  fi
+  owner_mode=$(stat_owner_mode "$EVIDENCE") || die "could not stat the evidence directory"
+  owner=${owner_mode%%[[:space:]]*}
+  mode=${owner_mode##*[[:space:]]}
+  if [[ "$owner" != "$(id -u)" ]]; then
+    die "evidence directory must be owned by the current user"
+  fi
+  if [[ "$mode" != "700" ]]; then
+    chmod 700 "$EVIDENCE" || die "could not set the evidence directory to mode 700"
+  fi
+}
+
+# Go marks module files read-only. Make the tree writable before deleting it.
+remove_state() {
+  if [[ -d "$STATE" && ! -L "$STATE" ]]; then
+    chmod -R u+w "$STATE" 2>/dev/null || true
+    rm -rf "$STATE"
+  fi
 }
 
 ENV_FILE=""
+
+# run.env is data. Never source it.
+load_run_env() {
+  local file=$1 line key val
+  PID="" PORT="" BASE="" CONFIG="" BIN="" CLIENT_ROOT="" LOG="" REPO=""
+  EVIDENCE="" PID_START="" MOCK_PID="" MOCK_PID_START="" MOCK_PORT="" MOCK_LOG=""
+  BROWSER_PID="" BROWSER_PID_START=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ "$line" != *=* ]]; then
+      die "run.env has a line that is not KEY=value"
+    fi
+    key=${line%%=*}
+    val=${line#*=}
+    case "$key" in
+      PID|PORT|BASE|CONFIG|BIN|CLIENT_ROOT|LOG|REPO|EVIDENCE|PID_START|MOCK_PID|MOCK_PID_START|MOCK_PORT|MOCK_LOG|BROWSER_PID|BROWSER_PID_START)
+        printf -v "$key" '%s' "$val"
+        ;;
+      *)
+        die "run.env has an unknown key"
+        ;;
+    esac
+  done <"$file"
+}
 
 load_state() {
   require_dirs
   ENV_FILE=$STATE/run.env
   [[ -f "$ENV_FILE" ]] || die "no run.env in $STATE. Run launch first."
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
+  load_run_env "$ENV_FILE"
   [[ -n "${PID:-}" && -n "${PORT:-}" && -n "${BASE:-}" && -n "${CONFIG:-}" && -n "${BIN:-}" ]] || die "run.env is incomplete"
 }
 
@@ -152,13 +248,36 @@ free_port() {
 # expand ISOLATION_ENV themselves so a backgrounded command's $! is the
 # child, not this function.
 prepare_home() {
-  mkdir -p "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data"
-  if [[ -n "${GOMODCACHE:-}" ]]; then
-    GOMODCACHE_KEEP=$GOMODCACHE
-  elif [[ -n "${HOME:-}" && -d "${HOME}/go/pkg/mod" ]]; then
-    GOMODCACHE_KEEP=$HOME/go/pkg/mod
+  mkdir -m 700 -p "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data" || true
+  chmod 700 "$STATE/home" "$STATE/home/config" "$STATE/home/cache" "$STATE/home/data" 2>/dev/null || true
+  # Read Go's own config in this shell, before HOME moves. `go env -w` lives in
+  # GOENV, which is not an exported variable. GOPATH follows HOME unless it is
+  # passed through, and the checksum database is $GOPATH/pkg/sumdb.
+  GOMODCACHE_KEEP=$(GOTELEMETRY=off go env GOMODCACHE 2>/dev/null || true)
+  GOENV_KEEP=$(GOTELEMETRY=off go env GOENV 2>/dev/null || true)
+  GOPATH_KEEP=$(GOTELEMETRY=off go env GOPATH 2>/dev/null || true)
+  if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+    PW_BROWSERS_KEEP=$PLAYWRIGHT_BROWSERS_PATH
   else
-    GOMODCACHE_KEEP=""
+    case "$(uname -s)" in
+      Darwin)
+        PW_BROWSERS_KEEP=${HOME:-}/Library/Caches/ms-playwright
+        ;;
+      *)
+        if [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+          PW_BROWSERS_KEEP=$XDG_CACHE_HOME/ms-playwright
+        else
+          PW_BROWSERS_KEEP=${HOME:-}/.cache/ms-playwright
+        fi
+        ;;
+    esac
+  fi
+  if [[ -n "${NPM_CONFIG_USERCONFIG:-}" && -f "${NPM_CONFIG_USERCONFIG}" ]]; then
+    NPMRC_KEEP=$NPM_CONFIG_USERCONFIG
+  elif [[ -n "${HOME:-}" && -f "${HOME}/.npmrc" ]]; then
+    NPMRC_KEEP=$HOME/.npmrc
+  else
+    NPMRC_KEEP=""
   fi
 }
 
@@ -179,11 +298,21 @@ isolation_argv() {
     "XDG_CACHE_HOME=$STATE/home/cache"
     "XDG_DATA_HOME=$STATE/home/data"
     "GOCACHE=$STATE/home/cache/go-build"
+    "PLAYWRIGHT_BROWSERS_PATH=$PW_BROWSERS_KEEP"
     PEAPROXY_SECRET_BACKEND=file
     "PEAPROXY_CLIENT_ROOT=${CLIENT_ROOT:-}"
   )
   if [[ -n "$GOMODCACHE_KEEP" ]]; then
     ISOLATION_ENV+=("GOMODCACHE=$GOMODCACHE_KEEP")
+  fi
+  if [[ -n "$GOENV_KEEP" ]]; then
+    ISOLATION_ENV+=("GOENV=$GOENV_KEEP")
+  fi
+  if [[ -n "$GOPATH_KEEP" ]]; then
+    ISOLATION_ENV+=("GOPATH=$GOPATH_KEEP")
+  fi
+  if [[ -n "$NPMRC_KEEP" ]]; then
+    ISOLATION_ENV+=("NPM_CONFIG_USERCONFIG=$NPMRC_KEEP")
   fi
 }
 
@@ -192,21 +321,23 @@ alive() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# ps works on Linux and macOS. LC_ALL=C keeps lstart stable across calls.
 proc_cmdline() {
-  local pid=$1
-  [[ -r "/proc/$pid/cmdline" ]] || return 1
-  tr '\0' ' ' <"/proc/$pid/cmdline"
+  local pid=$1 out
+  out=$(LC_ALL=C ps -ww -o command= -p "$pid" 2>/dev/null) || return 1
+  out=${out#"${out%%[![:space:]]*}"}
+  out=${out%"${out##*[![:space:]]}"}
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
 }
 
-# starttime is field 22 of /proc/pid/stat. Field 2 (comm) is wrapped in
-# parentheses and may contain spaces, so count from the last ')'.
 proc_start() {
-  local pid=$1 stat rest
-  [[ -r "/proc/$pid/stat" ]] || return 1
-  stat=$(<"/proc/$pid/stat") || return 1
-  rest=${stat##*)}
-  [[ -n "$rest" ]] || return 1
-  awk '{print $20}' <<<"$rest"
+  local pid=$1 out
+  out=$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null) || return 1
+  out=${out#"${out%%[![:space:]]*}"}
+  out=${out%"${out##*[![:space:]]}"}
+  [[ -n "$out" ]] || return 1
+  printf '%s\n' "$out"
 }
 
 record_start() {
@@ -261,8 +392,36 @@ cmdline_matches() {
   esac
 }
 
+# Stop a process we started but have not recorded yet. kill does not need /proc.
+abandon_pid() {
+  local pid=$1 i
+  [[ -n "$pid" ]] || return 0
+  if ! alive "$pid"; then
+    return 0
+  fi
+  kill "$pid" 2>/dev/null || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! alive "$pid"; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  kill -9 "$pid" 2>/dev/null || true
+  sleep 0.1
+}
+
+arm_child() {
+  CHILD_PID=$1
+  trap 'if [[ -n "${CHILD_PID:-}" ]]; then abandon_pid "$CHILD_PID"; fi' EXIT
+}
+
+disarm_child() {
+  CHILD_PID=""
+  trap - EXIT
+}
+
 # Signal pid only when it is still the process we launched. kind is
-# serve, browser, or mock. start is the /proc start time recorded at launch.
+# serve, browser, or mock. start is `ps -o lstart=` recorded at launch.
 # An empty start means this run never recorded one. A mismatch skips the pid.
 kill_owned() {
   local pid=$1 start=$2 kind=$3
@@ -274,7 +433,7 @@ kill_owned() {
     return 0
   fi
   if ! cmdln=$(proc_cmdline "$pid"); then
-    printf 'verify-peaproxy: skip pid %s, /proc cmdline is unreadable\n' "$pid" >&2
+    printf 'verify-peaproxy: skip pid %s, command line is unreadable\n' "$pid" >&2
     return 0
   fi
   if ! cmdline_matches "$kind" "$cmdln"; then
@@ -324,22 +483,36 @@ take_flag() {
   REPLY=$2
 }
 
+# Reject a huge digit string before bash arithmetic can overflow.
+bound_timeout() {
+  local label=$1 value=$2 max=$3 n
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || (( ${#value} > ${#max} )); then
+    die "$label must be a positive integer from 1 to $max"
+  fi
+  n=$((10#$value))
+  if (( n < 1 || n > max )); then
+    die "$label must be a positive integer from 1 to $max"
+  fi
+  REPLY=$n
+}
+
 cmd_launch() {
   require_dirs
   if [[ -f "$STATE/run.env" ]]; then
-    # shellcheck disable=SC1090
-    source "$STATE/run.env"
+    load_run_env "$STATE/run.env"
     if alive "${PID:-}"; then
       die "a serve pid is already recorded in $STATE. Run cleanup before launch."
     fi
     die "$STATE already has run.env. Run cleanup before launch."
   fi
-  rm -rf "$STATE"
-  mkdir -p "$STATE/bin" "$STATE/config" "$STATE/client-root" "$STATE/harness" "$EVIDENCE"
+  remove_state
+  mkdir -m 700 "$STATE" "$STATE/bin" "$STATE/config" "$STATE/client-root" "$STATE/harness"
+  ensure_evidence_dir
   command -v go >/dev/null || die "go is not on PATH"
   command -v node >/dev/null || die "node is not on PATH"
   command -v npm >/dev/null || die "npm is not on PATH"
   command -v curl >/dev/null || die "curl is not on PATH"
+  command -v ps >/dev/null || die "ps is not on PATH"
   BIN=$STATE/bin/peaproxy
   CONFIG=$STATE/config/peaproxy.yaml
   CLIENT_ROOT=$STATE/client-root
@@ -392,9 +565,10 @@ fs.writeFileSync(file, out.join("\n"));
   nohup "${ISOLATION_ENV[@]}" \
     "$BIN" serve --config "$CONFIG" --bind 127.0.0.1 --port "$PORT" >>"$LOG" 2>&1 &
   PID=$!
+  arm_child "$PID"
   if ! PID_START=$(record_start "$PID"); then
     cat "$LOG" >&2 || true
-    die "could not read start time for serve pid $PID"
+    die "could not read the process start time for pid $PID. Stopped that process."
   fi
   MOCK_PID=""
   MOCK_PID_START=""
@@ -419,8 +593,9 @@ fs.writeFileSync(file, out.join("\n"));
   done
   if [[ "$ready" != 1 ]]; then
     cat "$LOG" >&2 || true
-    die "timed out waiting for peaproxy listening on http://127.0.0.1:${PORT}"
+    die "timed out waiting for peaproxy listening on http://127.0.0.1:${PORT}. Stopped that process."
   fi
+  disarm_child
   printf 'ready\nbase: %s\nconfig: %s\npid: %s\nlog: %s\nevidence: %s\n' \
     "$BASE" "$CONFIG" "$PID" "$LOG" "$EVIDENCE"
 }
@@ -544,13 +719,8 @@ cmd_api() {
       esac
     done
     [[ -n "${contains:-}" ]] || die "api wait needs --contains <text>"
-    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
-      die "api wait --timeout must be a positive integer number of seconds"
-    fi
-    timeout=$((10#$timeout))
-    if ((timeout < 1)); then
-      die "api wait --timeout must be a positive integer number of seconds"
-    fi
+    bound_timeout "api wait --timeout" "$timeout" 120
+    timeout=$REPLY
     local i body
     for i in $(seq 1 $((timeout * 2))); do
       body=$(curl -fsS --max-time 5 "$BASE$path" || true)
@@ -598,15 +768,17 @@ cmd_browser() {
       isolation_argv
       nohup "${ISOLATION_ENV[@]}" node "$SCRIPT_DIR/browser.mjs" daemon "$STATE" >>"$STATE/browser.log" 2>&1 &
       BROWSER_PID=$!
+      arm_child "$BROWSER_PID"
       if ! BROWSER_PID_START=$(record_start "$BROWSER_PID"); then
         cat "$STATE/browser.log" >&2 || true
-        die "could not read start time for browser pid $BROWSER_PID"
+        die "could not read the process start time for pid $BROWSER_PID. Stopped that process."
       fi
       persist_state
       local i
       for i in $(seq 1 60); do
         if [[ -S "$STATE/browser.sock" ]] && browser_call '{"op":"ping"}' >/dev/null 2>&1; then
           browser_call '{"op":"goto","path":"/"}' >/dev/null
+          disarm_child
           printf 'browser: %s\npid: %s\n' "$BASE/" "$BROWSER_PID"
           return 0
         fi
@@ -617,7 +789,7 @@ cmd_browser() {
         sleep 0.5
       done
       cat "$STATE/browser.log" >&2 || true
-      die "timed out waiting for the browser socket"
+      die "timed out waiting for the browser socket. Stopped that process."
       ;;
     stop)
       if [[ -S "$STATE/browser.sock" ]]; then
@@ -650,8 +822,9 @@ cmd_browser() {
           *) die "unknown browser flag $1" ;;
         esac
       done
-      if [[ -n "$timeout" && ! "$timeout" =~ ^[0-9]+$ ]]; then
-        die "browser --timeout must be a positive integer number of milliseconds"
+      if [[ -n "$timeout" ]]; then
+        bound_timeout "browser --timeout" "$timeout" 120000
+        timeout=$REPLY
       fi
       ROLE="$role" NAME="$name" SELECTOR="$selector" VALUE="$value" TEXT="$text" PATH_ARG="$path" TIMEOUT="$timeout" OP="$sub" \
         node -e 'const env=process.env; const o={op:env.OP}; if(env.ROLE)o.role=env.ROLE; if(env.NAME)o.name=env.NAME; if(env.SELECTOR)o.selector=env.SELECTOR; if(env.OP==="fill"||env.OP==="select")o.value=env.VALUE??""; if(env.TEXT)o.text=env.TEXT; if(env.PATH_ARG)o.path=env.PATH_ARG; if(env.TIMEOUT)o.timeout=Number(env.TIMEOUT); console.log(JSON.stringify(o));' \
@@ -680,14 +853,16 @@ cmd_mock() {
       isolation_argv
       nohup "${ISOLATION_ENV[@]}" node "$SCRIPT_DIR/mock.mjs" "$MOCK_PORT" "$MOCK_LOG" >>"$STATE/mock-process.log" 2>&1 &
       MOCK_PID=$!
+      arm_child "$MOCK_PID"
       if ! MOCK_PID_START=$(record_start "$MOCK_PID"); then
         cat "$STATE/mock-process.log" >&2 || true
-        die "could not read start time for mock pid $MOCK_PID"
+        die "could not read the process start time for pid $MOCK_PID. Stopped that process."
       fi
       persist_state
       local i
       for i in $(seq 1 40); do
         if curl -fsS --max-time 2 "http://127.0.0.1:${MOCK_PORT}/v1/models" | grep -q 'pea-verify-local'; then
+          disarm_child
           printf 'mock: http://127.0.0.1:%s/v1\nmodel: pea-verify-local\nlog: %s\n' "$MOCK_PORT" "$MOCK_LOG"
           return 0
         fi
@@ -697,7 +872,7 @@ cmd_mock() {
         fi
         sleep 0.25
       done
-      die "timed out waiting for the mock"
+      die "timed out waiting for the mock. Stopped that process."
       ;;
     stop)
       kill_owned "${MOCK_PID:-}" "${MOCK_PID_START:-}" mock
@@ -727,6 +902,14 @@ cmd_evidence() {
       /*|../*|*/../*|..) die "evidence check takes paths relative to the evidence directory" ;;
     esac
     full=$EVIDENCE/$rel
+    local cursor=$EVIDENCE part
+    local IFS=/
+    for part in $rel; do
+      cursor=$cursor/$part
+      if [[ -L "$cursor" ]]; then
+        die "refusing a symlink in the evidence directory: $rel"
+      fi
+    done
     [[ -f "$full" ]] || die "missing evidence file $full"
     [[ -s "$full" ]] || die "empty evidence file $full"
     case "$(realpath "$full")" in
@@ -741,8 +924,7 @@ cmd_evidence() {
 cmd_cleanup() {
   require_dirs
   if [[ -f "$STATE/run.env" ]]; then
-    # shellcheck disable=SC1090
-    source "$STATE/run.env"
+    load_run_env "$STATE/run.env"
     if [[ -n "${EVIDENCE:-}" && "$EVIDENCE" != "$PEAPROXY_VERIFY_EVIDENCE" ]]; then
       die "run.env evidence $EVIDENCE does not match PEAPROXY_VERIFY_EVIDENCE"
     fi
@@ -759,7 +941,7 @@ cmd_cleanup() {
   case "$evidence_real" in
     "$state_real"|"$state_real"/*) die "refusing to remove state because evidence is inside it" ;;
   esac
-  rm -rf "$STATE"
+  remove_state
   [[ -d "$EVIDENCE" ]] || die "evidence directory disappeared during cleanup"
   printf 'cleaned\nevidence: %s\n' "$EVIDENCE"
 }

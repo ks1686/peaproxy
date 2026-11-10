@@ -72,8 +72,8 @@ if (mode === "call") {
   let context;
   let lastError = "";
   // Channel "chrome" is /opt/google/chrome/chrome on Linux, not a PATH lookup.
-  // Channel "chromium" is not a Playwright channel. The no-channel launch below
-  // is Playwright's downloaded Chromium, not a chromium binary on PATH.
+  // Channel "chromium" is Playwright's downloaded chromium-1248 build.
+  // A headless launch with no channel uses chromium-headless-shell-1248.
   for (const channel of ["chrome", "chromium"]) {
     try {
       context = await chromium.launchPersistentContext(profile, { ...launchOpts, channel });
@@ -88,7 +88,7 @@ if (mode === "call") {
       context = await chromium.launchPersistentContext(profile, launchOpts);
     } catch (err) {
       process.stderr.write(
-        "could not launch Chrome. Playwright's chrome channel is /opt/google/chrome/chrome, then Playwright's downloaded Chromium. " +
+        "could not launch Chrome. Playwright channel chrome is /opt/google/chrome/chrome. Channel chromium is the downloaded chromium-1248 build. " +
           (lastError || String(err && err.message ? err.message : err)) +
           "\n",
       );
@@ -116,7 +116,17 @@ if (mode === "call") {
     const abs = path.resolve(file);
     let cursor = abs;
     const suffix = [];
-    while (!fs.existsSync(cursor)) {
+    while (true) {
+      let st = null;
+      try {
+        st = fs.lstatSync(cursor);
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+      if (st && st.isSymbolicLink()) {
+        throw new Error("refusing to write through a symlink");
+      }
+      if (st) break;
       const parent = path.dirname(cursor);
       if (parent === cursor) {
         throw new Error("proof path must be inside the evidence directory");
@@ -132,7 +142,8 @@ if (mode === "call") {
     if (!(target === resolvedEvidence || target.startsWith(resolvedEvidence + path.sep))) {
       throw new Error("proof path must be inside the evidence directory");
     }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    fs.chmodSync(path.dirname(target), 0o700);
     return target;
   }
 
@@ -196,12 +207,14 @@ if (mode === "call") {
     if (cmd.op === "snapshot") {
       const file = assertEvidencePath(cmd.path);
       const text = await page.locator("body").ariaSnapshot();
-      fs.writeFileSync(file, text.endsWith("\n") ? text : text + "\n");
+      fs.writeFileSync(file, text.endsWith("\n") ? text : text + "\n", { mode: 0o600 });
+      fs.chmodSync(file, 0o600);
       return { ok: true, text: file };
     }
     if (cmd.op === "screenshot") {
       const file = assertEvidencePath(cmd.path);
       await page.screenshot({ path: file, fullPage: true });
+      fs.chmodSync(file, 0o600);
       return { ok: true, text: file };
     }
     throw new Error("unknown browser op " + cmd.op);
