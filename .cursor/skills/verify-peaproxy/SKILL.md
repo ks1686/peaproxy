@@ -32,6 +32,8 @@ The first-run file includes the `ollama-local` skeleton. That is a usable Accoun
 
 The helper forces `PEAPROXY_SECRET_BACKEND=file` and `PEAPROXY_CLIENT_ROOT` to the state directory's `client-root`. It unsets `PEAPROXY_BIND`, `PEAPROXY_PORT`, `PEAPROXY_ALLOW_LAN`, `PEAPROXY_ADMIN_TOKEN`, `PEAPROXY_REQUEST_LOG`, `PEAPROXY_FAILOVER_POLICY`, and `PI_CODING_AGENT_DIR` for the serve process and for every `cli` invocation. Do not export those variables in the shell you use to drive the instance.
 
+The serve process, every `cli` invocation, the Go build, npm, and the browser run with `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, and `GOCACHE` under `home` in the state directory. Chrome crash reports, Go telemetry, the Go build cache, and the fontconfig cache stay there and are deleted with the state directory. The module cache stays the existing `GOMODCACHE` so the toolchain is reused.
+
 ## Doctor
 
 Run this before the first drive, after any failed drive, and whenever the page or the CLI looks wrong.
@@ -71,7 +73,7 @@ The harness is the helper script. UI commands talk to one Chrome window that `br
 
 `mock start` serves `GET /v1/models` with id `pea-verify-local` and `POST /v1/chat/completions` with assistant text `pea-verify-hello`. Catalog and Showcase use it as the upstream a local OpenAI-compatible server would be. It is not a PeaProxy endpoint. `env` prints `PEAPROXY_VERIFY_MOCK_BASE` as `http://127.0.0.1:<port>/v1`.
 
-Chrome must be `google-chrome` or `chromium` on `PATH`. The helper launches it headless with its own profile inside the state directory. It does not use the user's Chrome profile.
+`browser start` tries Playwright's `chrome` channel. On Linux that channel is the file `/opt/google/chrome/chrome`. Playwright does not search `PATH` for `google-chrome` or `chromium`. The helper then tries the channel name `chromium`, which Playwright does not ship, and then launches with no channel. The no-channel launch is Playwright's downloaded Chromium, not a `chromium` binary on `PATH`. The profile directory is `chrome-profile` inside the state directory. It is not the user's Chrome profile.
 
 The UI is `GET /`. Accounts is the first page. Nav buttons are `Accounts`, `Catalog`, `Showcase`, `Clients`, `Policy`, `Health`, `Request log`, and `Settings`. The header tagline always says `127.0.0.1:8317`. Ignore it. The live port is the doctor output and the Settings sentence `Listening on <bind>:<port>`.
 
@@ -104,7 +106,7 @@ cp "$PEAPROXY_VERIFY_STATE/serve.log" "$PEAPROXY_VERIFY_EVIDENCE/serve.log"
 .cursor/skills/verify-peaproxy/scripts/verify-peaproxy evidence check accounts/added.png serve.log run.env
 ```
 
-Cleanup sends `stop` to the browser helper, then signals the browser pid, the mock pid, and the serve pid that this run recorded. It does not kill by process name. It then deletes the state directory. It leaves the evidence directory in place. `evidence check` fails if a listed file is missing, empty, or outside the evidence directory. Run it after cleanup. Also confirm the recorded serve pid is gone with `kill -0`.
+Launch stores the serve start time from proc stat field 22 in `run.env` as `PID_START`. `browser start` and `mock start` store `BROWSER_PID_START` and `MOCK_PID_START`. Cleanup sends `stop` to the browser helper, then signals the recorded browser pid, mock pid, and serve pid only when that pid's command line still matches the process this run launched and the recorded start time still matches. On a mismatch it prints a skip message and does not signal that pid. It does not kill by process name. It then deletes the state directory. It leaves the evidence directory in place. `evidence check` fails if a listed file is missing, empty, or outside the evidence directory. Run it after cleanup. Also confirm the recorded serve pid is gone with `kill -0`.
 
 Run cleanup after a failed launch too, so the next launch is not blocked by a leftover pid or `run.env`.
 

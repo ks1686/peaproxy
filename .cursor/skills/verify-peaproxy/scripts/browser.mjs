@@ -71,6 +71,9 @@ if (mode === "call") {
   };
   let context;
   let lastError = "";
+  // Channel "chrome" is /opt/google/chrome/chrome on Linux, not a PATH lookup.
+  // Channel "chromium" is not a Playwright channel. The no-channel launch below
+  // is Playwright's downloaded Chromium, not a chromium binary on PATH.
   for (const channel of ["chrome", "chromium"]) {
     try {
       context = await chromium.launchPersistentContext(profile, { ...launchOpts, channel });
@@ -85,7 +88,7 @@ if (mode === "call") {
       context = await chromium.launchPersistentContext(profile, launchOpts);
     } catch (err) {
       process.stderr.write(
-        "could not launch Chrome. Install google-chrome, or install Playwright's chromium. " +
+        "could not launch Chrome. Playwright's chrome channel is /opt/google/chrome/chrome, then Playwright's downloaded Chromium. " +
           (lastError || String(err && err.message ? err.message : err)) +
           "\n",
       );
@@ -108,18 +111,28 @@ if (mode === "call") {
 
   function assertEvidencePath(file) {
     if (!file) throw new Error("path is required");
-    const parent = path.dirname(path.resolve(file));
-    fs.mkdirSync(parent, { recursive: true });
-    const resolvedParent = fs.realpathSync(parent);
     const resolvedEvidence = fs.realpathSync(evidence);
     const resolvedState = fs.realpathSync(stateDir);
-    const target = path.join(resolvedParent, path.basename(file));
+    const abs = path.resolve(file);
+    let cursor = abs;
+    const suffix = [];
+    while (!fs.existsSync(cursor)) {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        throw new Error("proof path must be inside the evidence directory");
+      }
+      suffix.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+    const existing = fs.realpathSync(cursor);
+    const target = path.join(existing, ...suffix);
     if (target === resolvedState || target.startsWith(resolvedState + path.sep)) {
       throw new Error("refusing to write proof inside the state directory");
     }
     if (!(target === resolvedEvidence || target.startsWith(resolvedEvidence + path.sep))) {
       throw new Error("proof path must be inside the evidence directory");
     }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
     return target;
   }
 
